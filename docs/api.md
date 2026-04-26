@@ -18,6 +18,123 @@ Query params:
 ### `GET /politicians/:id`
 Returns the politician, all websites with their latest scan, and the constituency boundary GeoJSON.
 
+## Search (Hansard)
+
+Semantic + structural search over Canadian Hansard. Backs `/search` in the frontend. The shared filter schema (`baseFilterSchema` in `services/api/src/routes/search.ts`) is the single source of truth for what's a valid search; saved searches reuse the same shape.
+
+### Shared filter parameters
+
+Accepted by `/search/speeches`, `/search/politician-quotes`, and `/search/facets`.
+
+- `q` — semantic query string (max 500 chars). Empty `q` switches `/speeches` to recency mode; `/politician-quotes` requires `q` (400 otherwise); `/facets` allows it but at least one structural filter must be present.
+- `lang` — `en | fr | any` (default `any`).
+- `level` — `federal | provincial | municipal`.
+- `province_territory` — 2-letter (`AB`, `ON`, ...).
+- `politician_ids` — repeated UUID, max 10. Legacy alias `politician_id` (single or repeated) is also accepted; both forms are deduped server-side via `effectivePoliticianIds()`.
+- `party` — exact match against `speech_chunks.party_at_time`.
+- `from`, `to` — ISO `YYYY-MM-DD` bounds on `spoken_at`.
+- `exclude_presiding` — `true` strips Speaker / Chair turns (rows where `speeches.speaker_role` is non-empty).
+- `min_similarity` — cosine-similarity floor 0..1. Only meaningful with `q` set; ignored in recency mode. `/politician-quotes` and grouped `/speeches` clamp to `>= 0.45` server-side so quote counts stay aligned with the grouped-view `mention_count`.
+- `parliament_number` + `session_number` — must arrive together; resolved against `legislative_sessions` within the request's (level, province). One without the other is dropped as ambiguous.
+- `speech_type` — repeated param over `floor | committee | question_period | statement | point_of_order | group`. Example: `?speech_type=question_period&speech_type=statement`.
+
+### `GET /search/speeches`
+
+Two modes selected by `group_by`.
+
+**Timeline mode** (`group_by=timeline`, default). Flat chunk list, paginated.
+- Adds: `page` (default 1), `limit` (1–50, default 20).
+- 400 if neither `q` nor any structural filter is present.
+
+```jsonc
+{
+  "items": [
+    {
+      "chunk_id": "uuid", "speech_id": "uuid", "chunk_index": 0,
+      "text": "…", "snippet_html": "<b>…</b>",
+      "similarity": 0.72,            // null in recency mode
+      "spoken_at": "2024-03-21T00:00:00Z",
+      "language": "en", "level": "federal", "province_territory": null,
+      "party_at_time": "Conservative",
+      "politician": {
+        "id": "uuid", "name": "...", "slug": "...",
+        "photo_url": "...", "party": "...", "socials": [...]
+      },
+      "speech": {
+        "speaker_name_raw": "...", "speaker_role": "...",
+        "source_url": "...", "source_anchor": "...",
+        "session": { "parliament_number": 44, "session_number": 1 }
+      }
+    }
+  ],
+  "page": 1, "limit": 20,
+  "total": 1234, "totalCapped": false, "pages": 62,
+  "mode": "semantic"                  // or "recent"
+}
+```
+
+**Grouped mode** (`group_by=politician`). One politician per group with their top-N matching chunks.
+- Adds: `per_group_limit` (1–10, default 5), `sort` ∈ `mentions | best_match | avg_match | keyword_hits` (default `mentions`).
+- Requires `q` — grouping only makes sense when ranked semantically; q-less grouped calls 400.
+- Only resolved politicians appear in groups (chunks with `politician_id IS NULL` drop out).
+- `SET LOCAL hnsw.ef_search = 600` is applied inside a transaction so the candidate pool isn't silently capped at the default 40.
+
+```jsonc
+{
+  "mode": "grouped",
+  "group_by": "politician",
+  "page": 1, "limit": 20,
+  "per_group_limit": 5,
+  "total_politicians": 20,
+  "groups": [
+    {
+      "politician": { "id": "...", "name": "...", "slug": "...", "photo_url": "...", "party": "...", "socials": [...] },
+      "best_similarity": 0.72,
+      "chunks": [ /* same chunk shape as timeline, minus politician — it's on the group */ ]
+    }
+  ]
+}
+```
+
+### `GET /search/politician-quotes`
+
+Single-politician deep-dive backing the "Show all matching quotes" expand affordance on `/search`'s grouped view. **Auth-gated** (`requireUser`) and per-user rate-limited at 60/min keyed on `expand-quotes:<userId>`.
+- Required: `politician_id` (single UUID), `q`.
+- Accepts the rest of the shared filter set; `min_similarity` is clamped `>= 0.45` server-side regardless of input.
+- Returns the same shape as `/search/speeches` timeline mode, scoped to the single politician.
+
+### `GET /search/facets`
+
+Analytics breakdown over the top-200 candidate pool (semantic when `q` is set, else recent). Backs the Analysis tab on `/search`. `SET LOCAL hnsw.ef_search = 300` per statement.
+- 400 if neither `q` nor any structural filter is present.
+
+```jsonc
+{
+  "analyzed_count": 200, "analysis_limit": 200,
+  "by_party":      [{ "party": "Conservative", "count": 47, "avg_similarity": 0.68 }, ...],
+  "by_politician": [{ "politician": { "id": "...", "name": "...", "slug": "..." }, "count": 12, "avg_similarity": 0.71 }, ...],
+  "by_year":       [{ "year": 2023, "count": 18 }, ...],
+  "by_language":   [{ "language": "en", "count": 162 }, { "language": "fr", "count": 38 }],
+  "keyword_overlap": { "both": 84, "semantic_only": 116 },   // null in recency mode
+  "mode": "semantic"
+}
+```
+
+### `GET /search/sessions`
+
+Lookup table for the cascading parliament/session dropdown in the advanced-filters disclosure.
+- Query params: `level`, `province` (2-letter, optional). For `level=federal` with no `province`, restricts to `province_territory IS NULL`.
+- Response: `{ "sessions": [{ "parliament_number", "session_number", "name", "start_date", "end_date" }] }`, newest first.
+- `Cache-Control: public, max-age=3600` — sessions change ~once per prorogation.
+
+### `GET /search/meta`
+
+Backfill-progress surface for the UI banner above results.
+
+```json
+{ "total_chunks": 1480000, "embedded_chunks": 1480000, "coverage": 1.0 }
+```
+
 ## Organizations
 
 ### `GET /organizations`
