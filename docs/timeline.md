@@ -1,6 +1,6 @@
 # Timeline / direction
 
-Where the project is going, in priority order. Written 2026-04-25.
+Where the project is going, in priority order. Written 2026-04-26.
 
 This is the **what we're building next** doc. For the **why**, read [`goals.md`](./goals.md). For the **how**, read the per-feature plan under [`plans/`](./plans/) linked from each item below. When this file disagrees with the plan docs, the plan docs win — keep this one short and reorder it as priorities shift.
 
@@ -17,9 +17,9 @@ A separate **Always-on** section covers governance, monitoring, and ingest hygie
 
 These are partially built and the goal is to finish them, not to start something new on top.
 
-- **Phase 1b — premium report generation.** Phase 1a (billing ledger, credit UI, admin comp) shipped 2026-04-23. Phase 1b is the LLM map-reduce that actually spends a credit: query → relevant speeches → HTML report → email + saved to account. Plan: [`plans/premium-reports.md`](./plans/premium-reports.md).
-- **`/api/v1/search` finalization.** Hybrid HNSW + BM25 retrieval is wired with zod validation and instruction prompting at query time. Pending: performance tuning and the public contract freeze. Plan: [`plans/semantic-layer.md`](./plans/semantic-layer.md), [`plans/search-features-handoff.md`](./plans/search-features-handoff.md).
+- **`/api/v1/search` finalization.** Hybrid HNSW + BM25 retrieval is wired with zod validation and instruction prompting at query time. Today's filter expansion (`min_similarity`, `parliament_number + session_number`, `speech_type`, the new `/search/sessions` endpoint, and the frontend advanced-filters disclosure) widened the public surface; remaining is performance tuning and the contract freeze. Plan: [`plans/semantic-layer.md`](./plans/semantic-layer.md), [`plans/search-features-handoff.md`](./plans/search-features-handoff.md).
 - **Stripe Tax (GST/HST) enablement.** Config-only, no code change. Required before any public-revenue launch. Tracked under [`plans/premium-reports.md`](./plans/premium-reports.md) § out-of-scope-for-1a.
+- **Premium reports — phase 1c follow-ups.** Phase 1b (LLM map-reduce, `/reports/<id>` viewer, refund flow) and phase 1c #1 (public-share + citation, migration 0036) are shipped. Remaining ranked queue: report-this-search button, re-run on new evidence, per-section flagging, compare two politicians. Plan: [`plans/premium-reports-followups.md`](./plans/premium-reports-followups.md).
 
 ---
 
@@ -90,9 +90,19 @@ Not horizon-bound. These need attention every cycle regardless of what else is i
 
 ---
 
-## Recently shipped (last cycle, 2026-04-16 → 2026-04-23)
+## Recently shipped (last two cycles, 2026-04-16 → 2026-04-26)
 
-For context on what just landed, so this doc reads against a known baseline:
+For context on what just landed, so this doc reads against a known baseline.
+
+### Cycle 2026-04-23 → 2026-04-26
+
+- **Phase 1b — premium reports** — `report_jobs` table (migration 0035), `reports-worker` compose service, OpenRouter map-reduce, sanitised-HTML viewer at `/reports/<id>`, refund flow (released-hold vs compensating admin-credit), admin triage queue. First credit-spending feature.
+- **Phase 1c #1 — public-share + citation** — `is_public` flag (migration 0036), `/public/reports/<id>` route, citation block in viewer footer (2026-04-24).
+- **ON Hansard pipeline** — name-based resolution + parens-name extraction; six ON commands packed into the 18:00 UTC daily-ingest slot (2026-04-24).
+- **`/api/v1/search` filter expansion** — `min_similarity`, `parliament_number + session_number`, and `speech_type` filters on `baseFilterSchema`; new `/search/sessions` endpoint backing the cascading parliament/session dropdown; advanced-filters disclosure on `/search` (2026-04-26).
+- **Operational hygiene** — `OPENROUTER_MODEL` → `OPENROUTER_CONTRADICTIONS_MODEL` rename with legacy fallback + boot-time deprecation warning; `scripts/backup-database.sh` hardened (`.env`-sourced knobs, file-pinned `DB_PASSWORD`, zstd default 19 → 3); BetaBadge in the site header; `docs/api.md` Search section finally written (2026-04-26).
+
+### Cycle 2026-04-16 → 2026-04-23
 
 - **Phase 1a billing rail** — credit ledger, credit-pack purchases, admin comp, suspended-tier enforcement (migration 0033).
 - **Qwen3-Embedding-0.6B migration** — re-embedded 1.48 M chunks, dropped legacy BGE-M3 column, retired the FastAPI/FlagEmbedding wrapper from the critical path (migrations 0023–0025).
