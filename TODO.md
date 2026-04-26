@@ -13,8 +13,8 @@ Actionable checkbox view of [`docs/timeline.md`](./docs/timeline.md). When this 
 Partially built — finish, do not start new things on top.
 
 - [ ] **`/api/v1/search` finalization.** Hybrid HNSW + BM25 is wired. Today's filter expansion (`min_similarity`, `parliament_number + session_number`, `speech_type`, the new `/search/sessions` endpoint, the frontend advanced-filters disclosure) widened the surface; pending: performance tuning + public contract freeze. → [`docs/plans/semantic-layer.md`](./docs/plans/semantic-layer.md), [`docs/plans/search-features-handoff.md`](./docs/plans/search-features-handoff.md)
-- [ ] **Stripe Tax (GST/HST) enablement.** Config-only, no code change. Blocks any public-revenue launch. → [`docs/plans/premium-reports.md`](./docs/plans/premium-reports.md) § out-of-scope-for-1a
 - [ ] **Premium reports — phase 1c follow-ups.** Phase 1b (LLM map-reduce, `/reports/<id>` viewer, refund flow) and phase 1c #1 (public-share + citation, migration 0036) are shipped. Remaining ranked queue: report-this-search button, re-run on new evidence, per-section flagging, compare two politicians. → [`docs/plans/premium-reports-followups.md`](./docs/plans/premium-reports-followups.md)
+- [ ] **Stripe Tax — operator activation.** Code is shipped (`STRIPE_TAX_ENABLED` flag, default off). Remaining is dashboard-only: activate Stripe Tax, add Canadian tax registration (GST/HST + any provincial PST), classify each credit-pack Price with a tax code, run a test-mode dry-run, then flip `STRIPE_TAX_ENABLED=true` in production. → [`docs/operations.md`](./docs/operations.md) § Stripe Tax
 
 ---
 
@@ -144,6 +144,7 @@ For context. Move items here from above as they land; trim aggressively after a 
 - [x] **ON Hansard pipeline** — name-based resolution + parens-name extraction; 6 ON commands packed into the 18:00 UTC daily-ingest slot (2026-04-24).
 - [x] **`/api/v1/search` filter expansion** — `min_similarity`, `parliament_number + session_number`, and `speech_type` filters on `baseFilterSchema`; new `/search/sessions` endpoint backing the cascading parliament/session dropdown; advanced-filters disclosure on `/search` (2026-04-26).
 - [x] **Operational hygiene cluster** — `OPENROUTER_MODEL` → `OPENROUTER_CONTRADICTIONS_MODEL` rename with legacy fallback + boot-time deprecation warning; `scripts/backup-database.sh` hardened (`.env`-sourced knobs, file-pinned `DB_PASSWORD`, zstd default 19 → 3); BetaBadge in the site header; `docs/api.md` Search section finally written (2026-04-26).
+- [x] **Stripe Tax wiring** — `STRIPE_TAX_ENABLED` env flag, `automatic_tax` + address collection + `tax_id_collection` on the Checkout Session when on, `tax_enabled` field on `/me/credits/packs`, frontend disclosure on `/account/credits`, plan-doc + `docs/operations.md` activation checklist. Default off — operator dashboard activation listed under Now (2026-04-26).
 
 ### Cycle 2026-04-16 → 2026-04-23
 

@@ -18,7 +18,6 @@ A separate **Always-on** section covers governance, monitoring, and ingest hygie
 These are partially built and the goal is to finish them, not to start something new on top.
 
 - **`/api/v1/search` finalization.** Hybrid HNSW + BM25 retrieval is wired with zod validation and instruction prompting at query time. Today's filter expansion (`min_similarity`, `parliament_number + session_number`, `speech_type`, the new `/search/sessions` endpoint, and the frontend advanced-filters disclosure) widened the public surface; remaining is performance tuning and the contract freeze. Plan: [`plans/semantic-layer.md`](./plans/semantic-layer.md), [`plans/search-features-handoff.md`](./plans/search-features-handoff.md).
-- **Stripe Tax (GST/HST) enablement.** Config-only, no code change. Required before any public-revenue launch. Tracked under [`plans/premium-reports.md`](./plans/premium-reports.md) § out-of-scope-for-1a.
 - **Premium reports — phase 1c follow-ups.** Phase 1b (LLM map-reduce, `/reports/<id>` viewer, refund flow) and phase 1c #1 (public-share + citation, migration 0036) are shipped. Remaining ranked queue: report-this-search button, re-run on new evidence, per-section flagging, compare two politicians. Plan: [`plans/premium-reports-followups.md`](./plans/premium-reports-followups.md).
 
 ---
@@ -101,6 +100,7 @@ For context on what just landed, so this doc reads against a known baseline.
 - **ON Hansard pipeline** — name-based resolution + parens-name extraction; six ON commands packed into the 18:00 UTC daily-ingest slot (2026-04-24).
 - **`/api/v1/search` filter expansion** — `min_similarity`, `parliament_number + session_number`, and `speech_type` filters on `baseFilterSchema`; new `/search/sessions` endpoint backing the cascading parliament/session dropdown; advanced-filters disclosure on `/search` (2026-04-26).
 - **Operational hygiene** — `OPENROUTER_MODEL` → `OPENROUTER_CONTRADICTIONS_MODEL` rename with legacy fallback + boot-time deprecation warning; `scripts/backup-database.sh` hardened (`.env`-sourced knobs, file-pinned `DB_PASSWORD`, zstd default 19 → 3); BetaBadge in the site header; `docs/api.md` Search section finally written (2026-04-26).
+- **Stripe Tax wiring** — `STRIPE_TAX_ENABLED` env flag, `automatic_tax` + address collection + `tax_id_collection` on the Checkout Session when on, `tax_enabled` field on `/me/credits/packs`, frontend disclosure on `/account/credits`, plan-doc + operations.md activation checklist. Default off — operator dashboard activation (Stripe Tax + Canadian registration + per-product tax codes) is the remaining deploy step (2026-04-26).
 
 ### Cycle 2026-04-16 → 2026-04-23
 

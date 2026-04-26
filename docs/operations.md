@@ -123,6 +123,82 @@ Full design + deploy sequence in `docs/plans/premium-reports.md`. Operational qu
 | `STRIPE_WEBHOOK_SECRET` | Webhook signature verification fails closed. |
 | `STRIPE_PRICE_ID_CREDIT_PACK_SMALL` / `_MEDIUM` / `_LARGE` | Each pack hides individually if its price id is unset. |
 | `STRIPE_SUCCESS_URL` / `STRIPE_CANCEL_URL` | Default to `${PUBLIC_SITE_URL}/account/credits?purchase=success|cancel`. |
+| `STRIPE_TAX_ENABLED` | Off → checkout sessions are created without `automatic_tax`. See § Stripe Tax below; do not flip without completing the dashboard activation first. |
+
+### Initial Stripe activation walkthrough
+
+End-to-end sequence from "no Stripe at all" to "live in production." Each phase is independently rollback-safe.
+
+**Phase 1 — Test mode.** Burn the dust off without exposing real money.
+
+1. Sign up at https://dashboard.stripe.com (or use an existing account in test mode).
+2. Settings → Developers → API keys → copy the **test** Secret key (`sk_test_…`).
+3. Products → create three one-time-payment products: Small / Medium / Large credit packs. Set CAD prices ($5 / $20 / $50). Mark them as `Tax behavior: Exclusive` (we add tax on top, not bake it in). Copy each `price_…` id.
+4. Developers → Webhooks → Add endpoint → URL `https://<your-host>/api/v1/webhooks/stripe`, events `checkout.session.completed` only. Copy the test signing secret (`whsec_…`).
+5. Populate `.env`:
+   ```
+   STRIPE_SECRET_KEY=sk_test_...
+   STRIPE_WEBHOOK_SECRET=whsec_...
+   STRIPE_PRICE_ID_CREDIT_PACK_SMALL=price_...
+   STRIPE_PRICE_ID_CREDIT_PACK_MEDIUM=price_...
+   STRIPE_PRICE_ID_CREDIT_PACK_LARGE=price_...
+   ```
+6. `docker compose up -d api` (frontend doesn't need a rebuild — it discovers Stripe state via `/me/credits` and `/me/credits/packs`).
+7. End-to-end test: sign in at `/login` → `/account/credits` → buy a small pack with `4242 4242 4242 4242`, any future CVC + expiry. Within seconds you should see:
+   - `stripe_webhook_events` row created, `processed_at` populated.
+   - `credit_purchases` row with `status='completed'`.
+   - `credit_ledger` row with `kind='stripe_purchase'`, `delta=50`, `state='committed'`.
+   - Balance chip on the page reflects the new total after the one-shot 2-second poll.
+8. Idempotency check: from the Stripe dashboard → Webhook attempts → "Resend" the `checkout.session.completed` event. The API should respond 200 with `{duplicate: true}` and the DB should not gain a second row.
+
+**Phase 2 — Stripe Tax (optional but recommended for Canadian sellers).** See § Stripe Tax below for the full activation, then circle back here.
+
+**Phase 3 — Live mode.** Mechanical swap once the test-mode round-trip is solid.
+
+1. Stripe dashboard → toggle to live mode (top-right).
+2. Recreate the three Products in live mode (or use the "Move to live" affordance per product). Note the new `price_…` ids — they are different from test mode.
+3. Settings → Developers → API keys → copy the **live** Secret key (`sk_live_…`).
+4. Developers → Webhooks → register the same `https://<your-host>/api/v1/webhooks/stripe` endpoint **a second time** in live mode. Live mode has its own webhook list, separate from test mode. Copy the live signing secret.
+5. Replace every `STRIPE_*` value in `.env` with its live counterpart. (If you used Stripe Tax in phase 2, also re-enable Stripe Tax in live mode and re-classify the new live-mode Prices — registrations live in `Tax → Registrations` and apply globally.)
+6. `docker compose up -d api`. Watch the logs for the "API listening" line and the absence of the Stripe-not-configured warning.
+7. Place a real test purchase ($5 — easy to comp back to yourself via `/admin/users/<your-id>/grant-credits` afterwards, or just refund via the Stripe dashboard).
+
+### Stripe Tax (Canadian GST/HST/PST)
+
+Stripe Tax is a runtime opt-in (`STRIPE_TAX_ENABLED=true` mirrors a dashboard switch — both must be on). Code path lives in `services/api/src/lib/stripe.ts:createCheckoutSession`. Default is off so deploying the code before configuring the dashboard is safe.
+
+**Activation checklist** (do all of these *before* flipping `STRIPE_TAX_ENABLED=true`):
+
+1. Stripe dashboard → Settings → Tax → Activate Stripe Tax.
+2. Tax → Registrations → Add. Provide your CRA business number (GST/HST), the originating address you serve from, and registration date. Add provincial PST/QST registrations separately if you hold any (Quebec, BC, Saskatchewan, Manitoba — the rest of Canada uses HST or GST + provincial admin).
+3. Products → each credit-pack product → Tax behavior → assign a tax code. `txcd_10000000` "General — Services" is the safe default; if accounting decides credits map to a digital-services category, use the corresponding code instead. The tax code drives whether each province treats the sale as taxable, exempt, or zero-rated.
+4. Settings → Tax → Reports → decide cadence. Monthly is conventional for GST/HST filing.
+5. Test-mode dry-run: from a freshly-loaded `/account/credits`, complete a checkout with `4242 4242 4242 4242` and a Canadian billing address. Confirm in the dashboard's webhook payload that `automatic_tax.status === "complete"` and `total_details.amount_tax > 0`.
+
+**Flipping the switch in production:**
+
+```bash
+# in /home/bunker-admin/sovpro/.env
+STRIPE_TAX_ENABLED=true
+```
+
+```bash
+docker compose up -d api
+docker compose logs -f api    # watch for "API listening" + no warnings
+```
+
+The frontend doesn't need a rebuild — the "Prices are exclusive of tax — applicable Canadian sales tax (GST/HST/PST) will be calculated at checkout" disclosure on `/account/credits` is gated on the live `/me/credits/packs` response (`tax_enabled: true`).
+
+**Rollback:** flip `STRIPE_TAX_ENABLED=false` (or unset) and `docker compose up -d api`. Already-completed Tax-aware sessions are preserved verbatim in `credit_purchases.raw_webhook` (`session.total_details.amount_tax` carries the breakdown). New sessions revert to the no-tax path immediately. **No DB rollback required.**
+
+**Common failure modes:**
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Every checkout returns 400 with `Stripe.errors.StripeInvalidRequestError: This account is not registered to collect tax …` | `STRIPE_TAX_ENABLED=true` but no Canadian Tax registration in the dashboard | Add the registration (step 2 above) or unset the flag. |
+| Checkout succeeds but `automatic_tax.status === 'failed'` in the webhook payload | Customer's billing address resolves to a jurisdiction the registration doesn't cover (e.g. US visitor) | Stripe still completes the sale at zero tax in this case. Decide whether to refuse non-Canadian buyers (frontend gate) or accept untaxed sales (current behaviour). |
+| `credit_purchases.amount_cents` looks higher than the pack price | Working as intended — `amount_cents` = `session.amount_total` (gross of tax). Pre-tax is in `raw_webhook.session.amount_subtotal`. | Add a `tax_cents` column in a future migration if accounting needs it broken out. |
+| Existing customers in `credit_purchases` from before activation have no address on the Stripe Customer | Customer object created before `customer_update.address: 'auto'` was on. | Harmless — Stripe just won't have an address for those customers until their next checkout. |
 
 ### Compiling a user a credit grant (admin "comp" workflow)
 

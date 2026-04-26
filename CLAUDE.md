@@ -240,6 +240,12 @@ Idempotency is **two-layer** by design:
 
 Same pattern as `JWT_SECRET` / `OPENROUTER_API_KEY`: with `STRIPE_SECRET_KEY` unset the buy-credits UI hides its purchase buttons, the webhook returns 200-discard, and zero payment surface is exposed. Stripe enablement is a separate, smaller deploy.
 
+### Stripe Tax (Canadian GST/HST/PST)
+
+`STRIPE_TAX_ENABLED=true` is a **runtime opt-in** that mirrors the dashboard Tax-activation switch — Stripe Tax requires both. The code path in `services/api/src/lib/stripe.ts:createCheckoutSession` adds `automatic_tax: { enabled: true }` + `billing_address_collection: 'required'` + `customer_update: { address: 'auto', name: 'auto' }` + `tax_id_collection: { enabled: true }` only when this flag is set. Default off → the existing checkout path is unchanged.
+
+`GET /me/credits/packs` returns `tax_enabled: boolean` so the credits page can render an "applicable Canadian sales tax will be calculated at checkout" disclosure when on. `credit_purchases.amount_cents` records `session.amount_total` (gross of tax); the breakdown is preserved in `raw_webhook.session.total_details.amount_tax`. **Do not flip the flag without first activating Stripe Tax + adding a Canadian tax registration in the dashboard** — checkout will 400 otherwise. Full activation checklist in `docs/operations.md` § Stripe Tax.
+
 ### Webhook security — non-negotiable invariants
 
 - Verify the Stripe signature **before any DB write**.
@@ -295,6 +301,7 @@ Refund discipline: a refund **before** the worker commits is a state-flip on the
 - **Do not return `credit_purchases.raw_webhook`** from any HTTP response. It holds the full Stripe event (customer email, payment intent); it's audit-only and stays in the DB.
 - **Do not accept negative credit amounts** in any route. Zod `z.number().int().positive()` at the route + `<= 0` throw in the lib.
 - **Do not build a second Stripe integration.** Subscriptions (dev-API plan) reuse `services/api/src/lib/stripe.ts` + `stripe_webhook_events`. One Stripe customer per user, one webhook endpoint, one client wrapper.
+- **Do not flip `STRIPE_TAX_ENABLED=true` without first activating Stripe Tax in the dashboard + adding a Canadian tax registration.** Stripe rejects every Session that requests `automatic_tax` without the upstream registration; the result is an outage on the buy-credits flow. The full activation checklist lives in `docs/operations.md` § Stripe Tax — run it end-to-end including the test-mode dry-run before flipping the flag in production.
 - **Do not bypass the "one pending rate-limit request per user" guard** without adding a DB-level partial unique index. App-level check is the minimum.
 - **Do not send the correction-reward email on idempotent re-applies.** The grant helper returns `alreadyGranted: true` when the ledger row already exists; the admin PATCH handler only dispatches the email on a fresh insert.
 - **Do not place the report hold outside the `report_jobs` insert transaction.** The hold's reference_id is the job id; both rows must commit together. If the hold insert fails (insufficient balance, unique-violation on duplicate enqueue), the job row must roll back too.

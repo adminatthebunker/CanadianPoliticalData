@@ -308,9 +308,11 @@ Current spendable balance + recent ledger history (up to 50 entries, newest firs
 
 ### `GET /me/credits/packs`
 Lists the credit packs currently offered. Filtered to packs whose `STRIPE_PRICE_ID_*` env var is set — if a pack isn't configured, it's simply omitted.
+- `tax_enabled` mirrors the `STRIPE_TAX_ENABLED` server flag. The frontend uses it to render an "applicable Canadian sales tax (GST/HST/PST) will be calculated at checkout" disclosure when on. Whether a given checkout *actually* charges tax depends on the buyer's billing address and the dashboard's tax registrations — see `docs/operations.md` § Stripe Tax.
 ```json
 {
   "enabled": true,
+  "tax_enabled": false,
   "packs": [
     { "sku": "small",  "credits": 50,  "display_price": "$5",  "bonus_label": null },
     { "sku": "medium", "credits": 250, "display_price": "$20", "bonus_label": "12% bonus" }
