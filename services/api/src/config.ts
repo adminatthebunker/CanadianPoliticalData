@@ -71,6 +71,14 @@ const schema = z.object({
     .preprocess((v) => (v === "" ? undefined : v), z.string().url().optional()),
   STRIPE_CANCEL_URL: z
     .preprocess((v) => (v === "" ? undefined : v), z.string().url().optional()),
+  // Stripe Tax (Canadian GST/HST/PST). Off by default — flipping this to
+  // `true` makes every Checkout Session opt into automatic tax
+  // calculation, which 400s if the operator hasn't first activated
+  // Stripe Tax + added a Canadian registration in the Stripe dashboard.
+  // Treat it as the runtime mirror of the dashboard switch: only flip
+  // after dashboard setup is complete. See docs/plans/premium-reports.md
+  // § Stripe Tax for the full activation checklist.
+  STRIPE_TAX_ENABLED: z.string().optional(),
   // Credits granted to a user whose correction transitions to
   // status='applied'. See docs/plans/premium-reports.md (correction
   // rewards section) for the rationale; tune this value without code
@@ -170,6 +178,10 @@ export const config = (() => {
       enabled:
         (env.STRIPE_SECRET_KEY ?? "").length > 0 &&
         (env.STRIPE_WEBHOOK_SECRET ?? "").length > 0,
+      // Stripe Tax opt-in. `true`/`1` enables; anything else (including
+      // unset) keeps it off. The frontend reads this via /me/credits/packs
+      // so the credits page can render an "+ applicable tax" disclosure.
+      taxEnabled: ["true", "1"].includes((env.STRIPE_TAX_ENABLED ?? "").trim().toLowerCase()),
     },
     corrections: {
       rewardCredits: env.CORRECTION_REWARD_CREDITS,

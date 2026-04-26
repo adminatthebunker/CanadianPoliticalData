@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { config } from "../config.js";
 import { queryOne } from "../db.js";
 import { requireUser, getUser } from "../middleware/user-auth.js";
 import { requireCsrf } from "../lib/csrf.js";
@@ -88,6 +89,7 @@ export default async function creditsRoutes(app: FastifyInstance) {
     }));
     return reply.send({
       enabled: stripeIsConfigured(),
+      tax_enabled: config.stripe.taxEnabled,
       packs,
     });
   });

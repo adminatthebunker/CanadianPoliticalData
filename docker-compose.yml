@@ -81,6 +81,12 @@ services:
       STRIPE_PRICE_ID_CREDIT_PACK_LARGE: ${STRIPE_PRICE_ID_CREDIT_PACK_LARGE:-}
       STRIPE_SUCCESS_URL: ${STRIPE_SUCCESS_URL:-}
       STRIPE_CANCEL_URL: ${STRIPE_CANCEL_URL:-}
+      # Stripe Tax: runtime opt-in (true|1) that mirrors the dashboard
+      # Tax-activation switch. Off by default — flipping this on before
+      # completing dashboard setup will 400 every checkout. See
+      # docs/plans/premium-reports.md § Stripe Tax for the activation
+      # checklist.
+      STRIPE_TAX_ENABLED: ${STRIPE_TAX_ENABLED:-}
       # Correction-reward payout per accepted submission. Tunable
       # without a rebuild. Zero disables the reward entirely.
       CORRECTION_REWARD_CREDITS: ${CORRECTION_REWARD_CREDITS:-10}

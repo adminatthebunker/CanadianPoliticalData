@@ -780,6 +780,16 @@
   font-size: .9rem;
 }
 
+/* Tax disclosure shown above the pack grid when the API reports
+ * Stripe Tax is active. Small and unobtrusive — the price labels
+ * stay the headline, this is just a "you'll see more at checkout"
+ * heads-up. */
+.cpd-auth__tax-note {
+  margin: -.25rem 0 .85rem;
+  font-size: .82rem;
+  line-height: 1.45;
+}
+
 /* Pack grid — three side-by-side cards that collapse to one column
  * on narrow viewports. No default <ul> bullets or margins. */
 .cpd-auth__packs {

@@ -299,4 +299,52 @@ Shipped as its own deploy, not bundled with the phase-1a restart. Sequence:
    - The balance chip + history table on the page should update after the one-shot 2-second poll.
 5. **Idempotency check**: from the Stripe dashboard → Webhook attempts, manually "Resend" the `checkout.session.completed` event. The API should respond 200 with `{duplicate: true}` and no new rows should appear in the DB.
 6. **Flip to live mode**: once (4) and (5) pass, replace the `sk_test_…`, `whsec_test_…`, and price IDs with their live-mode equivalents, register a second webhook endpoint in live mode, restart the API again.
-7. **Tax**: Stripe Tax for Canadian GST-HST compliance is not wired in this phase. Confirm with accounting before taking real payments; Stripe Tax can be enabled per-product in the dashboard with no code change.
+7. **Tax**: see § Stripe Tax below — the activation is a small code change plus a dashboard sequence, not "config-only".
+
+## Stripe Tax (Canadian GST/HST/PST)
+
+Stripe Tax is a *runtime opt-in*, not just a dashboard switch. Activating it in the dashboard tells Stripe "we're registered to collect"; every Checkout Session must individually flag `automatic_tax: { enabled: true }` for tax to actually be calculated. The codebase guards this behind `STRIPE_TAX_ENABLED` so deploying the code path before completing dashboard setup is safe (default off).
+
+### Code surface (already shipped)
+
+`services/api/src/lib/stripe.ts:createCheckoutSession` conditionally adds these Session params when `config.stripe.taxEnabled` is true:
+
+- `automatic_tax: { enabled: true }` — turns on calculation for the Session
+- `billing_address_collection: "required"` — Stripe needs an address to compute Canadian tax
+- `customer_update: { address: "auto", name: "auto" }` — propagate the captured address back onto the Customer so future operations (subscriptions, refund flows) inherit it
+- `tax_id_collection: { enabled: true }` — lets Canadian-registered businesses enter their GST/HST number for B2B / reverse-charge handling
+
+The `/me/credits/packs` response now includes `tax_enabled: boolean`. The credits page renders a "Prices are exclusive of tax — applicable Canadian sales tax (GST/HST/PST) will be calculated at checkout based on your billing address" disclosure when this is `true`.
+
+`credit_purchases.amount_cents` continues to record `session.amount_total` (gross-of-tax). Tax breakdown is preserved verbatim in `raw_webhook` (`session.total_details.amount_tax`) for any future accounting need.
+
+### Operator activation checklist (dashboard)
+
+**Do all of these before flipping `STRIPE_TAX_ENABLED=true`** — turning on the code path before the dashboard is configured will 400 every checkout.
+
+1. **Activate Stripe Tax.** Settings → Tax → Activate. Stripe Tax has its own pricing tier — review the rate before flipping.
+2. **Add Canadian tax registration.** Tax → Registrations → Add. Provide your CRA business number (GST/HST), the originating address you ship/serve from, and registration date. Add provincial PST/QST registrations separately if you hold any (Quebec, BC, Saskatchewan, Manitoba — the rest of Canada uses HST or GST + provincial admin).
+3. **Classify each credit-pack Price with a tax code.** Products → each credit-pack product → Tax behavior. Pick a tax code that matches what you sell (`txcd_10000000` "General — Services" is the safe default; if accounting decides credits are more like a stored-value digital product, use the SaaS / digital-services code instead). The tax code drives whether a given province treats the sale as taxable, exempt, or zero-rated.
+4. **Decide on tax-inclusive vs tax-exclusive prices.** Existing Prices are tax-exclusive (the "$5 / $20 / $50" labels are subtotals). Stripe will compute tax on top. To switch to tax-inclusive (rare for Canadian B2C), you'd archive existing Prices and create new ones with `tax_behavior: 'inclusive'` — that's a cost-of-purchase change, do it only with accounting sign-off.
+5. **Tax Reporting.** Stripe Tax produces a per-jurisdiction report under Tax → Reports. Decide cadence (monthly is conventional for GST/HST filing) and whether to wire the export into your bookkeeping.
+6. **Test mode dry-run.** Before flipping the env var in production, do an end-to-end test-mode buy with `4242 4242 4242 4242` and a Canadian billing address. Confirm `session.total_details.amount_tax > 0` in the webhook payload and that `automatic_tax.status === "complete"`.
+
+### Flipping the switch in production
+
+Single-line `.env` change followed by an api-only restart:
+
+```bash
+# in /home/bunker-admin/sovpro/.env
+STRIPE_TAX_ENABLED=true
+```
+
+```bash
+docker compose up -d api
+docker compose logs -f api    # watch for the "API listening" line and no tax-related warnings
+```
+
+The frontend doesn't need a rebuild — the disclosure is gated on the live `/me/credits/packs` response.
+
+### Rollback
+
+Flip back to `STRIPE_TAX_ENABLED=false` (or unset) and `docker compose up -d api`. Already-completed Tax-aware Sessions are preserved in `credit_purchases.raw_webhook`; new Sessions revert to the no-tax path immediately. **No DB rollback required.**

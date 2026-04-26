@@ -52,6 +52,7 @@ interface Pack {
 
 interface PacksResponse {
   enabled: boolean;
+  tax_enabled: boolean;
   packs: Pack[];
 }
 
@@ -79,6 +80,7 @@ export default function CreditsPage() {
 
   const [data, setData] = useState<CreditsResponse | null>(null);
   const [packs, setPacks] = useState<Pack[]>([]);
+  const [taxEnabled, setTaxEnabled] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [checkingOutSku, setCheckingOutSku] = useState<string | null>(null);
@@ -93,6 +95,7 @@ export default function CreditsPage() {
       ]);
       setData(credits);
       setPacks(packsRes.enabled ? packsRes.packs : []);
+      setTaxEnabled(packsRes.tax_enabled === true);
     } catch (e) {
       if (e instanceof UserUnauthorizedError) {
         setError("Please sign in to view your credits.");
@@ -224,6 +227,12 @@ export default function CreditsPage() {
               No credit packs are currently available. Please check back later.
             </p>
           ) : (
+            <>
+            {taxEnabled && (
+              <p className="cpd-auth__muted cpd-auth__tax-note">
+                Prices below are exclusive of tax. Applicable Canadian sales tax (GST/HST/PST) will be calculated and added at checkout based on your billing address.
+              </p>
+            )}
             <ul className="cpd-auth__packs">
               {packs.map((p) => (
                 <li key={p.sku} className="cpd-auth__pack">
@@ -248,6 +257,7 @@ export default function CreditsPage() {
                 </li>
               ))}
             </ul>
+            </>
           )}
 
           <h3>Ledger history</h3>

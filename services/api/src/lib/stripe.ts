@@ -164,6 +164,23 @@ export async function createCheckoutSession(params: {
 
   const customerId = await getOrCreateCustomer(params.userId, params.userEmail);
 
+  // Stripe Tax wiring. `automatic_tax: { enabled: true }` is the runtime
+  // opt-in — the dashboard switch alone does not intercept Sessions that
+  // don't ask for it. Enabling tax also requires Stripe to know the
+  // buyer's address, so we explicitly collect it at checkout and
+  // propagate the result back onto the Customer (so subsequent flows
+  // like the dev-API plan's subscriptions inherit the address). The
+  // tax_id_collection toggle lets Canadian-registered businesses enter
+  // their GST/HST number for reverse-charge / B2B handling.
+  const taxOpts = config.stripe.taxEnabled
+    ? ({
+        automatic_tax: { enabled: true },
+        billing_address_collection: "required",
+        customer_update: { address: "auto", name: "auto" },
+        tax_id_collection: { enabled: true },
+      } as const)
+    : ({} as const);
+
   const session = await getClient().checkout.sessions.create({
     mode: "payment",
     customer: customerId,
@@ -183,6 +200,7 @@ export async function createCheckoutSession(params: {
         credits: String(pack.credits),
       },
     },
+    ...taxOpts,
   });
 
   if (!session.url) {
