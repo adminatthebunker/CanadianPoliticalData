@@ -42,14 +42,14 @@ class Database:
             await self._pool.close()
             self._pool = None
 
-    async def fetch(self, query: str, *args):
-        return await self.pool.fetch(query, *args)
+    async def fetch(self, query: str, *args, timeout: Optional[float] = None):
+        return await self.pool.fetch(query, *args, timeout=timeout)
 
-    async def fetchrow(self, query: str, *args):
-        return await self.pool.fetchrow(query, *args)
+    async def fetchrow(self, query: str, *args, timeout: Optional[float] = None):
+        return await self.pool.fetchrow(query, *args, timeout=timeout)
 
-    async def fetchval(self, query: str, *args):
-        return await self.pool.fetchval(query, *args)
+    async def fetchval(self, query: str, *args, timeout: Optional[float] = None):
+        return await self.pool.fetchval(query, *args, timeout=timeout)
 
-    async def execute(self, query: str, *args):
-        return await self.pool.execute(query, *args)
+    async def execute(self, query: str, *args, timeout: Optional[float] = None):
+        return await self.pool.execute(query, *args, timeout=timeout)

@@ -41,7 +41,7 @@ log = logging.getLogger("jobs_worker")
 POLL_INTERVAL = int(os.environ.get("JOBS_POLL_INTERVAL", "5"))          # seconds
 DEFAULT_TIMEOUT = int(os.environ.get("JOBS_DEFAULT_TIMEOUT", "7200"))   # 2h
 TAIL_BYTES = int(os.environ.get("JOBS_TAIL_BYTES", "4096"))
-WORKER_STUCK_MINUTES = int(os.environ.get("JOBS_STUCK_MINUTES", "10"))
+WORKER_STUCK_MINUTES = int(os.environ.get("JOBS_STUCK_MINUTES", "5"))
 PYTHON_BIN = os.environ.get("PYTHON_BIN", "python")
 
 
@@ -132,40 +132,29 @@ def _next_cron_after(expr: str, base: datetime) -> datetime:
 async def recover_stuck_jobs(db: Database) -> int:
     """Requeue any 'running' rows older than WORKER_STUCK_MINUTES.
 
-    Triggered each poll loop. If the worker was killed mid-job the row
-    is stuck `running` forever otherwise; this makes restarts safe.
+    Called every poll cycle from main(). If the subprocess died without
+    the parent flipping state (OOM-kill, container restart, segfault),
+    the row would otherwise be stuck `running` forever.
     """
-    n = await db.fetchval(
+    status = await db.execute(
         f"""
         UPDATE scanner_jobs
            SET status = 'queued',
                started_at = NULL,
                error = COALESCE(error, '') ||
-                       CASE WHEN error IS NULL THEN '' ELSE '; ' END ||
-                       'recovered after worker restart'
-         WHERE status = 'running'
-           AND started_at < now() - interval '{WORKER_STUCK_MINUTES} minutes'
-        RETURNING 1
-        """
-    )
-    # With asyncpg, fetchval returns the first row's first column — we
-    # actually want the count. Re-run as execute to get the status:
-    status = await db.execute(
-        f"""
-        UPDATE scanner_jobs
-           SET status = 'queued',
-               started_at = NULL
+                       CASE WHEN COALESCE(error, '') = '' THEN '' ELSE '; ' END ||
+                       'recovered after worker stall'
          WHERE status = 'running'
            AND started_at < now() - interval '{WORKER_STUCK_MINUTES} minutes'
         """
     )
-    # asyncpg execute returns a string like "UPDATE 0" — parse count.
+    # asyncpg execute returns a string like "UPDATE 0" — parse the count.
     try:
         count = int(status.rsplit(" ", 1)[-1])
     except Exception:
         count = 0
     if count:
-        log.warning("recovered %d stuck job(s) from a previous worker", count)
+        log.warning("recovered %d stuck job(s) from a stalled worker", count)
     return count
 
 
@@ -378,8 +367,11 @@ async def main() -> None:
             pass
 
     try:
-        await recover_stuck_jobs(db)
         while not stop.is_set():
+            try:
+                await recover_stuck_jobs(db)
+            except Exception:
+                log.exception("recover_stuck_jobs failed")
             try:
                 await enqueue_due_schedules(db)
             except Exception:

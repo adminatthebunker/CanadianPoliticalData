@@ -873,6 +873,7 @@ async def ingest(
            AND sc.politician_id IS DISTINCT FROM s.politician_id
         """,
         SOURCE_SYSTEM,
+        timeout=300,
     )
 
     log.info(
