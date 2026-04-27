@@ -93,7 +93,32 @@ def _norm(s: str) -> str:
     return _WS_RE.sub(" ", t).strip()
 
 
-# ── Speaker turn detection ──────────────────────────────────────────
+# ── Era detection ───────────────────────────────────────────────────
+# Two distinct ON Hansard markup eras coexist in the corpus:
+#
+# 1. Modern (parliament 39+, ~2007 onwards): each speaker turn is a
+#    ``<p class="speakerStart">`` — Drupal CMS output. One <p> = one
+#    speech; no continuation paragraphs to thread.
+#
+# 2. Legacy (parliament 38 and earlier, 1981-2007): plain ``<p>`` tags
+#    with no class. Speaker turns have ``<p><strong>Name:</strong>...``;
+#    continuation paragraphs follow with no ``<strong>`` and need to be
+#    accumulated onto the open turn. Section headers are ``<h3>`` or
+#    ``<p class="td">`` (and table-of-contents anchors precede the
+#    actual speech body).
+#
+# The detector counts ``class="speakerStart"`` matches: 1+ → modern,
+# else → legacy. ``_SPEAKERSTART_RE.findall`` is fast on the body HTML.
+_SPEAKERSTART_RE = re.compile(
+    r'class\s*=\s*"[^"]*\bspeakerStart\b', re.IGNORECASE,
+)
+
+
+def detect_era(body_html: str) -> str:
+    return "modern" if _SPEAKERSTART_RE.search(body_html) else "legacy"
+
+
+# ── Speaker turn detection (modern) ─────────────────────────────────
 # Match <p class="speakerStart"...><strong>{attr}:</strong>{body}</p>.
 # - The optional <span id="paraN"/> nav-anchor sits between the <p>
 #   open and the <strong>. We tolerate it (or any other inline tag)
@@ -110,12 +135,61 @@ _TURN_OPENER_RE = re.compile(
 )
 
 
+# ── Speaker turn detection (legacy) ─────────────────────────────────
+# Match <p[ attrs]><[opt inline]><strong>{attr}:</strong>{body}</p>.
+# Two important constraints distinguish a speech turn from a section
+# header / timestamp / TOC entry:
+#
+#   1. The strong content MUST end with ":" — filters out
+#      ``<strong>1340</strong>`` (sitting timestamp) and
+#      ``<strong>ORDERS OF THE DAY</strong>`` (section title in some
+#      legacy sub-eras), both of which appear in <p><strong>...</strong></p>
+#      shape but aren't speech turns.
+#
+#   2. The <p> tag MAY carry attributes (``align="LEFT"``, ``class="td"``,
+#      etc.); we don't gate on them — the colon constraint is doing the
+#      heavy lifting.
+_LEGACY_TURN_OPENER_RE = re.compile(
+    r"<p\b[^>]*>"                                             # <p ...>
+    r"\s*(?:<[^>]+>\s*)*"                                     # optional inline tags (span#PARAN, anchors)
+    r"<strong\b[^>]*>(?P<attr_inner>[^<]*?:[^<]*?)</strong>"  # <strong>ATTR:</strong> -- colon REQUIRED
+    r"(?P<body>.*?)"                                          # body up to closing </p>
+    r"</p>",
+    re.IGNORECASE | re.DOTALL,
+)
+
+# Walk every <p>...</p> block (any attributes) for the legacy walker.
+# Used to find continuation paragraphs after a speaker turn opens.
+_LEGACY_P_BLOCK_RE = re.compile(
+    r"<p\b(?P<attrs>[^>]*)>(?P<inner>.*?)</p>",
+    re.IGNORECASE | re.DOTALL,
+)
+
+# Procedural notes ([Applause.], [Interjections.], etc.) — bracketed
+# text, often inside <em>. These shouldn't be appended to a speech
+# body. Tolerant on whitespace + nesting.
+_LEGACY_PROCEDURAL_RE = re.compile(r"^\s*\[[^\]]+\]\s*$")
+
+# TOC entries are <p ...><a href="#P..."><b>X</b></a></p> or
+# <p><a href="#PARA..."><!-- ... --> X</a></p>. The visible text is the
+# section name (often ALL CAPS). Detect by: only-content is one or more
+# anchor tags pointing to in-page IDs.
+_LEGACY_TOC_ONLY_RE = re.compile(
+    r'^\s*(?:<a\b[^>]*href="#[A-Za-z0-9_]+"[^>]*>.*?</a>\s*)+\s*$',
+    re.IGNORECASE | re.DOTALL,
+)
+
+
 # ── Attribution parsing ─────────────────────────────────────────────
 # Honorific opener — case-insensitive, followed by a name.
 # MPP (Member of Provincial Parliament) is ON-specific and used as a
 # bare prefix on some attributions, e.g. "MPP Lisa Gretzky:".
 _HONORIFIC_RE = re.compile(
-    r"^(?P<hon>hon\.|hon|honourable|mr\.|mrs\.|ms\.|miss\.?|dr\.?|madam|sir|mpp)\s+"
+    # Period optional on Mr / Mrs / Ms / Hon — legacy ON Hansard
+    # (P38 and earlier) drops the period on these honorifics consistently
+    # ("Mr Doug Galt"), and the modern era still uses periods which the
+    # \.? happily consumes.
+    r"^(?P<hon>hon\.?|honourable|mr\.?|mrs\.?|ms\.?|miss\.?|dr\.?|madam|sir|mpp)\s+"
     r"(?P<rest>.+)$",
     re.IGNORECASE,
 )
@@ -165,15 +239,25 @@ class ParsedAttribution:
 
 
 def _title_case_person(text: str) -> str:
-    """Title-case a person name, preserving hyphenated surnames.
+    """Title-case a person name, preserving hyphenated surnames AND
+    already-mixed-case names (McLean, MacDonald, O'Brien).
 
     "stephen crawford" → "Stephen Crawford"
+    "STEPHEN CRAWFORD" → "Stephen Crawford"
     "smith-jones"      → "Smith-Jones"
+    "Allan K. McLean"  → "Allan K. McLean"  (preserved — already mixed)
     """
+    def _cap_token(t: str) -> str:
+        # Already has an uppercase letter past index 0 → preserve
+        # (McLean, MacDonald, O'Brien, MacKay).
+        if any(c.isupper() for c in t[1:]):
+            return t
+        return t.capitalize()
+
     out_parts: list[str] = []
     for word in text.split():
         parts = word.split("-")
-        parts = [p.capitalize() for p in parts]
+        parts = [_cap_token(p) for p in parts]
         out_parts.append("-".join(parts))
     return " ".join(out_parts)
 
@@ -351,6 +435,168 @@ class ParseResult:
     speeches: list[ParsedSpeech]
 
 
+def _build_speech(
+    *,
+    sequence: int,
+    attr: ParsedAttribution,
+    body_text: str,
+    spoken_at: datetime,
+    sitting_url: str,
+    sitting_date: date,
+    era: str,
+) -> ParsedSpeech:
+    return ParsedSpeech(
+        sequence=sequence,
+        speaker_name_raw=attr.raw,
+        speaker_role=attr.role,
+        parens_name=attr.parens_inner_raw,
+        honorific=attr.honorific,
+        surname=attr.surname,
+        full_name=attr.full_name,
+        speech_type="floor",
+        spoken_at=spoken_at,
+        text=body_text,
+        language=_detect_language(body_text),
+        content_hash=_content_hash(body_text),
+        raw={
+            "url": sitting_url,
+            "sitting_date": sitting_date.isoformat(),
+            "era": era,
+            "role": attr.role,
+            "parens_inner_raw": attr.parens_inner_raw,
+            "honorific": attr.honorific,
+            "surname": attr.surname,
+            "full_name": attr.full_name,
+        },
+    )
+
+
+def _normalise_body(body_raw: str) -> str:
+    """Common body cleanup: strip leading colon, in-page nav anchors,
+    preserve paragraph breaks before stripping tags."""
+    body_clean = re.sub(r"^\s*:\s*", "", body_raw, count=1)
+    body_clean = re.sub(
+        r"<a\b[^>]*\bhref=\"#[A-Za-z0-9_]+\"[^>]*>[^<]*</a>",
+        "",
+        body_clean,
+        flags=re.IGNORECASE,
+    )
+    body_clean = re.sub(
+        r"</(?:p|blockquote|div|li|tr|h[1-6])\s*>",
+        "\n",
+        body_clean,
+        flags=re.IGNORECASE,
+    )
+    text = _strip_tags(body_clean)
+    text_paras = [p.strip() for p in text.split("\n")]
+    return "\n\n".join(p for p in text_paras if p)
+
+
+def _extract_modern(
+    body_html: str, *, sitting_url: str, sitting_date: date,
+    spoken_at: datetime,
+) -> list[ParsedSpeech]:
+    """Modern era (P39+, 2007-onwards): one <p class="speakerStart"> per
+    speech, no continuation paragraphs to thread."""
+    speeches: list[ParsedSpeech] = []
+    for m in _TURN_OPENER_RE.finditer(body_html):
+        attr_inner = m.group("attr_inner")
+        body_raw = m.group("body")
+
+        attr_text = _strip_tags(attr_inner)
+        if not attr_text:
+            continue
+        attr_text = attr_text.rstrip(":").strip()
+        if not attr_text:
+            continue
+
+        attr = parse_attribution(attr_text)
+        text = _normalise_body(body_raw)
+        if not text:
+            continue
+
+        speeches.append(_build_speech(
+            sequence=len(speeches) + 1,
+            attr=attr, body_text=text, spoken_at=spoken_at,
+            sitting_url=sitting_url, sitting_date=sitting_date,
+            era="modern",
+        ))
+    return speeches
+
+
+def _extract_legacy(
+    body_html: str, *, sitting_url: str, sitting_date: date,
+    spoken_at: datetime,
+) -> list[ParsedSpeech]:
+    """Legacy era (P38 and earlier, 1981-2007): plain <p> tags. Each
+    speaker turn opens with <p><strong>Name:</strong>...; continuation
+    paragraphs (no <strong>) follow until the next turn opens. Walk
+    every <p> block linearly, accumulating continuations onto the
+    currently-open turn.
+    """
+    speeches: list[ParsedSpeech] = []
+    open_attr: Optional[ParsedAttribution] = None
+    open_parts: list[str] = []
+
+    def flush_open() -> None:
+        nonlocal open_attr, open_parts
+        if open_attr is None:
+            open_parts = []
+            return
+        text = "\n\n".join(p for p in open_parts if p).strip()
+        if text:
+            speeches.append(_build_speech(
+                sequence=len(speeches) + 1,
+                attr=open_attr, body_text=text, spoken_at=spoken_at,
+                sitting_url=sitting_url, sitting_date=sitting_date,
+                era="legacy",
+            ))
+        open_attr = None
+        open_parts = []
+
+    for m in _LEGACY_P_BLOCK_RE.finditer(body_html):
+        inner = m.group("inner")
+
+        # Speaker-turn open?
+        opener = _LEGACY_TURN_OPENER_RE.match(
+            "<p" + (m.group("attrs") or "") + ">" + inner + "</p>"
+        )
+        if opener is not None:
+            attr_inner = opener.group("attr_inner")
+            body_raw = opener.group("body")
+            attr_text = _strip_tags(attr_inner).rstrip(":").strip()
+            if not attr_text:
+                continue
+            flush_open()
+            open_attr = parse_attribution(attr_text)
+            head_text = _normalise_body(body_raw)
+            if head_text:
+                open_parts = [head_text]
+            else:
+                open_parts = []
+            continue
+
+        # Skip TOC entries (visible text inside an in-page anchor).
+        inner_strip = inner.strip()
+        if _LEGACY_TOC_ONLY_RE.match(inner_strip):
+            continue
+
+        # Treat as continuation if a turn is open.
+        if open_attr is None:
+            continue
+
+        # Drop in-page nav anchors and procedurals.
+        cont_text = _normalise_body(inner)
+        if not cont_text:
+            continue
+        if _LEGACY_PROCEDURAL_RE.match(cont_text):
+            continue
+        open_parts.append(cont_text)
+
+    flush_open()
+    return speeches
+
+
 def extract_speeches(
     body_html: str, *, sitting_url: str, sitting_date: date,
 ) -> ParseResult:
@@ -359,75 +605,22 @@ def extract_speeches(
     `body_html` is the inner HTML of the transcript body — typically
     obtained from the JSON node's ``body.value`` field. `sitting_date`
     comes from the parent JSON node's ``field_date``.
+
+    Era is auto-detected: modern (P39+) uses ``<p class="speakerStart">``,
+    legacy (P38 and earlier) uses plain ``<p><strong>Name:</strong>``.
     """
     spoken_at = _localise(sitting_date, _DEFAULT_START_TIME)
-    speeches: list[ParsedSpeech] = []
-
-    for m in _TURN_OPENER_RE.finditer(body_html):
-        attr_inner = m.group("attr_inner")
-        body_raw = m.group("body")
-
-        # The <strong> may contain inline tags (e.g. <span id=Pxxxx/>).
-        # Strip them to get the bare attribution string.
-        attr_text = _strip_tags(attr_inner)
-        if not attr_text:
-            continue
-        # Drop a trailing colon that lives inside <strong>...</strong>
-        # (most ON markup includes the colon inside the strong tag).
-        attr_text = attr_text.rstrip(":").strip()
-        if not attr_text:
-            continue
-
-        attr = parse_attribution(attr_text)
-
-        # Body extraction: drop leading whitespace + optional ":" that
-        # sometimes sits OUTSIDE the </strong> instead of inside it.
-        body_clean = re.sub(r"^\s*:\s*", "", body_raw, count=1)
-        # Strip nav anchors that point to in-page paragraph IDs.
-        body_clean = re.sub(
-            r"<a\b[^>]*\bhref=\"#[A-Za-z0-9_]+\"[^>]*>[^<]*</a>",
-            "",
-            body_clean,
-            flags=re.IGNORECASE,
-        )
-        # Preserve paragraph boundaries before tag-stripping.
-        body_clean = re.sub(
-            r"</(?:p|blockquote|div|li|tr|h[1-6])\s*>",
-            "\n",
-            body_clean,
-            flags=re.IGNORECASE,
-        )
-        text = _strip_tags(body_clean)
-        text_paras = [p.strip() for p in text.split("\n")]
-        text = "\n\n".join(p for p in text_paras if p)
-        if not text:
-            continue
-
-        speech = ParsedSpeech(
-            sequence=len(speeches) + 1,
-            speaker_name_raw=attr.raw,
-            speaker_role=attr.role,
-            parens_name=attr.parens_inner_raw,
-            honorific=attr.honorific,
-            surname=attr.surname,
-            full_name=attr.full_name,
-            speech_type="floor",
+    era = detect_era(body_html)
+    if era == "modern":
+        speeches = _extract_modern(
+            body_html, sitting_url=sitting_url, sitting_date=sitting_date,
             spoken_at=spoken_at,
-            text=text,
-            language=_detect_language(text),
-            content_hash=_content_hash(text),
-            raw={
-                "url": sitting_url,
-                "sitting_date": sitting_date.isoformat(),
-                "role": attr.role,
-                "parens_inner_raw": attr.parens_inner_raw,
-                "honorific": attr.honorific,
-                "surname": attr.surname,
-                "full_name": attr.full_name,
-            },
         )
-        speeches.append(speech)
-
+    else:
+        speeches = _extract_legacy(
+            body_html, sitting_url=sitting_url, sitting_date=sitting_date,
+            spoken_at=spoken_at,
+        )
     return ParseResult(
         url=sitting_url,
         sitting_date=sitting_date,

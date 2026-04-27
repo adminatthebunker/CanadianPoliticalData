@@ -668,3 +668,189 @@ async def resolve_on_speakers(
         stats.speeches_scanned, stats.speeches_updated, stats.still_unresolved,
     )
     return stats
+
+
+# ── Parliament-keyed post-pass resolver ────────────────────────────
+
+
+async def resolve_on_speakers_dated(
+    db: Database, *, limit: Optional[int] = None,
+) -> ResolveStats:
+    """Re-resolve politician_id on ON speeches with NULL politician_id,
+    using the historical MPP roster from ingest-on-former-mpps.
+
+    Parliament-keyed (mirrors ab_hansard.resolve_ab_speakers). The
+    speech raw payload carries the parliament number that the sitting
+    came from (`raw->'on_hansard'->>'parliament'`); the
+    historical-roster ingester stamps each (politician, parliament)
+    edge as a politician_terms row with
+    ``source = 'ola.org:parliament-N'``. A pure-SQL surname-equality
+    join restricted to that source resolves each speech against
+    contemporaneous MPPs only — no cross-parliament name bleed.
+
+    The exact-one-candidate gate (`cand_count = 1`) means rows where
+    two MPPs share a surname within the same parliament stay NULL.
+    They are rare but real (Stewart, Smith, Brown family members
+    across overlapping eras); riding/honorific disambiguation would
+    be needed to resolve them and is out of scope for v1.
+
+    Naming: ``_dated`` keeps parity with MB's resolver name even
+    though ON's filter is parliament-keyed, not date-windowed. Both
+    serve the same role — disambiguating same-surname speakers
+    across the historical corpus.
+
+    Idempotent: re-running once everything resolvable has resolved is
+    a no-op.
+    """
+    stats = ResolveStats()
+
+    # Step 1 — count work, pre-update.
+    scanned_row = await db.fetchrow(
+        f"""
+        SELECT COUNT(*) AS n
+          FROM speeches s
+         WHERE s.source_system = '{SOURCE_SYSTEM}'
+           AND s.politician_id IS NULL
+           AND s.raw->'on_hansard'->>'surname' IS NOT NULL
+           AND s.raw->'on_hansard'->>'parliament' IS NOT NULL
+        """
+    )
+    stats.speeches_scanned = int(scanned_row["n"])
+
+    # Step 2 — enumerate parliaments with unresolved speeches and
+    # batch-update each one. Per-parliament budget keeps each
+    # statement under the asyncpg default (60s); explicit timeout=600
+    # is a defensive cap on the rare case where one parliament has a
+    # six-figure unresolved volume.
+    parliament_rows = await db.fetch(
+        f"""
+        SELECT DISTINCT (s.raw->'on_hansard'->>'parliament')::int AS p
+          FROM speeches s
+         WHERE s.source_system = '{SOURCE_SYSTEM}'
+           AND s.politician_id IS NULL
+           AND s.raw->'on_hansard'->>'surname' IS NOT NULL
+           AND s.raw->'on_hansard'->>'parliament' IS NOT NULL
+         ORDER BY 1
+        """
+    )
+    parliaments = [int(r["p"]) for r in parliament_rows]
+    log.info(
+        "resolve_on_speakers_dated: parliaments with unresolved speeches = %s",
+        parliaments,
+    )
+
+    budget_left = int(limit) if limit else None
+    for p in parliaments:
+        if budget_left is not None and budget_left <= 0:
+            break
+        per_p_limit = f"LIMIT {budget_left}" if budget_left is not None else ""
+
+        update_sql = f"""
+        WITH target_speeches AS (
+          SELECT s.id,
+                 lower(unaccent(s.raw->'on_hansard'->>'surname')) AS norm_surname
+            FROM speeches s
+           WHERE s.source_system = '{SOURCE_SYSTEM}'
+             AND s.politician_id IS NULL
+             AND (s.raw->'on_hansard'->>'parliament')::int = $1
+             AND s.raw->'on_hansard'->>'surname' IS NOT NULL
+           {per_p_limit}
+        ),
+        candidates AS (
+          SELECT ts.id AS speech_id,
+                 p.id  AS politician_id,
+                 p.party AS party,
+                 p.constituency_name AS constituency_name,
+                 COUNT(*) OVER (PARTITION BY ts.id) AS cand_count
+            FROM target_speeches ts
+            JOIN politician_terms pt
+              ON pt.source = 'ola.org:parliament-' || $1::text
+            JOIN politicians p
+              ON p.id = pt.politician_id
+             AND p.province_territory = 'ON'
+             AND p.level = 'provincial'
+             AND (
+               lower(unaccent(split_part(p.last_name, ' ', -1))) = ts.norm_surname
+               OR lower(unaccent(p.last_name))                    = ts.norm_surname
+             )
+        ),
+        updated AS (
+          UPDATE speeches s
+             SET politician_id        = c.politician_id,
+                 party_at_time        = COALESCE(s.party_at_time, c.party),
+                 constituency_at_time = COALESCE(s.constituency_at_time, c.constituency_name),
+                 confidence           = GREATEST(s.confidence, 0.9),
+                 updated_at           = now()
+            FROM candidates c
+           WHERE s.id = c.speech_id
+             AND c.cand_count = 1
+          RETURNING s.id
+        )
+        SELECT COUNT(*) AS n FROM updated
+        """
+        upd_row = await db.fetchrow(update_sql, p, timeout=600)
+        n = int(upd_row["n"])
+        stats.speeches_updated += n
+        if budget_left is not None:
+            budget_left -= n
+        log.info("resolve_on_speakers_dated: parliament=%d updated=%d", p, n)
+
+    # Step 3 — propagate to speech_chunks per-parliament. Same
+    # autovacuum-contention reasoning as ab_hansard.resolve_ab_speakers.
+    chunk_p_rows = await db.fetch(
+        f"""
+        SELECT DISTINCT (s.raw->'on_hansard'->>'parliament')::int AS p
+          FROM speech_chunks sc
+          JOIN speeches s ON s.id = sc.speech_id
+         WHERE s.source_system = '{SOURCE_SYSTEM}'
+           AND s.politician_id IS NOT NULL
+           AND sc.politician_id IS DISTINCT FROM s.politician_id
+         ORDER BY 1
+        """
+    )
+    chunk_parliaments = [int(r["p"]) for r in chunk_p_rows]
+    log.info(
+        "resolve_on_speakers_dated: parliaments with stale chunks = %s",
+        chunk_parliaments,
+    )
+    for p in chunk_parliaments:
+        n_row = await db.fetchrow(
+            f"""
+            WITH updated AS (
+              UPDATE speech_chunks sc
+                 SET politician_id = s.politician_id
+                FROM speeches s
+               WHERE sc.speech_id = s.id
+                 AND s.source_system = '{SOURCE_SYSTEM}'
+                 AND s.politician_id IS NOT NULL
+                 AND sc.politician_id IS DISTINCT FROM s.politician_id
+                 AND (s.raw->'on_hansard'->>'parliament')::int = $1
+              RETURNING sc.id
+            )
+            SELECT COUNT(*) AS n FROM updated
+            """,
+            p, timeout=600,
+        )
+        log.info(
+            "resolve_on_speakers_dated: chunk propagation parliament=%d updated=%d",
+            p, int(n_row["n"]),
+        )
+
+    # Step 4 — tally still-unresolved post-update.
+    tail_row = await db.fetchrow(
+        f"""
+        SELECT COUNT(*) AS n
+          FROM speeches s
+         WHERE s.source_system = '{SOURCE_SYSTEM}'
+           AND s.politician_id IS NULL
+           AND s.raw->'on_hansard'->>'surname' IS NOT NULL
+           AND s.raw->'on_hansard'->>'parliament' IS NOT NULL
+        """
+    )
+    stats.still_unresolved = int(tail_row["n"])
+
+    log.info(
+        "resolve_on_speakers_dated: scanned=%d updated=%d still_unresolved=%d",
+        stats.speeches_scanned, stats.speeches_updated, stats.still_unresolved,
+    )
+    return stats

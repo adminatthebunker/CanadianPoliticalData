@@ -289,6 +289,15 @@ COMMANDS: dict[str, dict[str, Any]] = {
              "help": "Cap speeches scanned (smoke-test aid)."},
         ],
     },
+    "resolve-on-speakers-dated": {
+        "description": "Parliament-keyed ON speaker resolver. Joins speeches.raw->'on_hansard'->>'parliament' against politician_terms source='ola.org:parliament-N' to disambiguate historical surnames after the former-MPPs backfill.",
+        "cli": "resolve-on-speakers-dated",
+        "category": "hansard",
+        "args": [
+            {"name": "limit", "type": "int", "required": False,
+             "help": "Cap candidate speeches scanned (smoke-test aid)."},
+        ],
+    },
     "ingest-nb-hansard": {
         "description": "Pull New Brunswick Hansard (bilingual PDF) into `speeches`. English speaker lines trigger new rows; French translations become body text.",
         "cli": "ingest-nb-hansard",
@@ -548,6 +557,18 @@ COMMANDS: dict[str, dict[str, Any]] = {
              "help": "Include the deceased-MLAs bio page."},
             {"name": "delay", "type": "float", "required": False, "default": 1.0,
              "help": "Seconds between page fetches."},
+        ],
+    },
+    "ingest-on-former-mpps": {
+        "description": "Backfill historical ON MPPs from ola.org/en/members/parliament-{N} (N=1..44, 1867-present). Fetches per-member JSON for stable field_member_id; name-matches existing ON rows before inserting so Open North current-roster entries get stamped rather than duplicated. Prereq for pre-current-Parliament ON Hansard backfill.",
+        "cli": "ingest-on-former-mpps", "category": "enrichment",
+        "args": [
+            {"name": "from_parliament", "type": "int", "required": False, "default": 1,
+             "help": "Earliest parliament to enumerate (default: 1 = 1867)."},
+            {"name": "until_parliament", "type": "int", "required": False, "default": 44,
+             "help": "Latest parliament to enumerate (default: 44 = current)."},
+            {"name": "delay", "type": "float", "required": False, "default": 1.0,
+             "help": "Seconds between page fetches (be polite to ola.org)."},
         ],
     },
     "ingest-ns-mlas": {

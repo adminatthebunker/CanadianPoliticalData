@@ -719,6 +719,7 @@ from .legislative.ab_presiding_merge import merge_ab_presiding_stubs  # noqa: E4
 from .legislative.ab_bills import ingest_ab_bills  # noqa: E402
 from .legislative.mb_mlas import ingest as ingest_mb_mlas  # noqa: E402
 from .legislative.mb_former_mlas import ingest_mb_former_mlas  # noqa: E402
+from .legislative.on_former_mpps import ingest_on_former_mpps  # noqa: E402
 from .legislative.mb_bills import ingest as ingest_mb_bills  # noqa: E402
 from .legislative.mb_billstatus import (  # noqa: E402
     fetch as fetch_mb_billstatus,
@@ -1416,6 +1417,64 @@ def cmd_ingest_mb_former_mlas(
             f"slug_collisions={stats.slug_collisions} "
             f"terms_inserted={stats.terms_inserted} "
             f"terms_skipped_existing={stats.terms_skipped_existing}"
+        )
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
+@cli.command("ingest-on-former-mpps")
+@click.option("--from-parliament", type=int, default=1,
+              help="Earliest parliament to enumerate (default: 1 = 1867).")
+@click.option("--until-parliament", type=int, default=44,
+              help="Latest parliament to enumerate (default: 44 = current).")
+@click.option("--delay", type=float, default=1.0,
+              help="Seconds between page fetches (be polite to ola.org).")
+@click.pass_context
+def cmd_ingest_on_former_mpps(
+    ctx: click.Context, from_parliament: int, until_parliament: int, delay: float,
+) -> None:
+    """Enumerate every MPP who's ever served in the Ontario Legislative Assembly.
+
+    Scrapes ola.org/en/members/parliament-{N} for N in [--from-parliament,
+    --until-parliament], then GETs /en/members/all/<slug>?_format=json
+    per unique slug to capture the stable field_member_id. Upserts
+    politicians keyed on ola_member_id (name-matching existing ON rows
+    first so Open North current-roster entries get stamped rather
+    than duplicated), and creates politician_terms rows per
+    (politician, parliament) using the parliament's official date
+    range.
+
+    Full-history default (1..44) covers ~5500 MPPs from 1867-present;
+    each parliament is one HTTP request and ~120 members each → ~50
+    listing fetches + ~5500 per-member JSON fetches at --delay=1.0
+    is ~95 minutes. Smoke-test with --from-parliament 32 to align
+    with the Hansard-backwards-extension scope (parliaments 32-44).
+
+    Idempotent: politicians upserted on ola_member_id (migration 0037
+    UNIQUE partial); politician_terms upserted on (politician_id,
+    office, started_at). Re-running is a no-op.
+
+    Prereq for resolve-on-speakers-dated and for backfilling Ontario
+    Hansard parliaments 32-43.
+    """
+    async def _wrap(db: Database) -> None:
+        stats = await ingest_on_former_mpps(
+            db,
+            from_parliament=from_parliament,
+            until_parliament=until_parliament,
+            delay=delay,
+        )
+        console.print(
+            f"[green]ingest-on-former-mpps[/green]: "
+            f"parliaments={stats.parliaments_scanned} "
+            f"unique_slugs={stats.unique_slugs} "
+            f"json_fetches={stats.member_json_fetches} "
+            f"json_failures={stats.member_json_failures} "
+            f"inserted={stats.politicians_inserted} "
+            f"updated={stats.politicians_updated} "
+            f"name_matched={stats.politicians_name_matched} "
+            f"terms_inserted={stats.terms_inserted} "
+            f"terms_skipped={stats.terms_skipped_existing} "
+            f"missing_listings={stats.parliaments_missing_listing}"
         )
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 
@@ -2374,6 +2433,35 @@ def cmd_resolve_mb_speakers_dated(ctx: click.Context, limit: Optional[int]) -> N
             f"[green]resolve-mb-speakers-dated[/green]: "
             f"scanned={stats.speeches_scanned} updated={stats.speeches_updated} "
             f"still_ambiguous={stats.still_unresolved}"
+        )
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
+@cli.command("resolve-on-speakers-dated")
+@click.option("--limit", type=int, default=None,
+              help="Cap candidate speeches scanned (smoke-test aid).")
+@click.pass_context
+def cmd_resolve_on_speakers_dated(ctx: click.Context, limit: Optional[int]) -> None:
+    """Parliament-keyed ON speaker resolver: joins on the parliament
+    number from speeches.raw->'on_hansard'->>'parliament' against
+    politician_terms.source = 'ola.org:parliament-N'.
+
+    Run after ingest-on-former-mpps lands the historical roster, and
+    after backfilling pre-current-Parliament Hansard. Mirrors AB's
+    legl-keyed resolver — the speech raw payload already carries the
+    parliament number, so disambiguation is exact (not date-windowed)
+    against the 5000+ MPPs whose terms were stamped per-parliament.
+
+    Same-surname-within-one-parliament rows stay NULL (cand_count > 1).
+    Idempotent.
+    """
+    async def _wrap(db: Database) -> None:
+        from .legislative.on_hansard import resolve_on_speakers_dated as _resolve
+        stats = await _resolve(db, limit=limit)
+        console.print(
+            f"[green]resolve-on-speakers-dated[/green]: "
+            f"scanned={stats.speeches_scanned} updated={stats.speeches_updated} "
+            f"still_unresolved={stats.still_unresolved}"
         )
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 

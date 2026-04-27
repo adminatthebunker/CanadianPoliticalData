@@ -58,7 +58,7 @@ Every upstream legislature that ships a stable integer or slug ID for its member
 
 - Federal: `openparliament_slug`
 - Nova Scotia: `nslegislature_slug`
-- Ontario: `ola_slug`
+- Ontario: `ola_slug` + `ola_member_id` (int — stable `field_member_id` from ola.org)
 - BC: `lims_member_id` (int)
 - Quebec: `qc_assnat_id` (int)
 - Alberta: `ab_assembly_mid` (zero-padded text)

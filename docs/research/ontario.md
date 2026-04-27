@@ -122,5 +122,24 @@ Probe pass on 2026-04-24 resolved every research question and the pipeline shipp
 **Bilingual content note (probed 2026-04-24):** The `/fr/...` URL pattern exists (`/fr/affaires-legislatives/documents-chambre/legislature-{P}/session-{S}/{YYYY-MM-DD}/journal-debats`) and returns HTTP 200 — but the body is **byte-identical** to the English URL. ON Hansard is published as a single bilingual transcript: francophone MPPs' (e.g. France Gélinas, Anthony Leardi, Guy Bourgouin) speeches appear in French interleaved with the English majority (~3% French in a typical sitting). So the EN ingest already captures everything; **per-speech language detection** (a small French-stopword heuristic in `on_hansard_parse.py`) tags each row as `language='en'` or `'fr'` for search filtering and embedding correctness. There is no separate French Hansard to ingest.
 
 **Out of scope (followups):**
-- Historical backfill before parliament 44 — needs the politician roster to include former MPPs (matches the AB / MB historical-roster pattern). Until then, pre-2025 ingest would tank the resolution rate.
 - Bill ↔ Hansard cross-references via `field_associated_bill_multi` — already captured in the JSON we fetch, persisted to `raw->'on_hansard'->'field_associated_bills'`, but not yet promoted to a normalised join table.
+
+## Historical MPP roster ✅ LIVE (2026-04-26)
+
+Probe pass on 2026-04-26 turned up a clean per-parliament roster URL pattern that exposes every MPP back to Confederation; backfill landed same-day.
+
+- **Listing endpoint:** `https://www.ola.org/en/members/parliament-{N}` for N = 1..44. Single-page HTML table per parliament, ~120-130 members each, no pagination, no JS. The `/en/members/all` index page hosts the dropdown that drives this URL pattern (visible in the HTML as a `<select>` of every parliament + its date range). `?_format=json` on the listing returns 406 — JSON is per-member only.
+- **Listing row shape:** `<a href="/en/members/all/{slug}">Last, First [Hon.]</a>` followed by a riding cell. Slug is `firstname-lastname` lowercased, even back to 1867 (William Anderson → `william-anderson`).
+- **Per-member detail:** `/en/members/all/{slug}?_format=json` returns:
+  - `field_member_id[0].value` — **stable integer** assigned once per MPP, never reused (Ted Arnott=2, former Premier Mike Harris=44, William Anderson=768, current MPP Mike Harris=7482). This is the upsert key.
+  - `field_first_name`, `field_last_name`, `title`, `field_url_segment` — clean name fields.
+  - `field_last_riding[0].url`, `field_last_party[0].target_id` — current/most-recent values only (no per-term party history).
+  - `field_dates_of_service[0].target_id` — node ref to a separate "service stint" node (one per continuous span); dereference via `/node/{id}?_format=json` for `field_start_date` / `field_end_date` / `field_start_reason` / `field_end_reason`. Useful for date-window disambiguation; not required for the parliament-keyed resolver.
+  - `field_parliament` — array of taxonomy term refs. The taxonomy term URL itself returns 404; ignore it. The (member, parliament) edges come from iterating the listings.
+- **Same-name disambiguation:** ola.org assigns different slugs (e.g. `mike-harris` for the current Kitchener-Conestoga MPP, `michael-harris-44` for the former Premier of Nipissing). Slugs are bijective with `field_member_id`. No collision logic needed — the listings already return distinct slugs.
+- **Coverage:** all 44 parliaments (1867-12-27 → present). Hansard HTML transcripts confirmed back to **Parliament 32 (1981-04-21)**.
+- **Schema additions:** migration `0037_politicians_ola_member_id.sql` adds `politicians.ola_member_id INTEGER` with a UNIQUE partial index. Mirrors AB's `ab_assembly_mid` (TEXT, zero-padded) and MB's `mb_assembly_slug` (TEXT, derived).
+- **Scanner module:** `services/scanner/src/legislative/on_former_mpps.py` (ingester) + `resolve_on_speakers_dated` in `on_hansard.py` (parliament-keyed resolver).
+- **CLI:** `ingest-on-former-mpps` + `resolve-on-speakers-dated`.
+- **Term source convention:** `politician_terms.source = 'ola.org:parliament-{N}'` (mirrors `assembly.ab.ca:legl-{N}`). The resolver joins on this prefix to filter same-surname speakers to contemporaneous MPPs only.
+- **Parliament date map:** hard-coded in `on_former_mpps.PARLIAMENT_DATES` for N=1..44, sourced from the `/en/members/all` dropdown table (verified against per-page headers).

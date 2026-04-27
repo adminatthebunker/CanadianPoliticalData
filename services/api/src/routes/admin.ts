@@ -132,6 +132,12 @@ const COMMAND_CATALOG = [
       { name: "limit", type: "int", required: false, help: "Cap candidate speeches scanned (smoke-test aid)." },
     ],
   },
+  { key: "resolve-on-speakers-dated", category: "hansard",
+    description: "Parliament-keyed ON speaker resolver. Joins speeches.raw->'on_hansard'->>'parliament' against politician_terms source='ola.org:parliament-N' to disambiguate historical surnames after the former-MPPs backfill.",
+    args: [
+      { name: "limit", type: "int", required: false, help: "Cap candidate speeches scanned (smoke-test aid)." },
+    ],
+  },
   { key: "ingest-ns-hansard", category: "hansard",
     description: "Pull Nova Scotia Hansard (HTML transcripts) into `speeches`. Speaker resolution via politicians.nslegislature_slug.",
     args: [
@@ -305,6 +311,13 @@ const COMMAND_CATALOG = [
       { name: "living", type: "bool", required: false, default: true, help: "Include the living-MLAs bio page." },
       { name: "deceased", type: "bool", required: false, default: true, help: "Include the deceased-MLAs bio page." },
       { name: "delay", type: "float", required: false, default: 1.0, help: "Seconds between page fetches." },
+    ] },
+  { key: "ingest-on-former-mpps", category: "enrichment",
+    description: "Backfill historical ON MPPs from ola.org/en/members/parliament-{N} (N=1..44, 1867-present). Fetches per-member JSON for stable field_member_id; name-matches existing ON rows so Open North current-roster entries get stamped rather than duplicated. Prereq for pre-current-Parliament ON Hansard backfill.",
+    args: [
+      { name: "from_parliament", type: "int", required: false, default: 1, help: "Earliest parliament to enumerate (default: 1 = 1867)." },
+      { name: "until_parliament", type: "int", required: false, default: 44, help: "Latest parliament to enumerate (default: 44 = current)." },
+      { name: "delay", type: "float", required: false, default: 1.0, help: "Seconds between page fetches (be polite to ola.org)." },
     ] },
   { key: "ingest-ns-mlas", category: "enrichment",
     description: "Stamp politicians.nslegislature_slug on seated NS MLAs by harvesting anchor slugs from current-session Hansard. Prereq for ingest-ns-hansard.",
