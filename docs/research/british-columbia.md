@@ -209,7 +209,9 @@ curl -s -X POST -H "Content-Type: application/json" \
 - [x] Historical MLA roster enrichment (376 MLAs via LIMS GraphQL `allMembers` — `scripts/bc-enrich-historical-mlas.py`)
 - [x] Resolver bug fixes (compound-surname initial-last + duplicate-Popham merge, 2026-04-20)
 - [x] Tier 1 presiding-officer (Speaker) terms seeded into `politician_terms` (2026-04-20)
-- [ ] Historical backfill — bills (PDMS serves every session back to 1872); Hansard (HDMS archives from 1970, pre-P38 not yet ingested)
+- [x] Historical backfill — Hansard pre-P38 (P29 1970 → P37 2005, 9 parliaments). Era-branching parser added to `bc_hansard_parse.py` for the bare-`<p><b>NAME:</b>` legacy markup with two sub-eras (P29-P34 ALL-CAPS attributions + `class="noindent"` continuations; P36-P37 mixed-case `Hon. R. Coleman` / `J. MacPhail` attributions + bare-`<p>` continuations). 379,097 new speeches added, ~57 % overall resolution (P35-P37 hits 87-99 % via existing `lims_member_id` lookups; P29-P34 bottoms out at 9-50 % because the LIMS `allMembers` roster doesn't extend below P35).
+- [ ] Historical backfill — bills (PDMS serves every session back to 1872, not yet ingested)
+- [ ] Pre-P35 BC roster source — would lift P29-P34 resolution from ~10 % to ~80 %. Candidates: elections.bc.ca historical MLA list, Wikipedia "List of MLAs of British Columbia", or BC Archives. Out of LIMS GraphQL scope.
 - [ ] Hansard scheduler cron (Blues poller + Final sweep)
 - [ ] Tier 2 presiding officers — Deputy Speaker (4,952 rows) — needs per-parliament roster source
 - [ ] Tier 3 presiding officers — Committee of the Whole Chair (7,749 rows) — needs parser-level extraction of "X in the chair" proceedings headers

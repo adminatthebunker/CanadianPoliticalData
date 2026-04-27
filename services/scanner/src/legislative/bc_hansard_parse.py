@@ -51,10 +51,15 @@ VANCOUVER_TZ = ZoneInfo("America/Vancouver")
 
 
 # ── Filename parsing ────────────────────────────────────────────────
-# URL patterns:
+# Modern URL patterns (P38-S4 onward):
 #   {YYYYMMDD}{am|pm}-House-Blues.htm            — Blues draft (P40-S4+)
 #   {YYYYMMDD}{am|pm}-Hansard-n{NNN}.html        — Final, 43rd-Parl-era
 #   {YYYYMMDD}{am|pm}-Hansard-v{VOL}n{NNN}.htm   — Final, pre-43rd-Parl
+#
+# Legacy URL pattern (P29 1970 — P37 2005):
+#   {NN}p_{NN}s_{YYMMDD}{x}.htm    where x ∈ {a, m, p, n, z}
+#                                  a/m=morning, p=afternoon,
+#                                  n=evening, z=night/special
 _URL_FILENAME_RE = re.compile(
     r"/(?P<date>\d{8})(?P<half>am|pm)-"
     r"(?P<kind>House-Blues"
@@ -63,13 +68,25 @@ _URL_FILENAME_RE = re.compile(
     r")\.html?$",
     re.IGNORECASE,
 )
+_URL_LEGACY_FILENAME_RE = re.compile(
+    r"/(?P<parl>\d{1,2})p_(?P<sess>\d{1,2})s_"
+    r"(?P<yymmdd>\d{6})(?P<half_letter>[a-z])\.htm$",
+    re.IGNORECASE,
+)
+_LEGACY_HALF_LETTER_TO_TOKEN: dict[str, str] = {
+    "a": "am",   # morning
+    "m": "am",   # morning (alternate)
+    "p": "pm",   # afternoon
+    "n": "pm",   # evening — bucket as pm for sort purposes
+    "z": "pm",   # night/special — bucket as pm
+}
 
 
 @dataclass
 class UrlMeta:
     sitting_date: date
     half: str  # 'am' | 'pm'
-    variant: str  # 'blues' | 'final'
+    variant: str  # 'blues' | 'final' | 'legacy'
     issue: Optional[int] = None
     volume: Optional[int] = None
 
@@ -81,20 +98,45 @@ class UrlMeta:
 
 def parse_url_meta(url: str) -> UrlMeta:
     m = _URL_FILENAME_RE.search(url)
-    if not m:
-        raise ValueError(f"not a recognized BC Hansard filename: {url}")
-    d = datetime.strptime(m.group("date"), "%Y%m%d").date()
-    kind_lower = m.group("kind").lower()
-    variant = "blues" if kind_lower == "house-blues" else "final"
-    issue = m.group("issue_new") or m.group("issue_old")
-    volume = m.group("volume")
-    return UrlMeta(
-        sitting_date=d,
-        half=m.group("half").lower(),
-        variant=variant,
-        issue=int(issue) if issue else None,
-        volume=int(volume) if volume else None,
-    )
+    if m:
+        d = datetime.strptime(m.group("date"), "%Y%m%d").date()
+        kind_lower = m.group("kind").lower()
+        variant = "blues" if kind_lower == "house-blues" else "final"
+        issue = m.group("issue_new") or m.group("issue_old")
+        volume = m.group("volume")
+        return UrlMeta(
+            sitting_date=d,
+            half=m.group("half").lower(),
+            variant=variant,
+            issue=int(issue) if issue else None,
+            volume=int(volume) if volume else None,
+        )
+    m = _URL_LEGACY_FILENAME_RE.search(url)
+    if m:
+        # Legacy: 2-digit year, century inferred from parliament era.
+        # Per LIMS HDMS coverage: P29 (1970-1972) is the floor, no
+        # century ambiguity through P37 (2005). Anything from
+        # YY in [70..99] is 19YY, [00..05] is 20YY.
+        yymmdd = m.group("yymmdd")
+        yy = int(yymmdd[:2])
+        century = 1900 if yy >= 70 else 2000
+        try:
+            d = datetime.strptime(
+                f"{century + yy:04d}{yymmdd[2:]}", "%Y%m%d",
+            ).date()
+        except ValueError as exc:
+            raise ValueError(f"bad legacy date in filename: {url}") from exc
+        half = _LEGACY_HALF_LETTER_TO_TOKEN.get(
+            m.group("half_letter").lower(), "pm",
+        )
+        return UrlMeta(
+            sitting_date=d,
+            half=half,
+            variant="legacy",
+            issue=None,
+            volume=None,
+        )
+    raise ValueError(f"not a recognized BC Hansard filename: {url}")
 
 
 # ── Class-name normalisation ────────────────────────────────────────
@@ -384,9 +426,261 @@ class ParseResult:
     sitting_speaker_name: Optional[str]  # Presiding Speaker for "The Speaker" resolution
 
 
+# ── Era detection ──────────────────────────────────────────────────
+# Modern BC Hansard transcripts use class-driven semantics
+# (`SpeakerBegins`, `Speaker-Name`, `Time-Stamp`, etc.). Pre-P38
+# transcripts (1970-2008) use bare `<p><b>NAME:</b> body</p>`
+# openers + `<p class="noindent">` continuations. The two markup
+# families don't overlap meaningfully — modern has 0 of the legacy
+# `noindent` paragraphs in body sections, and legacy has 0 of the
+# `speakerbegins` markers — so a single class-presence count is
+# sufficient to dispatch.
+_LEGACY_DETECT_RE = re.compile(
+    r'<p\s+class="(?:[^"]*\b)?noindent\b', re.IGNORECASE,
+)
+_MODERN_DETECT_RE = re.compile(
+    r'<p\s+class="(?:[^"]*\b)?speaker[-_ ]?begins\b', re.IGNORECASE,
+)
+
+
+def detect_era(html_text: str) -> str:
+    """Return 'modern' or 'legacy' based on observed markup.
+
+    Modern (P38-S4 onward, late 2008+) emits `<p class="speakerbegins">`
+    or `<p class="speaker-begins">` openers. Legacy (P29 1970 → P37 2005)
+    uses bare `<p><b>NAME:</b>` openers — class-driven semantics is
+    absent. The two formats don't overlap; presence of `speakerbegins`
+    is sufficient to call it modern.
+    """
+    if _MODERN_DETECT_RE.search(html_text):
+        return "modern"
+    return "legacy"
+
+
+# ── Legacy extractor (P29 1970 → P37 2005) ─────────────────────────
+# Speaker openers are bare <p> tags whose first child is a <b> wrapping
+# the all-caps attribution and a trailing colon. Continuations are
+# <p class="noindent"> (and bare <p> tags whose first text isn't a
+# speaker opener). Procedural text + headings live in
+# class="proc_head" / "subj_head" — we treat them as section markers.
+_LEGACY_OPENER_RE = re.compile(
+    r"<p(?P<attrs>[^>]*)>"                 # bare <p> or with align="center"
+    r"\s*<b[^>]*>"                           # <b> opener
+    # Attribution: up to 200 chars to absorb NBSP indenting
+    # ("&nbsp;" = 6 chars, P37 prefixes ~11 of them); the regex is
+    # non-greedy and stops at the first colon.
+    r"(?P<attribution>[^<]{2,200}?):"
+    r"\s*</b>"                               # close of bold
+    r"(?P<rest>.*?)</p>",
+    re.DOTALL | re.IGNORECASE,
+)
+# Distinguish "real speaker openers" from book-keeping bold lines
+# ("(Hansard)", "1970 Legislative Session: 1st Session, 29th
+# Parliament", "FRIDAY, APRIL 3, 1970", "Afternoon Sitting"). Real
+# attributions are uppercase honorific + name with internal whitespace
+# and contain at least one alphabetic character.
+_LEGACY_HONORIFIC_PREFIX_RE = re.compile(
+    r"^\s*(?:HON\.?|MR\.?|MRS\.?|MS\.?|MISS|MADAM|MADAME|DR\.?)\s+",
+    re.IGNORECASE,
+)
+# P36-P37 era also uses bare initial+surname form for non-Hon. members
+# ("J. MacPhail", "R. Coleman"), or initial+initial+surname form
+# (rarer). Single capital letter + period + space + capitalised
+# surname (which may be compound with hyphens, periods, or apostrophes).
+_LEGACY_INITIAL_LAST_PREFIX_RE = re.compile(
+    r"^\s*[A-Z]\.\s*(?:[A-Z]\.\s*)?[A-Z][A-Za-z][\w'.\- ]*",
+)
+
+
+def _attribution_looks_like_speaker(att: str) -> bool:
+    """Return True if attribution text matches a real speaker opener.
+
+    Filters out section headings, front-matter, and TOC entries by
+    requiring either an honorific prefix (Hon./Mr./Mrs./Ms.) OR an
+    initial+surname pattern (J. MacPhail / R. Coleman) — the two
+    attribution shapes used across legacy markup eras.
+    """
+    # Normalise: strip NBSPs, collapse whitespace, drop leading garbage.
+    s = att.replace("\xa0", " ").replace("&nbsp;", " ")
+    s = _WS_RE.sub(" ", s).strip()
+    if not s:
+        return False
+    # Reject mostly-numeric tokens or sitting-date headers.
+    if re.search(r"\d{4}", s):
+        return False
+    if _LEGACY_HONORIFIC_PREFIX_RE.match(s):
+        return True
+    if _LEGACY_INITIAL_LAST_PREFIX_RE.match(s):
+        return True
+    return False
+
+
+def _normalize_attribution(att: str) -> str:
+    """Strip NBSPs, leading whitespace, and collapse runs to single spaces."""
+    s = att.replace("\xa0", " ").replace("&nbsp;", " ")
+    return _WS_RE.sub(" ", s).strip()
+
+
+def _extract_legacy(html_text: str, meta: UrlMeta) -> tuple[
+    list[ParsedSpeech], dict[str, int], Optional[time], Optional[time], Optional[str],
+]:
+    """Walk the legacy-markup body via offset-based slicing.
+
+    Each speaker opener match defines the start of a turn; the body
+    includes everything between this opener and the next opener (which
+    captures both the rest of the opener's <p> AND any subsequent
+    `<p class="noindent">` continuations).
+    """
+    speeches: list[ParsedSpeech] = []
+    section_hits: dict[str, int] = {}
+    sitting_start: Optional[time] = None
+    sitting_end: Optional[time] = None
+    sitting_speaker_name: Optional[str] = None  # not exposed in legacy markup
+
+    # Find all speaker openers; segments between them are the turns.
+    openers: list[tuple[int, int, str, str]] = []
+    for m in _LEGACY_OPENER_RE.finditer(html_text):
+        att = (m.group("attribution") or "").strip()
+        if not _attribution_looks_like_speaker(att):
+            continue
+        openers.append((m.start(), m.end(), att, m.group("rest") or ""))
+
+    if not openers:
+        return speeches, section_hits, sitting_start, sitting_end, sitting_speaker_name
+
+    # First sitting timestamp — look for "The House met at H:MM p.m."
+    # in the body before the first speaker opener.
+    pre = html_text[: openers[0][0]]
+    tm = _TIME_LINE_RE.search(_strip_tags(pre))
+    if tm:
+        h = int(tm.group("h"))
+        m_ = int(tm.group("m"))
+        if tm.group("ampm").lower() == "p" and h < 12:
+            h += 12
+        elif tm.group("ampm").lower() == "a" and h == 12:
+            h = 0
+        sitting_start = time(h, m_)
+
+    for i, (start, end, attribution, rest_html) in enumerate(openers):
+        # Body extends from end-of-opener up to next opener (or end of
+        # doc for the last turn).
+        body_end = openers[i + 1][0] if i + 1 < len(openers) else len(html_text)
+        between = html_text[end:body_end]
+        cont_bodies: list[str] = []
+        # rest_html closes at </p>, so it's the rest of the opening
+        # paragraph's body.
+        rest_text = _strip_tags(rest_html)
+        if rest_text:
+            cont_bodies.append(rest_text)
+        for pm in _LEGACY_CONTINUATION_RE.finditer(between):
+            attrs = pm.group("attrs") or ""
+            seg_body = pm.group("body") or ""
+            # Skip class-bearing section markers (proc_head, subj_head,
+            # toc1, toc2, time, page, header, footer, appendixSmall).
+            if _LEGACY_SKIP_CLASS_RE.search(attrs):
+                continue
+            # Skip paragraphs that are themselves speaker openers — the
+            # opener pass already captured them. (Detected via leading
+            # <b>NAME:</b> after optional NBSP/whitespace.)
+            if _LEGACY_OPENER_DETECT_RE.match(seg_body):
+                continue
+            seg_text = _strip_tags(seg_body)
+            if seg_text:
+                cont_bodies.append(seg_text)
+        text = "\n\n".join(b for b in cont_bodies if b).strip()
+        if not text:
+            continue
+        # Speaker role detection: "MR. SPEAKER" / "MR. CHAIRMAN" /
+        # "MADAM SPEAKER" → role-only attribution. Otherwise honorific
+        # + surname is captured raw.
+        cleaned_attribution = _normalize_attribution(attribution)
+        role = _legacy_role_from_attribution(cleaned_attribution)
+        spoken_at = _localise(
+            meta.sitting_date, sitting_start or meta.default_hhmm,
+        )
+        speech = ParsedSpeech(
+            sequence=len(speeches) + 1,
+            speaker_name_raw=cleaned_attribution,
+            speaker_role=role,
+            speech_type="speech",
+            spoken_at=spoken_at,
+            text=text,
+            language="en",
+            source_anchor=None,
+            content_hash=_content_hash(text),
+            raw={
+                "variant": meta.variant,
+                "section": None,
+                "subject": None,
+                "issue": meta.issue,
+                "half": meta.half,
+            },
+        )
+        speeches.append(speech)
+
+    return speeches, section_hits, sitting_start, sitting_end, sitting_speaker_name
+
+
+# Continuation paragraphs in legacy markup. Two markup styles seen:
+#
+#   P29-P34/P35 era: <p class="noindent"> / <p class="quote"> ...
+#   P36-P37 era:     bare <p>...</p> with NBSP indenting (no class)
+#
+# We accept any <p>...</p> in the inter-opener slice, then post-filter
+# out paragraphs that look like section markers (proc_head / subj_head /
+# toc1 / toc2 / time / page / header / footer / appendixSmall) — those
+# classes are explicitly excluded.
+_LEGACY_CONTINUATION_RE = re.compile(
+    r"<p(?P<attrs>[^>]*)>(?P<body>.*?)</p>",
+    re.DOTALL | re.IGNORECASE,
+)
+_LEGACY_SKIP_CLASS_RE = re.compile(
+    r'class="(?:[^"]*\b)?'
+    r"(?:proc_head|subj_head|toc1|toc2|time|page|header|footer|"
+    r"appendixSmall)\b",
+    re.IGNORECASE,
+)
+# Continuation paragraphs that contain a leading <b>NAME:</b> are
+# actually speaker openers — skip them in the continuation pass; the
+# opener pass handles them.
+_LEGACY_OPENER_DETECT_RE = re.compile(
+    r'\s*(?:&nbsp;)*\s*<b[^>]*>'
+    r"\s*(?:&nbsp;)*\s*"
+    r"[^<]{2,80}?:"
+    r"\s*</b>",
+    re.IGNORECASE,
+)
+
+
+_LEGACY_ROLE_RE = re.compile(
+    r"^\s*(?:HON\.?\s+)?(?:MR\.?|MRS\.?|MS\.?|MADAM|MADAME)\s+"
+    r"(?P<role>SPEAKER|CHAIRMAN|CHAIRPERSON|CHAIR)\b",
+    re.IGNORECASE,
+)
+
+
+def _legacy_role_from_attribution(att: str) -> Optional[str]:
+    """If attribution names a role (Speaker/Chair), return it; else None."""
+    m = _LEGACY_ROLE_RE.match(att or "")
+    if m:
+        return m.group("role").title()
+    return None
+
+
 def extract_speeches(html_text: str, url: str) -> ParseResult:
-    """Parse one BC Hansard sitting (Blues or Final) into ParsedSpeech list."""
+    """Parse one BC Hansard sitting (Blues / Final / Legacy) into ParsedSpeech list."""
     meta = parse_url_meta(url)
+    if meta.variant == "legacy" or detect_era(html_text) == "legacy":
+        speeches, section_hits, ss, se, speaker = _extract_legacy(html_text, meta)
+        return ParseResult(
+            url=url,
+            url_meta=meta,
+            speeches=speeches,
+            sitting_start=ss,
+            sitting_end=se,
+            section_hits=section_hits,
+            sitting_speaker_name=speaker,
+        )
     speeches: list[ParsedSpeech] = []
     current_section: Optional[str] = None
     current_subject: Optional[str] = None

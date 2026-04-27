@@ -99,9 +99,66 @@ SELECT raw->'qc_hansard'->>'parliament' AS parl,
  GROUP BY 1,2 ORDER BY 1,2;
 ```
 
+## Pre-P38 BC Hansard backfill — added 2026-04-27 (later in same session)
+
+After completing the BC + QC roster work, the user asked to start on the next lift, so we kept going with BC Hansard pre-P38.
+
+### What shipped
+
+`bc_hansard_parse.py` got an era-branching extension:
+
+- New `detect_era()` — checks for `class="speakerbegins"` markers; absent → legacy.
+- New `parse_url_meta()` filename branch for `{NN}p_{NN}s_{YYMMDD}{x}.htm` (legacy filename pattern; `x ∈ {a,m,p,n,z}` for am/morning/pm/night/special, mapped to `'am'`/`'pm'` token).
+- New `_extract_legacy()` walker that handles two legacy sub-eras in one pass:
+  - **P29-P34 (1970-1991)**: ALL-CAPS attributions (`HON. MR. GARDOM:`, `MR. SPEAKER:`) + `class="noindent"` continuations.
+  - **P36-P37 (1996-2005)**: mixed-case attributions (`Hon. R. Coleman:`, `J. MacPhail:`) with NBSP-prefix indenting + bare-`<p>` continuations.
+
+The unified opener regex captures both styles (`(?P<attribution>[^<]{2,200}?):` lifted from 80→200 chars to absorb `&nbsp;` runs in P37 attribution prefixes). The unified continuation regex matches `class="noindent"` / `class="quote"` (P29-P34) **plus** any `<p>` paragraph that doesn't itself look like a speaker opener (P36-P37). Section headings are filtered via `_LEGACY_SKIP_CLASS_RE` (proc_head / subj_head / toc1 / toc2 / time / page / header / footer / appendixSmall).
+
+### Coverage delta
+
+| Parliament | Era | Speeches | Resolved % |
+|---|---|---:|---:|
+| P29 (1970-1972) | Legacy ALL-CAPS | 11,351 | 13.9 |
+| P30 (1972-1975) | Legacy ALL-CAPS | 70,938 | 10.9 |
+| P31 (1976-1979) | Legacy ALL-CAPS | 21,399 | 8.8 |
+| P32 (1979-1983) | Legacy ALL-CAPS | 51,623 | 15.3 |
+| P33 (1983-1986) | Legacy ALL-CAPS | 48,264 | 22.8 |
+| P34 (1987-1991) | Legacy ALL-CAPS | 26,016 | 49.8 |
+| P35 (1992-1996) | Legacy ALL-CAPS | 83,187 | 97.4 |
+| P36 (1996-2001) | Legacy mixed-case | 34,023 | 98.9 |
+| P37 (2001-2005) | Legacy mixed-case | 31,664 | 87.6 |
+| **P29-P37 total** | | **378,465** | **57.0 %** |
+
+BC corpus grew from ~198,548 → 577,013 speeches (~2.9× growth). Pre-P35 resolution is bottlenecked by the LIMS `allMembers` historical-roster floor at P35 (1992) — pre-P35 MLAs simply aren't in `politicians`. Lifting them would require a separate roster-extension workstream (elections.bc.ca / Wikipedia / BC Archives), which is **out of scope** for this session.
+
+### Embed phase issue (open follow-up)
+
+Mid-embed phase, TEI hit a CUDA driver error (`CUDA_ERROR_UNKNOWN`) and fell back to CPU. ~424K BC chunks remain unembedded. Restart-recreate of the TEI container did not recover GPU access — it consistently logs "Could not find a compatible CUDA device on host" despite host `nvidia-smi` reporting the GPU healthy with 5731 MiB free and only Steam Helper using 5 MiB.
+
+This is a docker-nvidia integration state issue (kernel module needs a reload, or docker daemon restart needed). Both require root. The fix is one of:
+
+```bash
+# Option A — reload nvidia-uvm kernel module
+sudo rmmod nvidia_uvm && sudo modprobe nvidia_uvm
+
+# Option B — restart docker daemon
+sudo systemctl restart docker
+
+# Option C — host reboot (heaviest, last resort)
+```
+
+After recovery, re-running `embed-speech-chunks` is idempotent and will pick up the 424K pending chunks.
+
+```bash
+docker compose run --rm scanner embed-speech-chunks
+```
+
+Throughput estimate: at ~17K chunks/min for modern era and ~3K/min for legacy era (longer chunks per the BC dossier), the pending 424K chunks should embed in 1-3 hours once GPU is back.
+
 ## Out of scope
 
-- **BC Hansard pre-P38 backfill** (HDMS archives 1970-2008). Different workstream — bigger than roster work, would need to walk LIMS HDMS allSessions backwards, validate that pre-P38 markup matches the parser, and likely add a `resolve-bc-speakers-dated` post-pass since older parliaments may have surnames that collide with the historical roster across eras.
+- **Pre-P35 BC roster backfill** (1872-1991). Would lift P29-P34 resolution from ~10 % to ~80 %. Roster source candidates: elections.bc.ca, Wikipedia, BC Archives. Different workstream, separate from LIMS.
 - **QC Tier 2 Vice-Président resolution** for the small fraction that doesn't auto-resolve from the parenthetical name form. Would need a hand-curated VP roster (similar to the SPEAKER_ROSTER pattern).
 - **QC private-bills URL scheme**, votes registry (ASP.NET postback) — these are the bills/votes outstanding items still listed in `quebec.md`.
 
