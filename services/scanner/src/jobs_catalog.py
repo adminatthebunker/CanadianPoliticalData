@@ -168,6 +168,15 @@ COMMANDS: dict[str, dict[str, Any]] = {
              "help": "Cap speeches scanned (smoke-test aid)."},
         ],
     },
+    "resolve-qc-speakers-dated": {
+        "description": "Date-windowed QC speaker resolver. Joins NULL-politician_id speeches against politician_terms (source='assnat.qc.ca:former-mnas') whose date span covers spoken_at, with cand_count=1 gate. Run after ingest-qc-former-mnas.",
+        "cli": "resolve-qc-speakers-dated",
+        "category": "hansard",
+        "args": [
+            {"name": "limit", "type": "int", "required": False,
+             "help": "Cap candidate speeches scanned (smoke-test aid)."},
+        ],
+    },
     "ingest-mb-hansard": {
         "description": "Pull Manitoba Hansard (Word-exported HTML) into `speeches`. Speaker resolution via politicians.mb_assembly_slug.",
         "cli": "ingest-mb-hansard",
@@ -570,6 +579,21 @@ COMMANDS: dict[str, dict[str, Any]] = {
             {"name": "delay", "type": "float", "required": False, "default": 1.0,
              "help": "Seconds between page fetches (be polite to ola.org)."},
         ],
+    },
+    "ingest-qc-former-mnas": {
+        "description": "Backfill historical QC MNAs from assnat.qc.ca/fr/membres/notices/index*.html (16 alphabet-letter pages, ~2,500 MNAs since 1764). Per-MNA bio page is parsed via prose-regex for first/last career years; one wide-span politician_terms row inserted per MNA (source='assnat.qc.ca:former-mnas'). Prereq for resolve-qc-speakers-dated.",
+        "cli": "ingest-qc-former-mnas", "category": "enrichment",
+        "args": [
+            {"name": "delay", "type": "float", "required": False, "default": 1.5,
+             "help": "Seconds between page fetches (be polite to assnat.qc.ca)."},
+            {"name": "limit", "type": "int", "required": False,
+             "help": "Cap MNAs processed this run (smoke-test aid)."},
+        ],
+    },
+    "enrich-bc-member-parliaments": {
+        "description": "Stamp politician_terms for every BC (member, parliament) edge from LIMS GraphQL allMemberParliaments (~750 edges, single query). One term per edge with source='lims.leg.bc.ca:parliament-N'. Prereq: scripts/bc-enrich-historical-mlas.py for the 376-MLA historical roster.",
+        "cli": "enrich-bc-member-parliaments", "category": "enrichment",
+        "args": [],
     },
     "ingest-ns-mlas": {
         "description": "Stamp politicians.nslegislature_slug on seated NS MLAs by harvesting anchor slugs from current-session Hansard. Prereq for ingest-ns-hansard.",

@@ -609,21 +609,27 @@ def cmd_ingest_committees_all(ctx: click.Context) -> None:
 @cli.command("enrich-socials-wikidata")
 @click.option("--level", type=click.Choice(["federal", "provincial"]),
               default=None, help="Restrict to one level; default covers all.")
+@click.option("--include-inactive", is_flag=True,
+              help="Also enrich is_active=false politicians (historical roster).")
 @click.pass_context
-def cmd_enrich_socials_wikidata(ctx: click.Context, level) -> None:
+def cmd_enrich_socials_wikidata(ctx: click.Context, level, include_inactive) -> None:
     """Pull handles for Canadian legislators via Wikidata SPARQL."""
     async def _wrap(db: Database) -> None:
-        n = await enrich_from_wikidata(db, level=level)
+        n = await enrich_from_wikidata(
+            db, level=level, include_inactive=include_inactive
+        )
         console.print(f"[green]wikidata enrichment inserted {n} rows[/green]")
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 
 
 @cli.command("enrich-socials-openparl")
+@click.option("--include-inactive", is_flag=True,
+              help="Also enrich former federal MPs (historical roster).")
 @click.pass_context
-def cmd_enrich_socials_openparl(ctx: click.Context) -> None:
+def cmd_enrich_socials_openparl(ctx: click.Context, include_inactive) -> None:
     """Backfill federal-MP handles from openparliament.ca detail pages."""
     async def _wrap(db: Database) -> None:
-        n = await enrich_from_openparl(db)
+        n = await enrich_from_openparl(db, include_inactive=include_inactive)
         console.print(f"[green]openparl enrichment inserted {n} rows[/green]")
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 
@@ -644,20 +650,27 @@ def cmd_resolve_openparliament_slugs(ctx: click.Context) -> None:
 
 
 @cli.command("enrich-socials-mastodon")
+@click.option("--include-inactive", is_flag=True,
+              help="Also match against is_active=false politicians.")
 @click.pass_context
-def cmd_enrich_socials_mastodon(ctx: click.Context) -> None:
-    """Probe canada.masto.host for plausible politician handles."""
+def cmd_enrich_socials_mastodon(ctx: click.Context, include_inactive) -> None:
+    """Walk canada.masto.host directory and match politicians by display name."""
     async def _wrap(db: Database) -> None:
-        n = await enrich_mastodon_candidates(db)
+        n = await enrich_mastodon_candidates(db, include_inactive=include_inactive)
         console.print(f"[green]mastodon enrichment inserted {n} rows[/green]")
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 
 
 @cli.command("enrich-socials-all")
+@click.option("--include-inactive", is_flag=True,
+              help="Run all three enrichers against the full politicians table "
+                   "(active + inactive); useful for historical-roster backfill.")
 @click.pass_context
-def cmd_enrich_socials_all(ctx: click.Context) -> None:
+def cmd_enrich_socials_all(ctx: click.Context, include_inactive) -> None:
     """Run wikidata → openparl → mastodon enrichers in order."""
-    asyncio.run(_run(enrich_all_socials, ctx.obj["dsn"]))
+    async def _wrap(db: Database) -> None:
+        await enrich_all_socials(db, include_inactive=include_inactive)
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -720,6 +733,8 @@ from .legislative.ab_bills import ingest_ab_bills  # noqa: E402
 from .legislative.mb_mlas import ingest as ingest_mb_mlas  # noqa: E402
 from .legislative.mb_former_mlas import ingest_mb_former_mlas  # noqa: E402
 from .legislative.on_former_mpps import ingest_on_former_mpps  # noqa: E402
+from .legislative.qc_former_mnas import ingest_qc_former_mnas  # noqa: E402
+from .legislative.bc_member_parliaments import enrich_bc_member_parliaments  # noqa: E402
 from .legislative.mb_bills import ingest as ingest_mb_bills  # noqa: E402
 from .legislative.mb_billstatus import (  # noqa: E402
     fetch as fetch_mb_billstatus,
@@ -2433,6 +2448,133 @@ def cmd_resolve_mb_speakers_dated(ctx: click.Context, limit: Optional[int]) -> N
             f"[green]resolve-mb-speakers-dated[/green]: "
             f"scanned={stats.speeches_scanned} updated={stats.speeches_updated} "
             f"still_ambiguous={stats.still_unresolved}"
+        )
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
+@cli.command("enrich-bc-member-parliaments")
+@click.pass_context
+def cmd_enrich_bc_member_parliaments(ctx: click.Context) -> None:
+    """Stamp politician_terms for every BC (member, parliament) edge.
+
+    Single LIMS GraphQL query → ~750 (memberId, parliamentId) edges
+    enriched with each parliament's startDate / endDate. Inserts one
+    politician_terms row per edge with source='lims.leg.bc.ca:parliament-N'.
+    Idempotent.
+
+    Prereq: scripts/bc-enrich-historical-mlas.py must already have
+    inserted the 376-MLA historical roster (politicians keyed on
+    lims_member_id). Members in the GraphQL response that don't have a
+    matching politicians row are reported in the missing-id sample —
+    re-run the historical-MLAs script to land them, then re-run this
+    command.
+
+    Mirrors AB's per-legislature term shape; gives the future
+    resolve-bc-speakers-dated post-pass (and the eventual pre-P38
+    Hansard backfill) the per-parliament terms it needs to disambiguate
+    historical surname collisions.
+    """
+    async def _wrap(db: Database) -> None:
+        stats = await enrich_bc_member_parliaments(db)
+        console.print(
+            f"[green]enrich-bc-member-parliaments[/green]: "
+            f"edges={stats.edges_fetched} "
+            f"edges_with_dates={stats.edges_with_dates} "
+            f"matched={stats.politicians_matched} "
+            f"missing_pols={stats.politicians_missing} "
+            f"terms_inserted={stats.terms_inserted} "
+            f"terms_skipped={stats.terms_skipped_existing} "
+            f"missing_id_sample={stats.missing_lims_ids}"
+        )
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
+@cli.command("ingest-qc-former-mnas")
+@click.option("--delay", type=float, default=1.5,
+              help="Seconds between page fetches (be polite to assnat.qc.ca).")
+@click.option("--limit", type=int, default=None,
+              help="Cap MNAs processed this run (smoke-test aid).")
+@click.option("--bio-for-existing/--skip-bio-for-existing",
+              "bio_for_existing", default=False,
+              help="Re-fetch bios for MNAs that already have qc_assnat_id "
+                   "stamped. Default skips them to save ~125 requests on "
+                   "every re-run.")
+@click.pass_context
+def cmd_ingest_qc_former_mnas(
+    ctx: click.Context, delay: float, limit: Optional[int],
+    bio_for_existing: bool,
+) -> None:
+    """Enumerate every MNA who's served in Quebec's National Assembly since 1764.
+
+    Walks the 16 alphabet-letter pages at
+    /fr/membres/notices/index*.html, then fetches each non-current
+    MNA's biography page once to extract a coarse career-span via
+    prose regex (first "Élu(e) ... en YYYY", last
+    "Défait(e) en YYYY" / "Démissionna ... YYYY" /
+    "Décéda ... YYYY").
+
+    Upserts politicians keyed on qc_assnat_id (migration 0038 UNIQUE
+    partial); inserts one politician_terms row per MNA with
+    source='assnat.qc.ca:former-mnas'. Idempotent.
+
+    Prereq for resolve-qc-speakers-dated. Aimed at lifting QC Hansard
+    resolution rates on 39-1 → 41-1 sessions where retired MNAs
+    aren't currently in the politicians table (31-46% baseline).
+
+    Roughly: 16 listing fetches + ~2,400 bio fetches at --delay=1.5
+    is ~60 minutes for a full first run.
+    """
+    async def _wrap(db: Database) -> None:
+        stats = await ingest_qc_former_mnas(
+            db,
+            delay=delay,
+            limit=limit,
+            skip_bio_for_existing=not bio_for_existing,
+        )
+        console.print(
+            f"[green]ingest-qc-former-mnas[/green]: "
+            f"pages={stats.letter_pages_scanned} "
+            f"unique={stats.unique_mnas} "
+            f"bios={stats.bios_fetched} bio_failed={stats.bios_failed} "
+            f"bio_skipped_current={stats.bios_skipped_current} "
+            f"bio_skipped_existing={stats.bios_skipped_existing} "
+            f"spans_extracted={stats.spans_extracted} "
+            f"span_miss={stats.spans_no_match} "
+            f"inserted={stats.politicians_inserted} "
+            f"updated={stats.politicians_updated} "
+            f"name_matched={stats.politicians_name_matched} "
+            f"terms_inserted={stats.terms_inserted} "
+            f"terms_skipped={stats.terms_skipped_existing}"
+        )
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
+@cli.command("resolve-qc-speakers-dated")
+@click.option("--limit", type=int, default=None,
+              help="Cap candidate speeches scanned (smoke-test aid).")
+@click.pass_context
+def cmd_resolve_qc_speakers_dated(
+    ctx: click.Context, limit: Optional[int],
+) -> None:
+    """Date-windowed QC speaker resolver: joins NULL-politician_id
+    speeches against politician_terms whose date span covers
+    s.spoken_at, with cand_count=1 gate.
+
+    Run after ingest-qc-former-mnas. Same shape as
+    resolve-mb-speakers-dated (date-windowed, not legl-keyed) because
+    QC bios narrate careers as prose without per-mandate structure —
+    we use one wide span per MNA (source='assnat.qc.ca:former-mnas').
+
+    Speeches whose surname matches multiple politicians whose terms
+    overlap with the speech date stay NULL. Idempotent.
+    """
+    async def _wrap(db: Database) -> None:
+        from .legislative.qc_hansard import resolve_qc_speakers_dated as _resolve
+        stats = await _resolve(db, limit=limit)
+        console.print(
+            f"[green]resolve-qc-speakers-dated[/green]: "
+            f"scanned={stats.speeches_scanned} updated={stats.speeches_updated} "
+            f"still_unresolved={stats.still_unresolved}"
         )
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 

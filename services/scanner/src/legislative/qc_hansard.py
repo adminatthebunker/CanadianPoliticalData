@@ -1021,3 +1021,109 @@ async def resolve_qc_speakers(
         stats.speeches_scanned, stats.speeches_updated, stats.still_unresolved,
     )
     return stats
+
+
+async def resolve_qc_speakers_dated(
+    db: Database, *, limit: Optional[int] = None,
+) -> ResolveStats:
+    """Date-windowed resolver — rescues historical QC surnames that the
+    name-only resolver rejects as ambiguous after the former-MNAs
+    backfill (ingest-qc-former-mnas).
+
+    For each unresolved hansard-qc speech with a parsed surname (either
+    plain or parenthetical) and a known spoken_at, join politicians by
+    last_name (accent-stripped, lowercase) AND join politician_terms
+    where spoken_at falls inside [started_at, ended_at]. If exactly one
+    distinct politician emerges, attribute the speech (and its chunks).
+
+    Mirrors mb_hansard.resolve_mb_speakers_dated. The single-CTE
+    pattern updates speeches + speech_chunks in one statement; chunk
+    propagation runs only against rows whose politician_id actually
+    changed (IS DISTINCT FROM guard).
+
+    Skipped by design: rows where no surname is parsed (pure
+    "Le Président" / "Une voix" attributions), and rows whose surname
+    matches multiple politicians whose terms overlap with the speech
+    date (genuine ambiguity that requires riding-hint disambiguation).
+
+    The qc_hansard parser stores BOTH surname (from "M. Charest")
+    and paren_surname (from "La Vice-Présidente (Mme Soucy)"), so the
+    CTE coalesces — paren-derived surname wins when present, falling
+    back to plain surname.
+    """
+    stats = ResolveStats()
+    limit_clause = f"LIMIT {int(limit)}" if limit else ""
+
+    update_sql = f"""
+    WITH unresolved AS (
+      SELECT s.id::text AS id,
+             s.spoken_at,
+             COALESCE(
+               s.raw->'qc_hansard'->>'paren_surname',
+               s.raw->'qc_hansard'->>'surname'
+             ) AS surname_raw
+        FROM speeches s
+       WHERE s.source_system = 'hansard-qc'
+         AND s.politician_id IS NULL
+         AND s.spoken_at IS NOT NULL
+         AND COALESCE(
+               s.raw->'qc_hansard'->>'paren_surname',
+               s.raw->'qc_hansard'->>'surname'
+             ) IS NOT NULL
+       {limit_clause}
+    ),
+    candidates AS (
+      SELECT u.id AS speech_id,
+             array_agg(DISTINCT p.id) AS cand_ids,
+             count(DISTINCT p.id)     AS n_cands
+        FROM unresolved u
+        JOIN politicians p
+          ON p.province_territory = 'QC'
+         AND p.level = 'provincial'
+         AND lower(unaccent(p.last_name)) = lower(unaccent(u.surname_raw))
+        JOIN politician_terms pt
+          ON pt.politician_id = p.id
+         AND pt.province_territory = 'QC'
+         AND pt.level = 'provincial'
+         AND (pt.started_at IS NULL OR pt.started_at::date <= u.spoken_at::date)
+         AND (pt.ended_at   IS NULL OR pt.ended_at::date   >= u.spoken_at::date)
+       GROUP BY u.id
+    ),
+    uniq AS (
+      SELECT speech_id, cand_ids[1] AS politician_id
+        FROM candidates WHERE n_cands = 1
+    ),
+    updated_speeches AS (
+      UPDATE speeches s
+         SET politician_id = u.politician_id::uuid,
+             confidence    = GREATEST(s.confidence, 0.85),
+             updated_at    = now()
+        FROM uniq u
+       WHERE s.id::text = u.speech_id
+       RETURNING s.id, s.politician_id
+    ),
+    updated_chunks AS (
+      UPDATE speech_chunks sc
+         SET politician_id = us.politician_id
+        FROM updated_speeches us
+       WHERE sc.speech_id = us.id
+         AND sc.politician_id IS DISTINCT FROM us.politician_id
+       RETURNING sc.id
+    )
+    SELECT
+      (SELECT count(*) FROM candidates)                  AS scanned,
+      (SELECT count(*) FROM updated_speeches)            AS speeches_updated,
+      (SELECT count(*) FROM updated_chunks)              AS chunks_updated,
+      (SELECT count(*) FROM candidates WHERE n_cands > 1) AS still_ambiguous
+    """
+    row = await db.pool.fetchrow(update_sql, timeout=1800)
+    stats.speeches_scanned = int(row["scanned"] or 0)
+    stats.speeches_updated = int(row["speeches_updated"] or 0)
+    stats.still_unresolved = int(row["still_ambiguous"] or 0)
+    log.info(
+        "resolve_qc_speakers_dated: scanned=%d speeches_updated=%d "
+        "chunks_updated=%d still_ambiguous=%d",
+        stats.speeches_scanned, stats.speeches_updated,
+        int(row["chunks_updated"] or 0), stats.still_unresolved,
+    )
+    return stats

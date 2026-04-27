@@ -4,7 +4,7 @@
 
 **Legislature:** National Assembly of Quebec (Assemblée nationale du Québec) | **Website:** https://www.assnat.qc.ca | **Seats:** 125 | **Next election:** 2026-10-05
 
-**Status snapshot (2026-04-21):** ✅ **Bills live** (102 / 115 / 95 — **94 / 95 sponsors FK-linked, 99%**) via donneesquebec.ca CSV + RSS + bill-detail HTML. ✅ **Hansard live for 8 sessions** (39-1 → 43-2, Jan 2009 → April 2026, **17-year span, 313,345 speeches / 1,278 sittings, 438,830 chunks all embedded with Qwen3**) via Journal des débats HTML + Wayback CDX fallback for historical URL discovery. ✅ **Tier 1 Speaker resolution live** — "Le Président" rows tied to the sitting Speaker by date across 5 Speakers (Bissonnet / Vallières / Chagnon / Paradis / Roy). Votes / committees not yet built. Private bills and votes registry deferred.
+**Status snapshot (2026-04-27):** ✅ **Bills live** (102 / 115 / 95 — **94 / 95 sponsors FK-linked, 99%**) via donneesquebec.ca CSV + RSS + bill-detail HTML. ✅ **Hansard live for 8 sessions** (39-1 → 43-2, Jan 2009 → April 2026, **17-year span, 313,345 speeches / 1,278 sittings, 438,830 chunks all embedded with Qwen3**) via Journal des débats HTML + Wayback CDX fallback for historical URL discovery. ✅ **Tier 1 Speaker resolution live** — "Le Président" rows tied to the sitting Speaker by date across 5 Speakers (Bissonnet / Vallières / Chagnon / Paradis / Roy). ✅ **Historical MNA roster live (2026-04-27)** — alphabet-walk of /fr/membres/notices/index*.html (16 letter-pages, ~2,500 MNAs since 1764) with bio-prose career-span extraction; one wide-span `politician_terms` row per MNA (`source='assnat.qc.ca:former-mnas'`); date-windowed post-pass resolver `resolve-qc-speakers-dated` rescues NULL-politician_id rows from older sessions. Votes / committees not yet built. Private bills and votes registry deferred.
 
 ---
 
@@ -74,6 +74,82 @@ Resolution drops on older sessions because retired MNAs aren't in `politicians` 
   - *Le Secrétaire / Des voix / Une voix* — structurally non-resolvable (Le Secrétaire is assembly staff, not an MNA; the voices are anonymous). Expect ~60 rows per sitting to remain `politician_id=NULL`.
   - *Historical sessions* — the 43-1 and earlier backfill will resolve less cleanly because retired MNAs aren't in `politicians` yet (same roster gap as AB). V1 scopes to current session.
   - *Sections* — `raw.qc_hansard.section` is not yet populated (heading markup varies across eras). Speech text still includes the section heading words, so retrieval is unaffected.
+
+## ★ Historical MNA roster — live 2026-04-27
+
+**Problem:** Hansard resolution rates dropped from 84 % on 43-2 to **31-46 %** on 39-1/39-2/40-1/41-1 because retired MNAs (anyone who left before the current 124-MNA roster snapshot) weren't in `politicians`. The QC dossier flagged this on 2026-04-20 as "Fixable later by enriching the politicians table with ca. 2009-2018 retired MNAs."
+
+**Source:** Single alphabetical listing at `https://www.assnat.qc.ca/fr/lien/11861.html` (redirects to `/fr/membres/notices/index.html`) — *Liste des députés depuis 1764* (~2,556 MNAs). Walked across 16 letter-pages:
+
+```
+index.html       (A)        index-jk.html  (J+K)
+index-b.html     (B)        index-l.html   (L)
+index-c.html     (C)        index-m.html   (M)
+index-d.html     (D)        index-no.html  (N+O)
+index-ef.html    (E+F)      index-p.html   (P)
+index-g.html     (G)        index-qr.html  (Q+R)
+index-hi.html    (H+I)      index-s.html   (S)
+                            index-tu.html  (T+U)
+                            index-vz.html  (V-Z)
+```
+
+Each entry on a letter-page has the form:
+
+```html
+<a href="https://www.assnat.qc.ca/fr/deputes/{slug}-{id}/index.html">Surname,&nbsp;Given Name</a>&nbsp;(en fonction)
+```
+
+— or, for some pre-Confederation members, the alternate URL shape `/fr/patrimoine/anciens-parlementaires/{slug}-{id}.html`. Both shapes carry the **same numeric MNA id** (`qc_assnat_id`, the assembly's stable identifier — same key `qc_mnas.py` already uses for current MNAs and `qc_bills.py` joins on for sponsor FK). The `(en fonction)` suffix distinguishes current-roster entries.
+
+**No JSON serializer.** `?_format=json` returns the same HTML. The bio page at `/fr/deputes/{slug}-{id}/biographie.html` (or `.../patrimoine/anciens-parlementaires/{slug}-{id}.html`) renders the career as **prose only** — no per-mandate structured listing — e.g.:
+
+> Élue députée du Parti québécois (PQ) dans La Peltrie en 1981. […] Défaite en 1985. Élue députée dans Taillon en 1989. Réélue en 1994, en 1998 et en 2003. Démissionna comme députée le 20 mars 2006. Élue députée dans Charlevoix à l'élection partielle du 24 septembre 2007. […] Défaite en 2014.
+
+We extract a **single coarse career span** per MNA via four regex patterns:
+
+| Regex (Python) | Captures | Use |
+|---|---|---|
+| `\b(?:[Éé]lue?\|R[ée]{1,2}lue?)\b[^.]{0,160}?\ben\s+(\d{4})\b` | first-of-multi election years | `started_at` = min |
+| `\b[Dd][ée]fait[ee]?\b[^.]{0,80}?\ben\s+(\d{4})\b` | defeat year | `ended_at` candidate |
+| `\b[Dd][ée]missionna\b[^.]{0,200}?\b(\d{4})\b` | resignation year | `ended_at` candidate |
+| `\b[Dd][ée]c[ée]da\b[^.]{0,160}?\b(\d{4})\b` | death year | `ended_at` candidate |
+
+`ended_at = max(end_candidates ≥ start_year)`, NULL if no end marker. Gaps within the span (e.g. Marois's 1985-1989 hiatus) are tolerable — they coincide with periods where the MNA wasn't speaking in Hansard, so over-including them is harmless to the resolver.
+
+**Module:** `services/scanner/src/legislative/qc_former_mnas.py` (`ingest_qc_former_mnas`).
+
+**Migration:** `0038_unique_qc_assnat_id.sql` — promotes the existing partial btree on `qc_assnat_id` to a UNIQUE partial index so the politicians upsert can use `ON CONFLICT (qc_assnat_id) WHERE qc_assnat_id IS NOT NULL`. **Pre-flight collision** (Éric vs Eric Girard, both `qc_assnat_id=17929`, ingested 2026-04-14 by Open North via differently-encoded slugs) was merged manually — surviving row keeps the accent-correct Éric Girard form, plain-spelling row's 1,234 speeches + 2,045 chunks reparented onto it.
+
+**Resolver:** `qc_hansard.resolve_qc_speakers_dated` — single-CTE date-windowed update.
+
+```sql
+WITH unresolved AS (
+  SELECT s.id, s.spoken_at,
+         COALESCE(s.raw->'qc_hansard'->>'paren_surname',
+                  s.raw->'qc_hansard'->>'surname') AS surname_raw
+    FROM speeches s
+   WHERE s.source_system='hansard-qc' AND s.politician_id IS NULL
+     AND s.spoken_at IS NOT NULL
+     AND COALESCE(s.raw->'qc_hansard'->>'paren_surname',
+                  s.raw->'qc_hansard'->>'surname') IS NOT NULL
+),
+candidates AS (
+  SELECT u.id AS speech_id, array_agg(DISTINCT p.id) AS cand_ids,
+         count(DISTINCT p.id) AS n_cands
+    FROM unresolved u
+    JOIN politicians p
+      ON p.province_territory='QC' AND p.level='provincial'
+     AND lower(unaccent(p.last_name)) = lower(unaccent(u.surname_raw))
+    JOIN politician_terms pt
+      ON pt.politician_id=p.id AND pt.province_territory='QC' AND pt.level='provincial'
+     AND (pt.started_at IS NULL OR pt.started_at::date <= u.spoken_at::date)
+     AND (pt.ended_at   IS NULL OR pt.ended_at::date   >= u.spoken_at::date)
+   GROUP BY u.id
+)
+-- ... cand_count=1 → update speeches + speech_chunks in same SQL
+```
+
+**CLI:** `ingest-qc-former-mnas`, `resolve-qc-speakers-dated`. Both wired into `jobs_catalog.py` + `admin.ts` mirror.
 
 ## ★ Tier 1 Speaker resolution — live 2026-04-20
 
