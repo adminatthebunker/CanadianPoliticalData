@@ -147,12 +147,31 @@ services:
       - --model-id=${TEI_MODEL:-Qwen/Qwen3-Embedding-0.6B}
       - --dtype=float16
       - --max-client-batch-size=${TEI_MAX_CLIENT_BATCH:-64}
-      - --max-batch-tokens=${TEI_MAX_BATCH_TOKENS:-16384}
+      # Lowered 16384 -> 8192 on 2026-04-28 after the open-kernel-driver
+      # GSP regression / CUDA_ERROR_LAUNCH_FAILED incidents. Smaller
+      # per-batch GSP allocations reduce pressure on the failing path
+      # at a modest throughput cost. See docs/runbooks/resume-after-reboot-2026-04-28-bc-pre-p38-embed-continued.md.
+      - --max-batch-tokens=${TEI_MAX_BATCH_TOKENS:-8192}
     volumes:
       # Share the existing model cache so Qwen3 weights persist across
       # rebuilds. TEI expects HF_HOME-style layout at /data.
       - embedmodels:/data
-    restart: unless-stopped
+    healthcheck:
+      # Device-aware probe: a single-token /embed roundtrip is bimodal
+      # — CUDA returns in <200ms, CPU fallback takes 2-10s. --max-time 1
+      # fails curl on CPU and passes on CUDA, so the container goes
+      # `unhealthy` the moment TEI degrades to CPU after a CUDA fault.
+      # The embed client also enforces this at preflight (belt + braces).
+      test: ["CMD-SHELL", "curl -fsS --max-time 1 -X POST -H 'Content-Type: application/json' -d '{\"inputs\":[\"x\"],\"normalize\":true}' http://localhost/embed >/dev/null"]
+      interval: 60s
+      timeout: 3s
+      retries: 3
+      start_period: 120s
+    # `on-failure` (capped at 5) instead of `unless-stopped`: when the
+    # GPU wedges and TEI panics on every CUDA init, we want a bounded
+    # restart loop that eventually stops, not infinite CPU-fallback
+    # bouncing that masks the underlying problem.
+    restart: on-failure:5
     networks: [sw]
     deploy:
       resources:

@@ -51,7 +51,7 @@ The prior custom FastAPI + FlagEmbedding wrapper (BGE-M3 + BGE-reranker-v2-m3) w
   ```env
   TEI_MODEL=Qwen/Qwen3-Embedding-0.6B       # HF repo ID
   TEI_MAX_CLIENT_BATCH=64                   # max array length per HTTP call
-  TEI_MAX_BATCH_TOKENS=16384                # token-budget across the batch
+  TEI_MAX_BATCH_TOKENS=8192                 # token-budget across the batch (lowered from 16384 on 2026-04-28)
   TEI_MEMORY=6g                             # soft host-RAM cap (not VRAM)
   EMBED_CUDA_DEVICES=all                    # CUDA_VISIBLE_DEVICES-style
   EMBED_GPU_COUNT=all
@@ -74,6 +74,13 @@ The prior custom FastAPI + FlagEmbedding wrapper (BGE-M3 + BGE-reranker-v2-m3) w
 - **Reranking.** The BGE-reranker cross-encoder is **no longer in the critical path** — Qwen3 retrieval quality cleared the bar without it. If you re-introduce reranking, run it as a separate service; don't resurrect the FlagEmbedding wrapper just for it.
 - **Scanner env.** The scanner reads `EMBED_URL` (default `http://tei:80`), `EMBED_MODEL_TAG` (default `qwen3-embedding-0.6b`, written to `speech_chunks.embedding_model`), and `EMBED_BATCH` (default 32).
 - **Monitoring.** `docker stats sw-tei --no-stream` for host-side CPU/RAM; `nvidia-smi` on the host for GPU utilisation + VRAM; `docker logs sw-tei -f` for model-load progress. `docker compose stop tei` releases the card cleanly when you need it for other work.
+- **GPU resilience (added 2026-04-28 after the second BC pre-P38 incident).**
+  - **TEI-side.** `restart: on-failure:5` (capped, not infinite — a wedged driver no longer triggers an endless CPU-fallback bounce loop) and a device-aware compose healthcheck that posts a single-token `/embed` with `--max-time 1`. CUDA returns in <200ms (passes); CPU fallback takes 2-10s (fails). The container reports `unhealthy` the moment TEI degrades.
+  - **Embed-client side** (`services/scanner/src/legislative/speech_embedder.py`):
+    - Preflight latency check before processing pending rows — refuses to start if TEI is on CPU. Tunable via `EMBED_PREFLIGHT_DEVICE_LATENCY_MS` (default 1500ms; set ≤0 to disable for intentional CPU debug).
+    - Per-batch exponential-backoff retry — 5 attempts, 1s→2s→4s→8s→16s = 31s of slack per batch. Sized to absorb a single TEI panic + CUDA restart cycle without losing the batch. Tunable via `EMBED_RETRY_MAX_ATTEMPTS` and `EMBED_RETRY_BASE_DELAY`.
+    - Abort after `EMBED_MAX_CONSECUTIVE_FAILURES` post-retry batch failures (default 5). Replaces the prior `continue`-on-error path that silently lost 9,526 chunks on 2026-04-28 when TEI panicked late in a 251K-chunk run.
+  - **Recovery ladder when TEI is stuck on CPU after a fault** — see `docs/runbooks/resume-after-reboot-2026-04-28-bc-pre-p38-embed-continued.md` § "GPU recovery escalations". In ascending blast-radius: `rmmod nvidia_uvm` → restart docker → full module reload → reboot. New as of 2026-04-28: a `CUDA_ERROR_LAUNCH_FAILED` panic from `cudarc` *without* an Xid in `dmesg` is a softer fault class than the runbook's earlier Xid 62 / `NV_ERR_RESET_REQUIRED`; lighter recovery steps may suffice for it.
 
 ## Admin panel
 

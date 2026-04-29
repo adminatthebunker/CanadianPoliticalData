@@ -2980,10 +2980,13 @@ def cmd_embed_speech_chunks(ctx: click.Context, limit, batch_size) -> None:
 
     async def _wrap(db: Database) -> None:
         stats = await _embed(db, limit_chunks=limit, batch_size=batch_size)
+        colour = "red" if stats.aborted_consecutive_failures else "green"
         console.print(
-            f"[green]embed-speech-chunks[/green]: seen={stats.chunks_seen} "
+            f"[{colour}]embed-speech-chunks[/{colour}]: seen={stats.chunks_seen} "
             f"embedded={stats.chunks_embedded} batches={stats.batches} "
-            f"errors={stats.errors} server_ms={stats.total_elapsed_ms}"
+            f"errors={stats.errors} retries={stats.retries} "
+            f"aborted={stats.aborted_consecutive_failures} "
+            f"server_ms={stats.total_elapsed_ms}"
         )
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 

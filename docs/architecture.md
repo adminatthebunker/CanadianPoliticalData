@@ -82,7 +82,8 @@ Canadian Political Data is a small fleet of cooperating services orchestrated by
 - Endpoints: TEI-native `POST /embed`, OpenAI-compatible `POST /v1/embeddings`, `GET /health` on `tei:80` inside the `sw` network
 - Output: 1024-dim dense vectors, L2-normalised when `normalize: true` is passed
 - Model cache in the `embedmodels` named volume (mounted at `/data`); first boot pulls ~1.3 GB, subsequent boots are seconds
-- `--max-client-batch-size=64`, `--max-batch-tokens=16384`, `--dtype=float16` by default (overridable via `TEI_MAX_CLIENT_BATCH`, `TEI_MAX_BATCH_TOKENS`, env)
+- `--max-client-batch-size=64`, `--max-batch-tokens=8192` (lowered from 16384 on 2026-04-28 to reduce GSP allocation pressure on the open-kernel driver regression), `--dtype=float16` by default (overridable via `TEI_MAX_CLIENT_BATCH`, `TEI_MAX_BATCH_TOKENS` env)
+- Compose carries a device-aware healthcheck (single-token `/embed` with `curl --max-time 1` — fails on CPU fallback) and `restart: on-failure:5` so a wedged-driver state doesn't trigger an infinite CPU-bounce loop. Embed-client preflight + retry/abort logic lives in `services/scanner/src/legislative/speech_embedder.py`
 - Measured ~75 chunks/sec pure-GPU throughput, 50.9 chunks/sec end-to-end through the scanner's batched-UNNEST write path (2026-04-18 re-embed landed 242 k chunks in 1 h 19 m)
 - Replaced the prior custom FastAPI + FlagEmbedding wrapper (BGE-M3 + BGE-reranker-v2-m3) on 2026-04-19. Legacy code still lives at `services/embed/` for rollback. Reranker stage is **no longer in the critical path** — Qwen3 retrieval quality cleared the bar without it
 
