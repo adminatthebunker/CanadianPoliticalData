@@ -77,6 +77,8 @@ export default function CoveragePage() {
         </div>
       </header>
 
+      {/* Desktop: dense table. Mobile: card-stack via .coverage__cards.
+          Both render the same data; CSS swaps which is visible at <= 720px. */}
       <div className="coverage__table-wrap">
         <table className="coverage__table">
           <thead>
@@ -122,10 +124,50 @@ export default function CoveragePage() {
         </table>
       </div>
 
+      <ul className="coverage__cards" aria-label="Coverage by jurisdiction (mobile view)">
+        {jurisdictions.map((j) => (
+          <li key={j.jurisdiction} className="coverage__card">
+            <div className="coverage__card-head">
+              <div className="coverage__card-title">
+                <span className="coverage__code">{j.jurisdiction}</span>
+                <span className="coverage__legname">{j.legislature_name}</span>
+              </div>
+              <span className="coverage__card-seats">
+                {j.seats != null ? `${j.seats} seats` : "—"}
+              </span>
+            </div>
+            <dl className="coverage__card-stats">
+              <div>
+                <dt>Bills</dt>
+                <dd><StatusPill status={j.bills_status} /></dd>
+              </div>
+              <div>
+                <dt>Hansard</dt>
+                <dd><StatusPill status={j.hansard_status} /></dd>
+              </div>
+              <div>
+                <dt>Votes</dt>
+                <dd><StatusPill status={j.votes_status} /></dd>
+              </div>
+              <div>
+                <dt>Committees</dt>
+                <dd><StatusPill status={j.committees_status} /></dd>
+              </div>
+            </dl>
+            {(j.blockers || j.notes) && (
+              <div className="coverage__card-notes">
+                {j.blockers && <span className="coverage__blocker">{j.blockers}</span>}
+                {j.notes && <p>{j.notes}</p>}
+              </div>
+            )}
+          </li>
+        ))}
+      </ul>
+
       <footer className="coverage__footer">
         <p>Counts refresh hourly.</p>
         <p>
-          See <a href="/blog">the blog</a> for updates as new jurisdictions come online.
+          See <a href="https://docs.canadianpoliticaldata.org/blog/" target="_blank" rel="noopener noreferrer">the blog</a> for updates as new jurisdictions come online.
         </p>
       </footer>
     </section>

@@ -59,7 +59,7 @@ LISTING_URL_TMPL = "https://www.ola.org/en/members/parliament-{n}"
 MEMBER_JSON_URL_TMPL = "https://www.ola.org/en/members/all/{slug}?_format=json"
 
 HEADERS = {
-    "User-Agent": "CanadianPoliticalDataBot/1.0 (+https://canadianpoliticaldata.ca)",
+    "User-Agent": "CanadianPoliticalDataBot/1.0 (+https://canadianpoliticaldata.org)",
     "Accept": "text/html,application/xhtml+xml",
     "Accept-Language": "en-CA,en;q=0.9",
 }

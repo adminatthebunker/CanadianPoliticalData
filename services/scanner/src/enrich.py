@@ -153,7 +153,7 @@ def _is_institutional(url: str) -> bool:
 
 
 OPENPARL_BASE = "https://api.openparliament.ca"
-USER_AGENT = "CanadianPoliticalDataBot/1.0 (+https://canadianpoliticaldata.ca)"
+USER_AGENT = "CanadianPoliticalDataBot/1.0 (+https://canadianpoliticaldata.org)"
 
 # Match the ourcommons "Website" block:  <h4>Website</h4>\s*<p><a href="URL">
 WEBSITE_RE = re.compile(

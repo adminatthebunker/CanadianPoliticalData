@@ -169,7 +169,7 @@ export default async function creditsRoutes(app: FastifyInstance) {
       },
       issuer: {
         name: "Canadian Political Data",
-        domain: "canadianpoliticaldata.ca",
+        domain: "canadianpoliticaldata.org",
       },
     });
   });

@@ -48,7 +48,7 @@ API_ROOT = "https://api.openparliament.ca"
 MEDIA_ROOT = "https://openparliament.ca"
 REQUEST_TIMEOUT = 30.0
 HEADERS = {
-    "User-Agent": "sovereignwatch/1.0 (+https://canadianpoliticaldata.ca)",
+    "User-Agent": "sovereignwatch/1.0 (+https://canadianpoliticaldata.org)",
     "Accept": "application/json",
 }
 # openparliament.ca's API rate limit is aggressive (~1 req/sec sustained).

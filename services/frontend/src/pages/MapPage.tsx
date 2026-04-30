@@ -9,6 +9,7 @@ import { Filters, type FilterState } from "../components/Filters";
 import { TierLegend } from "../components/TierLegend";
 import { PartyFilter, partyColor } from "../components/PartyFilter";
 import { PostalLookupBar, type PostalLookupResponse } from "../components/PostalLookupBar";
+import { MapMobileFilters } from "../components/MapMobileFilters";
 import { PostalResultsDrawer } from "../components/PostalResultsDrawer";
 import { PartyReportCard } from "../components/PartyReportCard";
 import { Faq } from "../components/Faq";
@@ -67,16 +68,18 @@ export default function MapPage() {
                 if (res) setReportParty(null);
               }}
             />
-            <PartyFilter
-              active={filters.party}
-              onChange={(p) => setFilters({ ...filters, party: p, level: p ? "federal" : filters.level })}
-              onShowReport={(p) => {
-                setReportParty(p);
-                setPostalResult(null);
-                setFilters(f => ({ ...f, politicianIds: undefined }));
-              }}
-            />
-            <Filters value={filters} onChange={setFilters} />
+            <MapMobileFilters>
+              <PartyFilter
+                active={filters.party}
+                onChange={(p) => setFilters({ ...filters, party: p, level: p ? "federal" : filters.level })}
+                onShowReport={(p) => {
+                  setReportParty(p);
+                  setPostalResult(null);
+                  setFilters(f => ({ ...f, politicianIds: undefined }));
+                }}
+              />
+              <Filters value={filters} onChange={setFilters} />
+            </MapMobileFilters>
           </div>
           <p className="map-hint" role="note">
             💡 Click any riding to see the politician&apos;s full hosting profile, socials, and offices.

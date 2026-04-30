@@ -92,6 +92,19 @@ const COMMAND_CATALOG = [
       { name: "limit", type: "int", required: false, help: "Cap speeches scanned (smoke-test aid)." },
     ],
   },
+  { key: "resolve-bc-speakers-dated", category: "hansard",
+    description: "Date-windowed BC speaker resolver. Extracts surname inline from speaker_name_raw (BC parser doesn't pre-stash surname); joins on politician_terms whose date span covers spoken_at, with cand_count=1 gate. Skips speaker_role-tagged rows. Run after pre-P35 historical-roster backfill.",
+    args: [
+      { name: "limit", type: "int", required: false, help: "Cap candidate speeches scanned (smoke-test aid)." },
+    ],
+  },
+  { key: "ingest-bc-former-mlas", category: "hansard",
+    description: "Backfill BC pre-1992 MLA roster from Wikipedia per-parliament list articles (P29-P34, 1969-1991). Closes the pre-P35 gap left by LIMS. Inserts one politicians row per unique MLA + one politician_terms row per (politician, parliament). Idempotent.",
+    args: [
+      { name: "parliaments", type: "str", required: false, help: "Comma-separated parliament numbers (e.g. '29,30,31'). Default: 29-34." },
+      { name: "delay", type: "float", required: false, default: 0.5, help: "Seconds between MediaWiki API calls (politeness)." },
+    ],
+  },
   { key: "ingest-qc-hansard", category: "hansard",
     description: "Pull Quebec Journal des débats (HTML) into `speeches`. Bilingual source, French primary.",
     args: [
@@ -204,6 +217,14 @@ const COMMAND_CATALOG = [
     description: "Fill speech_chunks.embedding via TEI (Qwen3-Embedding-0.6B). ~50 c/s end-to-end.",
     args: [
       { name: "limit", type: "int", required: false, help: "Max chunks to embed this run." },
+      { name: "batch_size", type: "int", required: false, default: 32, help: "Texts per TEI /embed call." },
+    ],
+  },
+  { key: "chunk-and-embed-speeches", category: "hansard",
+    description: "Chunk pending speeches then embed the resulting chunks, in one process. Atomic ordering — used by the daily 02:00 MT schedule.",
+    args: [
+      { name: "chunk_limit", type: "int", required: false, help: "Max speeches to chunk this run (default: all pending)." },
+      { name: "embed_limit", type: "int", required: false, help: "Max chunks to embed this run (default: all pending)." },
       { name: "batch_size", type: "int", required: false, default: 32, help: "Texts per TEI /embed call." },
     ],
   },

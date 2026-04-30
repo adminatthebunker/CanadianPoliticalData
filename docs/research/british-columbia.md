@@ -4,7 +4,7 @@
 
 **Legislature:** Legislative Assembly of British Columbia | **Website:** https://www.leg.bc.ca | **Seats:** 93 | **Next election:** 2028-10-21
 
-**Status snapshot (2026-04-20):** ✅ **Bills live** via LIMS PDMS JSON. ✅ **Hansard live** via LIMS HDMS debates JSON + HTML — full 23-session backfill P38-S4 → P43-S2 (2008-2026), **197,888 speeches** / **90.56% politician-linked** (up from 87.4% after two resolver bug fixes + Tier 1 Speaker seeding on 2026-04-20). Historical MLA roster enriched (376 rows) from LIMS GraphQL. Both re-rated down from initial difficulty — Bills 5→2, Hansard 3→2. Votes / committees not yet built.
+**Status snapshot (2026-04-29):** ✅ **Bills live** via LIMS PDMS JSON. ✅ **Hansard live** via LIMS HDMS debates JSON + HTML, **577,013 speeches** spanning P29-P43 (1970-2026, full digital record). **Modern roster** (376 LIMS-keyed MLAs) enriched 2026-04-19/20; **per-parliament terms** (750 LIMS edges, P35-P43) added 2026-04-27; **pre-P35 historical roster** (160 Wikipedia-keyed MLAs covering 1969-1991) and **dated speaker resolver** added 2026-04-29 — see `docs/runbooks/handoff-2026-04-29-bc-pre-p35-roster.md`. **Presiding-officer Speaker roster extended** to P29-P37 same day, lifting Speaker-tagged attribution from 0% to 100% across pre-P38 (+20,348 rows). Final speaker resolution: P32-P43 88-99%; P29-P31 75-85% (residual is Committee-Chair / Chairman / Deputy-Speaker rotating roles, out of scope without per-sitting committee-membership data). Votes / committees not yet built. Difficulty re-rated — Bills 5→2, Hansard 3→2.
 
 ---
 
@@ -131,19 +131,34 @@ BC "The Speaker" attributions were already resolved at ingest time by `bc_hansar
 2. The in-code dict is keyed on `parliament` only — it silently gets the 41st Parliament wrong because that parliament had three Speakers (Reid → Thomson → Plecas). Term-based lookup handles the mid-parliament switch; dict lookup doesn't. Post-pass `resolve-presiding-speakers --province BC` can catch any drift the ingest-time path misses.
 3. Future `bc_hansard.py` cleanup can retire `BC_PARLIAMENT_SPEAKER` entirely once we confirm the term-based path covers every existing case.
 
-**BC Speaker roster (seeded into `politician_terms`, `source='presiding_officer_seed'`):**
+**BC Speaker roster (seeded into `politician_terms`, `source='presiding_officer_seed'`).** Extended back from P38 to P29 on 2026-04-29 to cover the full Hansard corpus span:
 
 | Speaker | Start | End | Parliament |
 |---|---|---|---:|
+| William Harvey Murray | 1969-08-27 | 1972-08-30 | 29 |
+| Gordon Dowding | 1972-08-30 | 1975-12-11 | 30 |
+| Dean Edward Smith | 1975-12-11 | 1979-05-10 | 31 |
+| Harvey Schroeder | 1979-05-10 | 1983-05-05 | 32 |
+| Kenneth Walter Davidson | 1983-05-05 | 1986-10-22 | 33 |
+| John Douglas Reynolds | 1986-10-22 | 1990-01-01 | 34 |
+| Charles Stephen Rogers | 1990-01-01 | 1991-10-17 | 34 |
+| Joan Sawicki | 1991-10-17 | 1994-01-01 | 35 |
+| Emery Barnes | 1994-01-01 | 1996-05-28 | 35 |
+| Dale Lovick | 1996-05-28 | 1998-01-01 | 36 |
+| Gretchen Mann Brewin | 1998-01-01 | 2000-01-01 | 36 |
+| Bill Hartley | 2000-01-01 | 2001-05-16 | 36 |
+| Claude Richmond | 2001-05-16 | 2005-05-17 | 37 |
 | Bill Barisoff | 2005-05-17 | 2013-05-14 | 38, 39 |
 | Linda Reid | 2013-05-14 | 2017-06-22 | 40 |
 | Steve Thomson | 2017-06-22 | 2017-06-29 | 41 (7 days) |
 | Darryl Plecas | 2017-09-08 | 2020-12-07 | 41 |
 | Raj Chouhan | 2020-12-07 | — | 42, 43 |
 
-Gap between Thomson (ends June 29, 2017) and Plecas (starts Sept 8, 2017) = summer recess; no Hansard falls in that window so no attribution is lost. Sources: Wikipedia "Speaker of the Legislative Assembly of British Columbia" + "41st Parliament of British Columbia".
+Gap between Thomson (ends June 29, 2017) and Plecas (starts Sept 8, 2017) = summer recess; no Hansard falls in that window so no attribution is lost. Pre-2005 dates are year-precision on Wikipedia — within-parliament transitions (P34, P35, P36) use Jan 1 of the transition year as a conservative boundary. BC sittings cluster Spring + Fall, so the resulting attribution noise around January transitions is bounded. Sources: Wikipedia "Speaker of the Legislative Assembly of British Columbia" + per-parliament articles.
 
-**Out of scope (Tier 2/3):** Deputy Speaker (4,952 rows), The Chair (7,749), various Clerk / Law-Clerk / Lt.-Governor ceremonial roles (~60). Tier 2 needs a per-parliament Deputy Speaker roster (no clean public source; would need Journals scrape). Tier 3 (Committee of the Whole Chair) is parser-level — `bc_hansard_parse.py` would need to capture `<Proceedings-Heading>` text like "R. Leonard in the chair" and attribute subsequent `The Chair` lines within that block to the captured person.
+**Resolver run after extension:** `resolve-presiding-speakers --province BC` resolved all 20,348 unattributed Speaker-tagged rows (no_term_match=0). P37 jumped 88.3% → 99.9% from a single Richmond entry.
+
+**Out of scope (Tier 2/3):** Chairman (16,421 legacy "MR. CHAIRMAN" rows = Committee-of-the-Whole chair, rotating), The Chair (7,817 modern rotating), Deputy Speaker (5,038 rotating), various Clerk / Law-Clerk / Lt.-Governor ceremonial roles (~70). Resolving these requires per-sitting committee-membership data (for Chairman/The Chair/Deputy Speaker) — they're attributed today as role-only ("the person presiding at this moment was the Chair") rather than misattributed to a specific MLA. Acceptable residual at the date-windowed-only attribution ceiling (BC corpus 91.9% attributed).
 
 ## Voting Records / Divisions
 
@@ -205,16 +220,18 @@ curl -s -X POST -H "Content-Type: application/json" \
 - [x] Schema drafted — shared schema applies; no new migration needed beyond `0011_politician_lims_member_id.sql`
 - [x] Ingestion prototyped (LIMS PDMS pipeline)
 - [x] Production ingestion live (bills: 43-2 current, 36 bills / 92 events / 36 sponsors / 36 FK-linked)
-- [x] Production ingestion live (Hansard: full P38-S4 → P43-S2 backfill, 197,888 speeches / 90.56% politician-linked as of 2026-04-20)
-- [x] Historical MLA roster enrichment (376 MLAs via LIMS GraphQL `allMembers` — `scripts/bc-enrich-historical-mlas.py`)
+- [x] Production ingestion live (Hansard: full P29-P43 corpus, **577,013 speeches / 91.9% politician-linked** as of 2026-04-29)
+- [x] Modern-roster enrichment (376 MLAs via LIMS GraphQL `allMembers` — `scripts/bc-enrich-historical-mlas.py`, 2026-04-19/20)
 - [x] Resolver bug fixes (compound-surname initial-last + duplicate-Popham merge, 2026-04-20)
-- [x] Tier 1 presiding-officer (Speaker) terms seeded into `politician_terms` (2026-04-20)
-- [x] Historical backfill — Hansard pre-P38 (P29 1970 → P37 2005, 9 parliaments). Era-branching parser added to `bc_hansard_parse.py` for the bare-`<p><b>NAME:</b>` legacy markup with two sub-eras (P29-P34 ALL-CAPS attributions + `class="noindent"` continuations; P36-P37 mixed-case `Hon. R. Coleman` / `J. MacPhail` attributions + bare-`<p>` continuations). 379,097 new speeches added, ~57 % overall resolution (P35-P37 hits 87-99 % via existing `lims_member_id` lookups; P29-P34 bottoms out at 9-50 % because the LIMS `allMembers` roster doesn't extend below P35).
+- [x] Tier 1 presiding-officer (Speaker) terms seeded into `politician_terms` — initial P38-P43 (2026-04-20), **extended back to P29 (2026-04-29)** with +13 historical Speakers
+- [x] Historical backfill — Hansard pre-P38 (P29 1970 → P37 2005, 9 parliaments). Era-branching parser added to `bc_hansard_parse.py` for the bare-`<p><b>NAME:</b>` legacy markup with two sub-eras (P29-P34 ALL-CAPS attributions + `class="noindent"` continuations; P36-P37 mixed-case `Hon. R. Coleman` / `J. MacPhail` attributions + bare-`<p>` continuations). 378,465 new speeches added (2026-04-27).
+- [x] Per-parliament terms for modern roster (P35-P43) — `enrich-bc-member-parliaments` via LIMS GraphQL `allMemberParliaments`, 750 (member, parliament) edges, BC terms 103 → 853 (2026-04-27).
+- [x] **Pre-P35 BC roster source — Wikipedia per-parliament wikitable parser** (`bc_former_mlas.py`). 160 pre-1992 MLAs across P29-P34, source-tagged `wikipedia:bc-mla:{slug}`, terms tagged `wikipedia:bc-{N}{ord}-parliament`. Multi-member-riding rowspan handled via per-position carryover tracking. (2026-04-29)
+- [x] **Date-windowed speaker resolver — `resolve-bc-speakers-dated`** (`bc_hansard.py`). Single CTE with inline surname extraction (BC parser doesn't pre-stash surname in `raw`). Lifted pre-P35 attribution from 8-50% to 75-90%; rescued ~6K modern surname-collision rows as a bonus. Idempotent. (2026-04-29)
 - [ ] Historical backfill — bills (PDMS serves every session back to 1872, not yet ingested)
-- [ ] Pre-P35 BC roster source — would lift P29-P34 resolution from ~10 % to ~80 %. Candidates: elections.bc.ca historical MLA list, Wikipedia "List of MLAs of British Columbia", or BC Archives. Out of LIMS GraphQL scope.
 - [ ] Hansard scheduler cron (Blues poller + Final sweep)
-- [ ] Tier 2 presiding officers — Deputy Speaker (4,952 rows) — needs per-parliament roster source
-- [ ] Tier 3 presiding officers — Committee of the Whole Chair (7,749 rows) — needs parser-level extraction of "X in the chair" proceedings headers
+- [ ] Tier 2 presiding officers — Deputy Speaker (5,038 rows) — needs per-parliament roster source
+- [ ] Tier 3 presiding officers — Committee of the Whole Chair / Chairman (7,817 + 16,421 rows) — needs parser-level extraction of "X in the chair" proceedings headers + per-sitting Committee Chair roster
 - [ ] Committee transcripts (`CommitteeA-Blues.htm` / `CommitteeC-Blues.htm` — skipped in v1)
 - [ ] Votes
 - [ ] LIMS GraphQL member-enrichment workstream (optional, independent of bills)

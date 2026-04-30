@@ -77,3 +77,9 @@ sovpro
 
 # Claude Code local agent state
 .claude/
+
+# MkDocs static build output (rebuild via `docker compose run --rm docs build`).
+# Keep the directory + the placeholder index so the nginx bind-mount works on a
+# fresh checkout.
+mkdocs/site/*
+!mkdocs/site/index.html

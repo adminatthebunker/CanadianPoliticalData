@@ -234,6 +234,11 @@ _TRUSTED_SOURCES: frozenset[str] = frozenset({
 
 _PROBE_FLAG_THRESHOLD = 0.70
 _AGENT_FLAG_THRESHOLD = 0.85
+# Mastodon directory matches are name-based without external verification —
+# the platform has no blue-check equivalent and federated display_names
+# can be set to anything. Flag below 0.95 so the directory-walk path
+# (which always hands us 0.85) routes through admin review.
+_MASTO_FLAG_THRESHOLD = 0.95
 
 
 def _should_flag(source: str, confidence: float) -> bool:
@@ -242,6 +247,8 @@ def _should_flag(source: str, confidence: float) -> bool:
         return confidence < _PROBE_FLAG_THRESHOLD
     if source == "agent_sonnet":
         return confidence < _AGENT_FLAG_THRESHOLD
+    if source == "masto_host":
+        return confidence < _MASTO_FLAG_THRESHOLD
     # Everything else is upstream-trusted; don't flag.
     return False
 

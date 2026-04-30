@@ -93,128 +93,291 @@
   border-color: var(--accent);
 }
 
-/* ── Filters row ──────────────────────────────────────────────── */
+/* ── Combined pin + filter row ───────────────────────────────── */
 
-.speech-filters {
+/* Holds the politician-pin chips/typeahead and the filter chips/menu
+ * in one flowing row. Both children reset their own margins so they
+ * read as a single horizontal strip. */
+.hansard-search__filter-row {
   display: flex;
   flex-wrap: wrap;
-  gap: .75rem;
-  margin: 0 0 1.5rem;
-  padding: .85rem 1rem;
+  align-items: center;
+  gap: .55rem;
+  margin: .35rem 0 1.25rem;
+}
+
+.hansard-search__filter-row .cpd-pin-chips,
+.hansard-search__filter-row .cpd-filter-bar {
+  margin: 0;
+}
+
+/* ── Filter bar (chip-based) ─────────────────────────────────── */
+
+.cpd-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .45rem;
+}
+
+/* Chip = label + remove button as siblings inside one wrapper so the
+ * popover anchors to the wrapper without re-flowing the chip. */
+.cpd-filter-chip-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: stretch;
+  background: rgba(255, 255, 255, .06);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.cpd-filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: .25rem;
+  padding: .25rem .55rem .25rem .65rem;
+  background: transparent;
+  border: none;
+  color: var(--ink);
+  font-size: .82rem;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.cpd-filter-chip:hover,
+.cpd-filter-chip--editing {
+  background: rgba(74, 158, 255, .12);
+}
+
+.cpd-filter-chip__type {
+  color: var(--ink-muted);
+  font-size: .72rem;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+
+.cpd-filter-chip__value {
+  font-weight: 600;
+}
+
+.cpd-filter-chip__remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.6rem;
+  padding: 0 .35rem;
+  background: transparent;
+  border: none;
+  border-left: 1px solid var(--border);
+  color: var(--ink-muted);
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.cpd-filter-chip__remove:hover {
+  color: #ff7a7a;
+  background: rgba(255, 122, 122, .08);
+}
+
+/* +Filter button (and its menu anchor wrapper). */
+.cpd-filter-menu-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.cpd-filter-menu-wrap--orphan {
+  /* invisible anchor used when a fresh-from-menu picker has no chip yet */
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+
+.cpd-filter-menu__btn {
+  padding: .3rem .7rem;
+  background: var(--panel);
+  border: 1px dashed var(--border);
+  border-radius: 999px;
+  color: var(--ink-muted);
+  font-size: .82rem;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.cpd-filter-menu__btn:hover,
+.cpd-filter-menu__btn:focus-visible {
+  color: var(--ink);
+  border-color: var(--accent);
+  border-style: solid;
+  outline: none;
+}
+
+/* ── Filter popover (anchored below its wrapper) ─────────────── */
+
+.cpd-filter-popover {
+  position: absolute;
+  top: calc(100% + .35rem);
+  left: 0;
+  z-index: 30;
+  min-width: 220px;
+  max-width: 320px;
+  padding: .75rem;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 8px;
-}
-
-.speech-filters__item {
+  box-shadow: 0 10px 24px rgba(0, 0, 0, .35);
   display: flex;
   flex-direction: column;
-  gap: .2rem;
-  min-width: 120px;
-  flex: 1 1 auto;
+  gap: .5rem;
+  /* Restore interactivity inside the orphan-anchor wrapper, which uses
+   * pointer-events:none so the zero-size span doesn't block clicks. */
+  pointer-events: auto;
 }
 
-.speech-filters__label {
-  font-size: .7rem;
+.cpd-filter-popover--menu {
+  min-width: 200px;
+  padding: .35rem;
+}
+
+.cpd-filter-popover__title {
+  margin: 0;
+  font-size: .72rem;
   text-transform: uppercase;
   letter-spacing: .05em;
   color: var(--ink-muted);
   font-weight: 600;
 }
 
-.speech-filters__item select,
-.speech-filters__item input {
+.cpd-filter-popover__help {
+  margin: 0;
+  font-size: .78rem;
+  color: var(--ink-muted);
+  line-height: 1.4;
+}
+
+.cpd-filter-popover__radio-list,
+.cpd-filter-popover__check-list {
+  display: flex;
+  flex-direction: column;
+  gap: .35rem;
+}
+
+.cpd-filter-popover__radio,
+.cpd-filter-popover__check {
+  display: inline-flex;
+  align-items: center;
+  gap: .45rem;
+  font-size: .88rem;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.cpd-filter-popover__radio input,
+.cpd-filter-popover__check input {
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.cpd-filter-popover__select,
+.cpd-filter-popover__input {
   padding: .4rem .55rem;
   background: var(--panel-2);
   border: 1px solid var(--border);
   border-radius: 6px;
   color: var(--ink);
   font-size: .9rem;
+  font-family: inherit;
+  width: 100%;
 }
 
-.speech-filters__item select:focus,
-.speech-filters__item input:focus {
+.cpd-filter-popover__select:focus,
+.cpd-filter-popover__input:focus {
   outline: none;
   border-color: var(--accent);
 }
 
-/* ── Advanced filters disclosure ──────────────────────────────── */
-
-.speech-filters__advanced {
-  margin: -.75rem 0 1.5rem;
+.cpd-filter-popover__field {
+  display: flex;
+  flex-direction: column;
+  gap: .2rem;
 }
 
-.speech-filters__advanced-summary {
-  display: inline-flex;
-  align-items: center;
-  gap: .35rem;
-  cursor: pointer;
-  padding: .5rem .9rem;
-  background: var(--panel);
+.cpd-filter-popover__field span {
+  font-size: .72rem;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--ink-muted);
+  font-weight: 600;
+}
+
+.cpd-filter-popover__field input {
+  padding: .4rem .55rem;
+  background: var(--panel-2);
   border: 1px solid var(--border);
   border-radius: 6px;
-  color: var(--ink-muted);
-  font-size: .85rem;
-  font-weight: 600;
-  user-select: none;
-  list-style: none;
-}
-
-/* Custom disclosure marker so the summary stays compact across browsers. */
-.speech-filters__advanced-summary::-webkit-details-marker { display: none; }
-.speech-filters__advanced-summary::before {
-  content: "▸";
-  display: inline-block;
-  font-size: .7rem;
-  transition: transform .15s ease;
-}
-.speech-filters__advanced[open] .speech-filters__advanced-summary::before {
-  transform: rotate(90deg);
-}
-
-.speech-filters__advanced-summary:hover,
-.speech-filters__advanced-summary:focus-visible {
   color: var(--ink);
-  border-color: var(--accent);
+  font-size: .88rem;
+  font-family: inherit;
+}
+
+.cpd-filter-popover__actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: .15rem;
+}
+
+.cpd-filter-popover__btn {
+  padding: .35rem .85rem;
+  background: var(--accent);
+  color: var(--ink);
+  border: none;
+  border-radius: 6px;
+  font-size: .82rem;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.cpd-filter-popover__btn:hover {
+  filter: brightness(1.1);
+}
+
+/* ── +Filter dropdown menu ───────────────────────────────────── */
+
+.cpd-filter-menu__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.cpd-filter-menu__item {
+  width: 100%;
+  text-align: left;
+  padding: .5rem .65rem;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  color: var(--ink);
+  font-size: .88rem;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.cpd-filter-menu__item:hover,
+.cpd-filter-menu__item:focus-visible {
+  background: rgba(74, 158, 255, .12);
   outline: none;
 }
 
-.speech-filters__advanced-active {
-  color: var(--accent);
-  font-weight: 700;
-}
-
-.speech-filters--advanced {
-  margin-top: .65rem;
-}
-
-.speech-filters__item--checkboxes {
-  border: none;
-  padding: 0;
+.cpd-filter-menu__empty {
   margin: 0;
-  min-width: 220px;
-}
-
-.speech-filters__checkbox-group {
-  display: flex;
-  flex-wrap: wrap;
-  gap: .35rem .75rem;
-  padding: .25rem 0;
-}
-
-.speech-filters__checkbox {
-  display: inline-flex;
-  align-items: center;
-  gap: .35rem;
-  font-size: .85rem;
-  cursor: pointer;
-  color: var(--ink);
-}
-
-.speech-filters__checkbox input[type="checkbox"] {
-  width: 14px;
-  height: 14px;
-  cursor: pointer;
+  padding: .35rem .55rem;
+  color: var(--ink-muted);
+  font-size: .82rem;
 }
 
 /* ── Results ──────────────────────────────────────────────────── */
@@ -244,6 +407,15 @@
 
 .hansard-search__summary {
   font-size: .9rem;
+  color: var(--ink-muted);
+}
+
+/* Inline counterpart that shares the tab row. `margin-left: auto` pushes
+ * it to the far right when the row has space, but it still wraps to a
+ * new line on narrow viewports because the tab row is `flex-wrap: wrap`. */
+.hansard-search__summary-inline {
+  margin: 0 0 0 auto;
+  font-size: .85rem;
   color: var(--ink-muted);
 }
 
@@ -568,12 +740,67 @@
 
 @media (max-width: 640px) {
   .hansard-search__title { font-size: 1.6rem; }
-  .speech-filters { flex-direction: column; }
-  .speech-filters__item { min-width: 0; }
-  .speech-filters__item--checkboxes { min-width: 0; }
-  .speech-filters__checkbox-group { gap: .35rem .65rem; }
+  .cpd-filter-bar { gap: .35rem; }
   .speech-result__speaker { align-items: flex-start; }
   .speech-result__actions { font-size: .85rem; }
+
+  /* Filter popover becomes a bottom sheet so it never gets clipped at
+   * the right edge of the viewport (its anchor uses position: absolute
+   * which is fragile on phones). Pattern matches .share__menu in
+   * global.css. The sheet ignores the popover's anchor entirely. */
+  .cpd-filter-popover {
+    position: fixed;
+    top: auto;
+    left: .5rem;
+    right: .5rem;
+    bottom: calc(.5rem + 76px + env(safe-area-inset-bottom, 0px));
+    width: auto;
+    max-width: none;
+    max-height: 70vh;
+    overflow-y: auto;
+    border-radius: 14px;
+    box-shadow: 0 18px 48px rgba(0, 0, 0, .55);
+    padding: 1rem;
+    animation: cpd-filter-sheet .18s ease-out;
+  }
+  .cpd-filter-popover--menu {
+    /* The "pick a filter type" menu uses the same sheet treatment. */
+    padding: .65rem;
+  }
+}
+@keyframes cpd-filter-sheet {
+  from { opacity: 0; transform: translateY(20px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Phone FAB: scroll-to-top affordance for long results pages.
+ * Sits above the bottom nav. Only mounted by SearchScrollFab on mobile. */
+.search-scroll-fab {
+  position: fixed;
+  right: .85rem;
+  bottom: calc(76px + env(safe-area-inset-bottom, 0px) + .85rem);
+  z-index: 45;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  border: 0;
+  font-size: 1.4rem;
+  font-weight: 700;
+  line-height: 1;
+  box-shadow: 0 8px 22px rgba(225, 29, 72, .35);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: search-fab-fade .18s ease-out;
+}
+.search-scroll-fab:hover { filter: brightness(1.1); }
+.search-scroll-fab:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+@keyframes search-fab-fade {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
 }
 
 /* ── Speeches tab (inside politician detail) ─────────────────── */
@@ -698,6 +925,7 @@
   flex-wrap: wrap;
   align-items: center;
   gap: .5rem .75rem;
+  margin-bottom: 1.5rem;
 }
 
 .hansard-search__view-tabs {

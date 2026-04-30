@@ -95,7 +95,7 @@ BIO_URL_PATRIMOINE_TMPL = (
 )
 
 HEADERS = {
-    "User-Agent": "CanadianPoliticalDataBot/1.0 (+https://canadianpoliticaldata.ca)",
+    "User-Agent": "CanadianPoliticalDataBot/1.0 (+https://canadianpoliticaldata.org)",
     "Accept": "text/html,application/xhtml+xml",
     "Accept-Language": "fr-CA,fr;q=0.9,en;q=0.5",
 }

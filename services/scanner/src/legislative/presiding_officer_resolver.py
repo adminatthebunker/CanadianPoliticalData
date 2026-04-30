@@ -78,18 +78,44 @@ SPEAKER_ROSTER: dict[str, list[SpeakerTerm]] = {
         SpeakerTerm("Nathan Cooper",       "Nathan",  "Cooper",    date(2019, 5, 21), date(2025, 5, 13)),
         SpeakerTerm("Ric McIver",          "Ric",     "McIver",    date(2025, 5, 13), None),
     ],
-    # British Columbia: Speakers #36 through current (covers Hansard
-    # corpus from 2008-02-12). Source: Wikipedia "Speaker of the
-    # Legislative Assembly of British Columbia" + 41st Parliament of BC.
+    # British Columbia: Speakers spanning P29 (1969) through current,
+    # covering the entire Hansard corpus we ingest (P29-P43). Sources:
+    # Wikipedia "Speaker of the Legislative Assembly of British Columbia",
+    # per-parliament Wikipedia articles, and 41st Parliament of BC.
     # The 41st Parliament had three Speakers: Thomson resigned after
     # one week (June 22–29, 2017); the chair sat vacant through summer
     # recess until Plecas was acclaimed September 8, 2017.
+    #
+    # Pre-2005 dates are year-only on Wikipedia — boundaries below use
+    # parliament-transition dates from BC_PARLIAMENT_DATES (election
+    # day) plus Jan 1 of within-parliament transition years. The date-
+    # windowed resolver tolerates this approximation: BC sittings
+    # cluster Spring+Fall, and any speech given on a transition day
+    # itself attributes to the new Speaker (start <= d < end).
+    #
+    # Names match the politicians.name strings produced by
+    # ingest-bc-former-mlas (Wikipedia-canonical full names): "Stephen
+    # Rogers" appears in DB as "Charles Stephen Rogers" because his
+    # full Wikipedia article title uses the legal first name.
     "BC": [
-        SpeakerTerm("Bill Barisoff",   "Bill",    "Barisoff", date(2005, 5, 17), date(2013, 5, 14)),
-        SpeakerTerm("Linda Reid",      "Linda",   "Reid",     date(2013, 5, 14), date(2017, 6, 22)),
-        SpeakerTerm("Steve Thomson",   "Steve",   "Thomson",  date(2017, 6, 22), date(2017, 6, 29)),
-        SpeakerTerm("Darryl Plecas",   "Darryl",  "Plecas",   date(2017, 9,  8), date(2020, 12, 7)),
-        SpeakerTerm("Raj Chouhan",     "Raj",     "Chouhan",  date(2020, 12, 7), None),
+        SpeakerTerm("William Harvey Murray",   "William",  "Murray",    date(1969,  8, 27), date(1972,  8, 30)),  # P29
+        SpeakerTerm("Gordon Dowding",          "Gordon",   "Dowding",   date(1972,  8, 30), date(1975, 12, 11)),  # P30
+        SpeakerTerm("Dean Edward Smith",       "Dean",     "Smith",     date(1975, 12, 11), date(1979,  5, 10)),  # P31 — "Ed Smith" on WP
+        SpeakerTerm("Harvey Schroeder",        "Harvey",   "Schroeder", date(1979,  5, 10), date(1983,  5,  5)),  # P32
+        SpeakerTerm("Kenneth Walter Davidson", "Kenneth",  "Davidson",  date(1983,  5,  5), date(1986, 10, 22)),  # P33 — "Walter Davidson" on WP
+        SpeakerTerm("John Douglas Reynolds",   "John",     "Reynolds",  date(1986, 10, 22), date(1990,  1,  1)),  # P34a
+        SpeakerTerm("Charles Stephen Rogers",  "Charles",  "Rogers",    date(1990,  1,  1), date(1991, 10, 17)),  # P34b — "Stephen Rogers" on WP
+        SpeakerTerm("Joan Sawicki",            "Joan",     "Sawicki",   date(1991, 10, 17), date(1994,  1,  1)),  # P35a
+        SpeakerTerm("Emery Barnes",            "Emery",    "Barnes",    date(1994,  1,  1), date(1996,  5, 28)),  # P35b
+        SpeakerTerm("Dale Lovick",             "Dale",     "Lovick",    date(1996,  5, 28), date(1998,  1,  1)),  # P36a
+        SpeakerTerm("Gretchen Mann Brewin",    "Gretchen", "Brewin",    date(1998,  1,  1), date(2000,  1,  1)),  # P36b — "Gretchen Brewin" on WP
+        SpeakerTerm("Bill Hartley",            "Bill",     "Hartley",   date(2000,  1,  1), date(2001,  5, 16)),  # P36c
+        SpeakerTerm("Claude Richmond",         "Claude",   "Richmond",  date(2001,  5, 16), date(2005,  5, 17)),  # P37
+        SpeakerTerm("Bill Barisoff",           "Bill",     "Barisoff",  date(2005,  5, 17), date(2013,  5, 14)),  # P38-P39
+        SpeakerTerm("Linda Reid",              "Linda",    "Reid",      date(2013,  5, 14), date(2017,  6, 22)),  # P40
+        SpeakerTerm("Steve Thomson",           "Steve",    "Thomson",   date(2017,  6, 22), date(2017,  6, 29)),  # P41 (1 week)
+        SpeakerTerm("Darryl Plecas",           "Darryl",   "Plecas",    date(2017,  9,  8), date(2020, 12,  7)),  # P41
+        SpeakerTerm("Raj Chouhan",             "Raj",      "Chouhan",   date(2020, 12,  7), None),                # P42-P43
     ],
     # Quebec: Presidents of the Assemblée nationale. "Le Président" /
     # "La Présidente" is the QC equivalent of "The Speaker". Roster

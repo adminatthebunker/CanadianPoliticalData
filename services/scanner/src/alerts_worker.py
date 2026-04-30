@@ -245,7 +245,7 @@ def render_digest_text(
     if unsubscribe_url:
         lines.append(f"Unsubscribe from this alert: {unsubscribe_url}")
     lines.append("")
-    lines.append("Canadian Political Data · https://canadianpoliticaldata.ca")
+    lines.append("Canadian Political Data · https://canadianpoliticaldata.org")
     return "\n".join(lines)
 
 

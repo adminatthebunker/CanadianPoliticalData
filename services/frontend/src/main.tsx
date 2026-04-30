@@ -10,10 +10,9 @@ import Lander from "./pages/Lander";
 import MapPage from "./pages/MapPage";
 import PoliticiansPage from "./pages/PoliticiansPage";
 import PoliticianDetail from "./pages/PoliticianDetail";
-import BlogListPage from "./pages/BlogListPage";
-import BlogPostPage from "./pages/BlogPostPage";
 import CoveragePage from "./pages/CoveragePage";
 import HansardSearchPage from "./pages/HansardSearchPage";
+import SemanticMapPage from "./pages/SemanticMapPage";
 import SpeechDetailPage from "./pages/SpeechDetailPage";
 import LoginPage from "./pages/LoginPage";
 import VerifyPage from "./pages/VerifyPage";
@@ -61,9 +60,9 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
           <Route path="politicians/:id" element={<PoliticianDetail />} />
           <Route path="politician/:id" element={<LegacyPoliticianRedirect />} />
           <Route path="search" element={<HansardSearchPage />} />
+          <Route path="semantic-map" element={<SemanticMapPage />} />
           <Route path="speeches/:id" element={<SpeechDetailPage />} />
-          <Route path="blog" element={<BlogListPage />} />
-          <Route path="blog/:slug" element={<BlogPostPage />} />
+          <Route path="explore" element={<SemanticMapPage />} />
           <Route path="coverage" element={<CoveragePage />} />
           <Route path="login" element={<LoginPage />} />
           <Route path="auth/verify" element={<VerifyPage />} />

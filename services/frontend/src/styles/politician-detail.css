@@ -106,7 +106,11 @@
   border-bottom: 1px solid var(--border);
   margin-bottom: 1rem;
   overflow-x: auto;
+  /* Hide the scrollbar — keep the gesture but lose the visual chrome on
+   * platforms that show one. */
+  scrollbar-width: none;
 }
+.pol-detail__tabbar::-webkit-scrollbar { display: none; }
 .pol-detail__tab {
   background: transparent;
   border: 0;
@@ -135,6 +139,13 @@
   .pol-detail__tab {
     padding: .8rem .5rem;
     font-size: .82rem;
+    flex: 0 0 auto; /* don't shrink — let tabs overflow with horizontal scroll */
+  }
+  /* Right-edge fade hints that the tab strip extends. mask-image is purely
+   * visual so it doesn't interfere with clicks. */
+  .pol-detail__tabbar {
+    -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
+            mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
   }
 }
 

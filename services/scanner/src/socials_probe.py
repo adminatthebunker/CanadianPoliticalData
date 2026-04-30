@@ -55,7 +55,7 @@ PLATFORMS_SUPPORTED: tuple[str, ...] = (
 # linkedin deliberately omitted — anti-bot makes pattern probing unreliable.
 
 USER_AGENT = (
-    "Mozilla/5.0 (compatible; SovereignWatch/1.0; +https://canadianpoliticaldata.ca) "
+    "Mozilla/5.0 (compatible; SovereignWatch/1.0; +https://canadianpoliticaldata.org) "
     "polite bot, contact admin@thebunkerops.ca"
 )
 
@@ -597,6 +597,17 @@ async def probe_missing_socials(
     ) as client:
 
         async def probe_one(row: MissingRow) -> None:
+            try:
+                await _probe_one_impl(row)
+            except Exception as exc:
+                # Unhandled per-task error must not kill the gather batch
+                # — without this, one bad upstream response (twitter
+                # anti-bot, malformed HTML, etc.) silently swallows the
+                # final summary print.
+                log.warning("probe task failed for %s: %s", row.name, exc)
+                stats["task_error"] += 1
+
+        async def _probe_one_impl(row: MissingRow) -> None:
             cands = _candidates_for(platform, row, existing.get(row.politician_id, {}))
             if not cands:
                 stats["no_candidates"] += 1
@@ -686,7 +697,8 @@ async def probe_missing_socials(
         f"high={stats['high_inserted']} flagged={stats['flagged_inserted']} "
         f"rejected={stats['rejected']} no_hit={stats['no_hit']} "
         f"no_candidates={stats['no_candidates']} "
-        f"no_profile={stats['no_profile_response']}"
+        f"no_profile={stats['no_profile_response']} "
+        f"task_errors={stats['task_error']}"
     )
     if inserted_high:
         console.print(f"[green]High-confidence inserts ({len(inserted_high)}):[/green]")

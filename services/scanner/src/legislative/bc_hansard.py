@@ -1002,3 +1002,121 @@ async def resolve_bc_speakers(
         stats.speeches_scanned, stats.speeches_updated, stats.still_unresolved,
     )
     return stats
+
+
+async def resolve_bc_speakers_dated(
+    db: Database, *, limit: Optional[int] = None,
+) -> ResolveStats:
+    """Date-windowed BC speaker resolver — rescues legacy ALL-CAPS surnames
+    that the name-only lookup rejects as ambiguous after the pre-P35
+    historical-roster backfill lands.
+
+    Mirrors ``resolve_mb_speakers_dated`` / ``resolve_qc_speakers_dated``,
+    with one structural difference: the BC parser stores the full
+    ``speaker_name_raw`` ("HON. MR. CURTIS", "Hon. K. Conroy",
+    "M. de Jong") on the speech row directly rather than pre-parsing a
+    ``surname`` field into ``raw->'bc_hansard'``. We derive the surname
+    inline as the last whitespace-separated token, after lower+unaccent.
+    Compound surnames degrade to the last token ("de Jong" → "jong"),
+    matching the existing ``SpeakerLookup.by_initial_last`` invariant.
+
+    Skipped by design:
+      * ``speaker_role IS NOT NULL`` — Speaker / Chair / Clerk role rows
+        are handled by ``resolve-presiding-speakers --province BC``.
+      * Last-token in role-vocab ({speaker, chairman, chair, chairperson,
+        clerk, members, house}) — defensive guard for rows where
+        ``speaker_role`` happens to be unset on a role attribution.
+      * NULL ``spoken_at`` or NULL ``speaker_name_raw``.
+      * Surnames whose terms overlap with the speech date for >1 distinct
+        politician — genuine ambiguity that requires riding-hint or
+        first-initial disambiguation.
+
+    Idempotent. Re-running against the same corpus state writes nothing.
+    """
+    stats = ResolveStats()
+    limit_clause = f"LIMIT {int(limit)}" if limit else ""
+
+    update_sql = f"""
+    WITH unresolved AS (
+      SELECT s.id::text AS id,
+             s.spoken_at,
+             -- last whitespace-separated token of speaker_name_raw,
+             -- with trailing punctuation stripped, lower+unaccent.
+             lower(unaccent(
+               regexp_replace(
+                 regexp_replace(s.speaker_name_raw, '^.*\\s', ''),
+                 '[^\\w''-]+$', ''
+               )
+             )) AS surname_norm
+        FROM speeches s
+       WHERE s.source_system = 'hansard-bc'
+         AND s.politician_id IS NULL
+         AND s.spoken_at IS NOT NULL
+         AND s.speaker_name_raw IS NOT NULL
+         AND s.speaker_role IS NULL
+       {limit_clause}
+    ),
+    filtered AS (
+      SELECT id, spoken_at, surname_norm
+        FROM unresolved
+       WHERE surname_norm <> ''
+         AND surname_norm NOT IN (
+           'speaker','chairman','chair','chairperson','clerk',
+           'members','house','leader','lieutenant-governor','administrator'
+         )
+    ),
+    candidates AS (
+      SELECT u.id AS speech_id,
+             array_agg(DISTINCT p.id) AS cand_ids,
+             count(DISTINCT p.id)     AS n_cands
+        FROM filtered u
+        JOIN politicians p
+          ON p.province_territory = 'BC'
+         AND p.level = 'provincial'
+         AND lower(unaccent(p.last_name)) = u.surname_norm
+        JOIN politician_terms pt
+          ON pt.politician_id = p.id
+         AND pt.province_territory = 'BC'
+         AND pt.level = 'provincial'
+         AND (pt.started_at IS NULL OR pt.started_at::date <= u.spoken_at::date)
+         AND (pt.ended_at   IS NULL OR pt.ended_at::date   >= u.spoken_at::date)
+       GROUP BY u.id
+    ),
+    uniq AS (
+      SELECT speech_id, cand_ids[1] AS politician_id
+        FROM candidates WHERE n_cands = 1
+    ),
+    updated_speeches AS (
+      UPDATE speeches s
+         SET politician_id = u.politician_id::uuid,
+             confidence    = GREATEST(s.confidence, 0.85),
+             updated_at    = now()
+        FROM uniq u
+       WHERE s.id::text = u.speech_id
+       RETURNING s.id, s.politician_id
+    ),
+    updated_chunks AS (
+      UPDATE speech_chunks sc
+         SET politician_id = us.politician_id
+        FROM updated_speeches us
+       WHERE sc.speech_id = us.id
+         AND sc.politician_id IS DISTINCT FROM us.politician_id
+       RETURNING sc.id
+    )
+    SELECT
+      (SELECT count(*) FROM candidates)                  AS scanned,
+      (SELECT count(*) FROM updated_speeches)            AS speeches_updated,
+      (SELECT count(*) FROM updated_chunks)              AS chunks_updated,
+      (SELECT count(*) FROM candidates WHERE n_cands > 1) AS still_ambiguous
+    """
+    row = await db.pool.fetchrow(update_sql, timeout=1800)
+    stats.speeches_scanned = int(row["scanned"] or 0)
+    stats.speeches_updated = int(row["speeches_updated"] or 0)
+    stats.still_unresolved = int(row["still_ambiguous"] or 0)
+    log.info(
+        "resolve_bc_speakers_dated: scanned=%d speeches_updated=%d "
+        "chunks_updated=%d still_ambiguous=%d",
+        stats.speeches_scanned, stats.speeches_updated,
+        int(row["chunks_updated"] or 0), stats.still_unresolved,
+    )
+    return stats

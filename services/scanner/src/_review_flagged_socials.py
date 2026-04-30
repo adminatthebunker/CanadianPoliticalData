@@ -274,7 +274,7 @@ async def main() -> None:
         verdicts: list[tuple[FlaggedRow, Verdict, Optional[dict]]] = []
 
         async with httpx.AsyncClient(
-            headers={"User-Agent": "SovereignWatch-review/1.0 (+canadianpoliticaldata.ca)"},
+            headers={"User-Agent": "SovereignWatch-review/1.0 (+canadianpoliticaldata.org)"},
         ) as client:
 
             async def handle_one(row: FlaggedRow) -> None:

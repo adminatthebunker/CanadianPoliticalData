@@ -47,7 +47,7 @@ DEFAULT_CONCURRENCY = 4
 
 USER_AGENT = os.environ.get(
     "SCANNER_USER_AGENT",
-    "CanadianPoliticalDataBot/1.0 (+https://canadianpoliticaldata.ca)",
+    "CanadianPoliticalDataBot/1.0 (+https://canadianpoliticaldata.org)",
 )
 HEADERS = {
     "User-Agent": USER_AGENT,

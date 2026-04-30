@@ -15,6 +15,7 @@
 --     < scripts/seed-daily-ingest-schedules.sql
 --
 -- Slot map (UTC):
+--   08:00 chunk + embed (02:00 Mountain, post-ingest, cross-jurisdictional)
 --   11:00 federal  | 12:00 NS (existing) | 14:00 BC | 15:00 AB | 16:00 QC
 --   17:00 MB       | 18:00 ON           | 19:00 NB | 20:00 NL | 21:00 NT/NU
 
@@ -179,6 +180,22 @@ INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) V
 ('NU bills daily ingest',
  'ingest-nu-bills', '{}'::jsonb,
  '15 21 * * *', true, 'daily-ingest-rollout');
+
+-- ─── Post-ingest semantic layer (08:00 UTC = 02:00 MDT) ─────────────
+-- Cross-jurisdictional. Last per-jurisdiction Hansard ingest (NT/NU at
+-- 21:15 UTC) finishes by ~22 UTC, so 08:00 UTC the next day gives a
+-- comfortable buffer and lands well before the next morning's federal
+-- ingest at 11:00 UTC. Single command — chunk_pending → embed_pending
+-- in one process — so ordering is atomic regardless of worker
+-- concurrency. Both stages are idempotent: chunk only touches speeches
+-- with no chunks, embed only touches chunks with NULL embedding.
+-- 02:00 Mountain (MDT/UTC-6 in summer; MST/UTC-7 in winter) means the
+-- run shifts to 03:00 local in winter, but server-side cron stays
+-- 08:00 UTC year-round — we don't track DST transitions in cron.
+INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) VALUES
+('Chunk + embed speeches (daily)',
+ 'chunk-and-embed-speeches', '{}'::jsonb,
+ '0 8 * * *', true, 'daily-ingest-rollout');
 
 -- next_run_at is computed by the worker the first time it polls; leave
 -- it NULL here so croniter advances it correctly on the worker tick.

@@ -16,7 +16,7 @@ import { query, queryOne } from "../db.js";
 
 const OPENPARL_BASE = "https://api.openparliament.ca";
 const OPENPARL_USER_AGENT =
-  "CanadianPoliticalDataBot/1.0 (+https://canadianpoliticaldata.ca; admin@thebunkerops.ca)";
+  "CanadianPoliticalDataBot/1.0 (+https://canadianpoliticaldata.org; admin@thebunkerops.ca)";
 const FETCH_TIMEOUT_MS = 5_000;
 const DEFAULT_TTL_DAYS = 30;
 // Activity (speeches + bills) changes daily — cache for 1 day.

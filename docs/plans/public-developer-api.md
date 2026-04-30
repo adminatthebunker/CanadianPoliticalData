@@ -158,7 +158,8 @@ New env var: `API_KEY_PEPPER` (32+ bytes; rotating it is the "revoke-all-keys" e
 | `services/frontend/src/components/Layout.tsx` | Add a "Developers" nav link in the public header. |
 | `docker-compose.yml` | Add `API_KEY_PEPPER`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_DEV_MONTHLY`, `STRIPE_PRICE_PRO_MONTHLY`, `MAX_TEI_CONCURRENCY` env vars on the `api` service. |
 | `.env.example` | Document the new env vars with example values. |
-| `CLAUDE.md` | Add a "Developer API" section after "User accounts" describing the routing split, token format, tiers, files, and what-not-to-do (don't bypass `requireApiKey`, don't trust the `tier` claim without recomputing from `users.current_plan`, don't log Bearer tokens). |
+| `CLAUDE.md` | Add a "Developer API" section after "User accounts" describing the routing split, token format, tiers, and files. |
+| `docs/gotchas.md` | Add a "Developer API" section with the don'ts: don't bypass `requireApiKey`, don't trust the `tier` claim without recomputing from `users.current_plan`, don't log Bearer tokens. |
 
 ## Tier matrix (initial)
 

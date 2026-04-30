@@ -49,7 +49,7 @@ ROSTER_URL_TMPL = (
     "https://www.assembly.ab.ca/members/members-of-the-legislative-assembly?legl={legl}"
 )
 HEADERS = {
-    "User-Agent": "CanadianPoliticalDataBot/1.0 (+https://canadianpoliticaldata.ca)",
+    "User-Agent": "CanadianPoliticalDataBot/1.0 (+https://canadianpoliticaldata.org)",
     "Accept": "text/html,application/xhtml+xml",
     "Accept-Language": "en-CA,en;q=0.9",
 }
@@ -70,10 +70,24 @@ _MLA_LINK_RE = re.compile(
     re.IGNORECASE | re.DOTALL,
 )
 
+# On the legl=N members page, *currently sitting* MLAs get a party
+# badge — `(NDP)`, `(UC)`, `(UCP)`, `(IND)` etc. — rendered after the
+# link, while members who served in this legl but have since resigned
+# / lost a by-election / died show `&nbsp;` instead. Two listing
+# variants exist: the table form puts the badge in a separate `<td>`,
+# the div form inlines it after `</a>`. This pattern matches the link
+# plus a small trailing window so we can detect either rendering.
+_MLA_LINK_WITH_TRAIL_RE = re.compile(
+    r'href="[^"]*/member-information\?mid=(?P<mid>\d+)[^"]*"[^>]*>'
+    r"\s*(?P<name>[^<]+?)\s*</a>(?P<trail>(?:[^<]|<(?!a\s)){0,200})",
+    re.IGNORECASE | re.DOTALL,
+)
+_PARTY_BADGE_RE = re.compile(r"\(\s*[A-Za-z][A-Za-z .]{0,8}\)")
+
 _HONORIFICS_RE = re.compile(
     r"\b(?:member|honourable|honorable|hon\.?|mr\.?|mrs\.?|ms\.?|"
     r"miss\.?|dr\.?|prof\.?|premier|minister|speaker|deputy|"
-    r"kc|qc)\b",
+    r"kc|qc|eca|the)\b",
     re.IGNORECASE,
 )
 
@@ -138,6 +152,11 @@ class _LeglPage:
     start_year: int
     end_year: Optional[int]  # None for ongoing
     members: list[tuple[str, str]]  # (mid, raw_name)
+    # Subset of `members` that *currently sit* in this legl — distinguished
+    # by the presence of a party badge in the listing. Empty for historical
+    # pages (legl != current) since the badge is only meaningful for the
+    # ongoing legislature.
+    sitting_mids: set[str] = field(default_factory=set)
 
 
 def _parse_legl_page(html: str, legl: int) -> _LeglPage:
@@ -172,12 +191,21 @@ def _parse_legl_page(html: str, legl: int) -> _LeglPage:
         if prev is None or len(name) > len(prev):
             seen[mid] = name
 
+    # Second pass with trailing-context regex to detect "currently sitting"
+    # via party badge presence. Inactive members on the same page show
+    # `&nbsp;` where the badge would be.
+    sitting: set[str] = set()
+    for m in _MLA_LINK_WITH_TRAIL_RE.finditer(html):
+        if _PARTY_BADGE_RE.search(m.group("trail") or ""):
+            sitting.add(m.group("mid"))
+
     members = list(seen.items())
     return _LeglPage(
         legl=legl,
         start_year=start_year or 0,
         end_year=end_year,
         members=members,
+        sitting_mids=sitting,
     )
 
 
@@ -249,9 +277,24 @@ async def ingest_ab_former_mlas(
     # — the one whose end-year is None ("..." on the index page), not
     # whichever legl happens to be --until-legl. Partial scans of
     # historical ranges should not flip is_active.
+    #
+    # And: the legl=current page lists every MLA who served in this
+    # legl, including those who've since resigned / lost a by-election /
+    # died — so we additionally restrict to mids whose listing carries
+    # a party badge. Without this filter, mids like 0791 (Notley,
+    # resigned 2024) stay flagged active forever, since AB never
+    # removes them from the legl=31 listing.
     current_page = next((p for p in pages if p.end_year is None), None)
     current_mids: set[str] = (
-        {mid for mid, _ in current_page.members} if current_page else set()
+        set(current_page.sitting_mids) if current_page else set()
+    )
+    # Only update is_active in the upsert when this run *actually* saw
+    # the live legl. Partial historical scans preserve the existing
+    # is_active value; full scans (which include current_page) reconcile
+    # stale active rows for MLAs who left office between runs.
+    update_is_active = current_page is not None
+    is_active_clause = (
+        "is_active = EXCLUDED.is_active," if update_is_active else ""
     )
 
     for mid, raw_name in mid_to_name.items():
@@ -260,7 +303,7 @@ async def ingest_ab_former_mlas(
             continue
         is_active = mid in current_mids
         row = await db.fetchrow(
-            """
+            f"""
             INSERT INTO politicians
                 (name, first_name, last_name, level, province_territory,
                  ab_assembly_mid, is_active, source_id)
@@ -269,11 +312,10 @@ async def ingest_ab_former_mlas(
                  'assembly.ab.ca:former-mlas:mid=' || $4)
             ON CONFLICT (ab_assembly_mid) WHERE ab_assembly_mid IS NOT NULL
             DO UPDATE SET
-                -- Only enrich; never overwrite a richer name or
-                -- flip an already-active row to inactive.
                 name       = COALESCE(NULLIF(politicians.name, ''),       EXCLUDED.name),
                 first_name = COALESCE(NULLIF(politicians.first_name, ''), EXCLUDED.first_name),
                 last_name  = COALESCE(NULLIF(politicians.last_name, ''),  EXCLUDED.last_name),
+                {is_active_clause}
                 updated_at = now()
             RETURNING id, (xmax = 0) AS inserted
             """,

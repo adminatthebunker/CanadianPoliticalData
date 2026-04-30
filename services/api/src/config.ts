@@ -13,7 +13,7 @@ const schema = z.object({
   // "prod + www subdomain" setups); @fastify/cors accepts an
   // array. In dev, set API_CORS_ORIGIN=http://localhost:5173 in
   // your local .env.
-  API_CORS_ORIGIN: z.string().default("https://canadianpoliticaldata.ca"),
+  API_CORS_ORIGIN: z.string().default("https://canadianpoliticaldata.org"),
   DATABASE_URL: z.string().url().or(z.string().startsWith("postgres")),
   CHANGE_WEBHOOK_SECRET: z.string().min(16).optional(),
   WEBHOOK_SECRET: z.string().min(16).optional(),
@@ -46,7 +46,7 @@ const schema = z.object({
   OPENROUTER_CONTRADICTIONS_MODEL: z.string().optional(),
   OPENROUTER_MODEL: z.string().optional(),
   OPENROUTER_BASE_URL: z.string().url().default("https://openrouter.ai/api/v1"),
-  OPENROUTER_SITE_URL: z.string().url().default("https://canadianpoliticaldata.ca"),
+  OPENROUTER_SITE_URL: z.string().url().default("https://canadianpoliticaldata.org"),
   OPENROUTER_APP_NAME: z.string().default("Canadian Political Data"),
   OPENROUTER_TIMEOUT_MS: z.coerce.number().int().positive().default(30000),
   // Stripe billing rail (premium-reports phase 1a + future dev-API

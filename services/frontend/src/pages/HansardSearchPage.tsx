@@ -15,6 +15,7 @@ import { SpeechFilters } from "../components/SpeechFilters";
 import { SpeechResultCard } from "../components/SpeechResultCard";
 import { SearchDashboard } from "../components/SearchDashboard";
 import { SaveSearchButton } from "../components/SaveSearchButton";
+import { SearchScrollFab } from "../components/SearchScrollFab";
 import { PoliticianResultGroup } from "../components/PoliticianResultGroup";
 import { PoliticianQuickNav } from "../components/PoliticianQuickNav";
 import { PoliticianPinChips } from "../components/PoliticianPinChips";
@@ -272,6 +273,27 @@ export default function HansardSearchPage() {
   const dashboardTotal =
     timeline?.total ?? (grouped ? grouped.total_politicians : undefined);
 
+  // Compact match-count line shown inline with the view tabs. View-aware
+  // because timeline counts chunks whereas grouped counts politicians;
+  // analysis defers to SearchDashboard's own header.
+  const summaryText: string | null = (() => {
+    if (!enabled || loading || error) return null;
+    if (view === "timeline" && timeline) {
+      if (timeline.items.length === 0) return null;
+      const count = timeline.totalCapped
+        ? "1,000+ matches"
+        : `${total.toLocaleString()} ${total === 1 ? "match" : "matches"}`;
+      const order = timeline.mode === "semantic" ? "ranked by similarity" : "most recent first";
+      return `${count} · ${order}`;
+    }
+    if (view === "politician" && grouped) {
+      const n = grouped.groups.length;
+      if (n === 0) return null;
+      return `${n} ${n === 1 ? "politician" : "politicians"}`;
+    }
+    return null;
+  })();
+
   return (
     <section className="hansard-search">
       <header className="hansard-search__header">
@@ -311,14 +333,15 @@ export default function HansardSearchPage() {
         {enabled && <SaveSearchButton filter={filter} />}
       </div>
 
-      <PoliticianPinChips
-        ids={pinnedIds}
-        onAdd={togglePin}
-        onRemove={togglePin}
-        onClearAll={clearPins}
-      />
-
-      <SpeechFilters value={filter} onChange={applyPatch} />
+      <div className="hansard-search__filter-row">
+        <PoliticianPinChips
+          ids={pinnedIds}
+          onAdd={togglePin}
+          onRemove={togglePin}
+          onClearAll={clearPins}
+        />
+        <SpeechFilters value={filter} onChange={applyPatch} />
+      </div>
 
       <div className="hansard-search__tab-row">
         <div
@@ -365,6 +388,12 @@ export default function HansardSearchPage() {
             Analysis
           </button>
         </div>
+
+        {summaryText && (
+          <p className="hansard-search__summary-inline" aria-live="polite">
+            {summaryText}
+          </p>
+        )}
 
         {view === "politician" && (
           <div
@@ -446,11 +475,6 @@ export default function HansardSearchPage() {
 
         {view === "timeline" && timeline && timeline.items.length > 0 && (
           <>
-            <div className="hansard-search__summary">
-              {timeline.totalCapped ? `1,000+ matches` : `${total.toLocaleString()} ${total === 1 ? "match" : "matches"}`}
-              {timeline.mode === "semantic" ? " · ranked by similarity" : " · most recent first"}
-            </div>
-
             <ol className="hansard-search__list" aria-label="Search results">
               {timeline.items.map((item) => (
                 <li key={item.chunk_id} className="hansard-search__item">
@@ -590,6 +614,7 @@ export default function HansardSearchPage() {
           </>
         )}
       </div>
+      <SearchScrollFab />
     </section>
   );
 }

@@ -154,7 +154,7 @@ def federal_session_for_date(d: date) -> Optional[tuple[int, int]]:
     return None
 
 HEADERS = {
-    "User-Agent": "SovereignWatchBot/1.0 (+https://canadianpoliticaldata.ca; civic-transparency)",
+    "User-Agent": "SovereignWatchBot/1.0 (+https://canadianpoliticaldata.org; civic-transparency)",
     "Accept": "application/json",
 }
 

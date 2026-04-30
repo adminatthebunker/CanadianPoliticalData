@@ -43,7 +43,7 @@ console = Console()
 
 ROSTER_URL = "https://www.gov.mb.ca/legislature/members/mla_list_constituency.html"
 
-USER_AGENT = "CanadianPoliticalDataBot/1.0 (+https://canadianpoliticaldata.ca)"
+USER_AGENT = "CanadianPoliticalDataBot/1.0 (+https://canadianpoliticaldata.org)"
 
 # Match <tr>...</tr> greedy within bounds, and each <td>...</td> inside.
 _ROW_RE = re.compile(r"<tr\b[^>]*>(.*?)</tr>", re.IGNORECASE | re.DOTALL)

@@ -1,6 +1,7 @@
 import { Link, NavLink, Outlet } from "react-router-dom";
 import { ShareMenu } from "./ShareMenu";
 import { BetaBadge } from "./BetaBadge";
+import { MobileBottomNav } from "./MobileBottomNav";
 import { useUserAuth } from "../hooks/useUserAuth";
 
 /**
@@ -86,12 +87,19 @@ export function Layout() {
           <NavLink to="/search" className={({ isActive }) => (isActive ? "active" : "")}>
             Search
           </NavLink>
+          <NavLink to="/semantic-map" className={({ isActive }) => (isActive ? "active" : "")}>
+            Explore
+          </NavLink>
           <NavLink to="/coverage" className={({ isActive }) => (isActive ? "active" : "")}>
             Coverage
           </NavLink>
-          <NavLink to="/blog" className={({ isActive }) => (isActive ? "active" : "")}>
+          <a
+            href="https://docs.canadianpoliticaldata.org/blog/"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
             Blog
-          </NavLink>
+          </a>
           <ShareMenu />
           <a
             className="shell__contact"
@@ -107,6 +115,8 @@ export function Layout() {
       <main id="main" tabIndex={-1}>
         <Outlet />
       </main>
+
+      <MobileBottomNav />
 
       <footer className="shell__footer">
         <div className="shell__footer-row">

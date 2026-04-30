@@ -66,7 +66,7 @@ services:
       OPENROUTER_CONTRADICTIONS_MODEL: ${OPENROUTER_CONTRADICTIONS_MODEL:-}
       OPENROUTER_MODEL: ${OPENROUTER_MODEL:-}
       OPENROUTER_BASE_URL: ${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}
-      OPENROUTER_SITE_URL: ${OPENROUTER_SITE_URL:-https://canadianpoliticaldata.ca}
+      OPENROUTER_SITE_URL: ${OPENROUTER_SITE_URL:-https://canadianpoliticaldata.org}
       OPENROUTER_APP_NAME: ${OPENROUTER_APP_NAME:-Canadian Political Data}
       OPENROUTER_TIMEOUT_MS: ${OPENROUTER_TIMEOUT_MS:-30000}
       # Stripe billing rail (premium-reports phase 1a). Unset
@@ -196,7 +196,7 @@ services:
       DATABASE_URL: postgresql://sw:${DB_PASSWORD}@db:5432/sovereignwatch
       SCANNER_CONCURRENCY: ${SCANNER_CONCURRENCY:-16}
       SCANNER_HTTP_TIMEOUT: ${SCANNER_HTTP_TIMEOUT:-15}
-      SCANNER_USER_AGENT: ${SCANNER_USER_AGENT:-CanadianPoliticalDataBot/1.0 (+https://canadianpoliticaldata.ca)}
+      SCANNER_USER_AGENT: ${SCANNER_USER_AGENT:-CanadianPoliticalDataBot/1.0 (+https://canadianpoliticaldata.org)}
       GEOIP_CITY_PATH: /data/GeoLite2-City.mmdb
       GEOIP_ASN_PATH:  /data/GeoLite2-ASN.mmdb
       SEED_SQL_PATH: /app/db/seed.sql
@@ -317,7 +317,7 @@ services:
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OPENROUTER_REPORT_MODEL: ${OPENROUTER_REPORT_MODEL:-anthropic/claude-sonnet-4.6}
       OPENROUTER_BASE_URL: ${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}
-      OPENROUTER_SITE_URL: ${OPENROUTER_SITE_URL:-https://canadianpoliticaldata.ca}
+      OPENROUTER_SITE_URL: ${OPENROUTER_SITE_URL:-https://canadianpoliticaldata.org}
       OPENROUTER_APP_NAME: ${OPENROUTER_APP_NAME:-Canadian Political Data}
       OPENROUTER_REPORT_TIMEOUT_MS: ${OPENROUTER_REPORT_TIMEOUT_MS:-120000}
       REPORTS_POLL_INTERVAL: ${REPORTS_POLL_INTERVAL:-5}
@@ -380,6 +380,32 @@ services:
     restart: unless-stopped
     networks: [sw]
 
+  # ── docs site (MkDocs Material) ───────────────────────────────────
+  # Live preview only: serves at http://localhost:8000 for editing the
+  # markdown under ./mkdocs/docs/. The PUBLIC docs site at
+  # docs.canadianpoliticaldata.org is served by nginx from the static
+  # build output under ./mkdocs/site/, NOT from this service.
+  #
+  # Build the static site for nginx with:
+  #   docker compose run --rm docs build --strict
+  #
+  # Serve preview (default) with:
+  #   docker compose up -d docs
+  docs:
+    image: squidfunk/mkdocs-material:latest
+    container_name: sw-docs
+    working_dir: /docs
+    user: "${UID:-1000}:${GID:-1000}"
+    command: ["serve", "--dev-addr=0.0.0.0:8000"]
+    volumes:
+      - ./mkdocs:/docs
+    ports:
+      # Bind to localhost only — the public docs site goes through nginx,
+      # this port is for the operator's browser during editing.
+      - "127.0.0.1:${DOCS_PREVIEW_PORT:-8000}:8000"
+    restart: unless-stopped
+    networks: [sw]
+
   # ── nginx (public entrypoint) ─────────────────────────────────────
   nginx:
     image: nginx:alpine
@@ -391,6 +417,10 @@ services:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/conf.d:/etc/nginx/conf.d:ro
       - assets:/var/www/assets:ro
+      # Static-built docs site. Populated by `docker compose run --rm docs build`.
+      # Missing on a fresh checkout — the docs vhost will 404 cleanly until
+      # the first build is run. See nginx/conf.d/docs.conf.
+      - ./mkdocs/site:/var/www/docs:ro
     depends_on: [api, frontend]
     restart: unless-stopped
     networks: [sw]

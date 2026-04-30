@@ -6,7 +6,7 @@
 
 Canadian Political Data tracks ~2,800 elected officials across every level of Canadian government — every currently-sitting federal MP and senator (plus historical MPs back to 1994 pulled in via the Hansard pipeline), every provincial and territorial legislature, and municipal councils from coast to coast — plus the organizations driving Alberta's October 19, 2026 independence referendum.
 
-The public site is **free, requires no account, and never will**. Enter a postal code and see your own MP, MLA, and councillors — with their parliamentary record (mirrored from [openparliament.ca](https://openparliament.ca) for federal MPs), their social handles, and — as one lens among many — where their websites are hosted.
+The public site is **free and dataset is open**. Enter a postal code and see your own MP, MLA, and councillors — with their parliamentary record (mirrored from [openparliament.ca](https://openparliament.ca) for federal MPs), their social handles, and — as one lens among many — where their websites are hosted.
 
 ---
 
@@ -16,7 +16,7 @@ The public site is **free, requires no account, and never will**. Enter a postal
 
 This project takes that seriously. Three principles fall out of it:
 
-1. **Free and frictionless for the public.** No accounts, no paywalls, no dark patterns on the public site. Postal-code lookup is the front door. Search is the next one.
+1. **Free and frictionless for the public.** No accounts for basic search or dark patterns on the public site. Postal-code lookup is the front door. Search is the next one.
 2. **Source-available to the core.** Every ingester, every schema decision, every upstream quirk and blocker lives in this repo under [PolyForm Noncommercial 1.0.0](./LICENSE) — free for personal, research, educational, and other noncommercial use. Per-jurisdiction research dossiers under [`docs/research/`](docs/research/) document exactly how each legislature's data was sourced, what's reliable, and what's not. If we got something wrong, you can see where.
 3. **Honest about gaps.** Coverage holes are surfaced on the public [`/coverage`](https://canadianpoliticaldata.ca/coverage) dashboard rather than hidden. Four provincial bills pipelines are still blocked (MB/SK PDFs; PEI/YT WAFs); the dashboard says so.
 
@@ -51,8 +51,13 @@ Coverage is built jurisdiction-by-jurisdiction via dedicated ingesters — Open 
 | `/politicians` | Cards grid of every tracked politician, filterable by level/province/party/socials |
 | `/politicians/:id` | Per-politician detail — socials, offices, terms, changes, and (federal MPs) a Parliament timeline sourced from openparliament.ca |
 | `/coverage` | Honest coverage dashboard — every Canadian legislature with status of bills / Hansard / votes / committees layers, blockers flagged |
-| `/blog` | Work-as-we-go updates, authored as MDX in `services/frontend/src/content/blog/*.mdx` |
-| `/blog/:slug` | Individual post |
+| `/blog`, `/blog/:slug` | 301 redirects to the docs-site blog (see below) |
+
+The public **documentation site** lives at
+**[docs.canadianpoliticaldata.ca](https://docs.canadianpoliticaldata.ca/)**
+— end-user guides (search, accounts, reports), contributor docs (local
+installation, dataset download, architecture), and the project blog.
+Built with MkDocs Material; source under [`mkdocs/`](./mkdocs/).
 
 Federal MPs additionally get a lazily-mirrored **Parliament** tab backed by a local JSONB cache of openparliament.ca — 30-day TTL for the profile blob, 1-day TTL for their speeches+bills feed, coalesced per-politician so concurrent requests share one outbound call.
 
@@ -107,7 +112,8 @@ Remaining for v1: hybrid (dense + Postgres tsvector) retrieval API, public searc
 | Backend | Node.js 20 + Fastify + zod |
 | Scanner | Python 3.13 + asyncio + dnspython + httpx |
 | Embed service | Hugging Face Text Embeddings Inference (TEI) serving `Qwen/Qwen3-Embedding-0.6B` on CUDA fp16 |
-| Frontend | React 18 + TypeScript 5 + Vite + Leaflet + React Router 6 + MDX |
+| Frontend | React 18 + TypeScript 5 + Vite + Leaflet + React Router 6 |
+| Docs site | MkDocs Material (in [`mkdocs/`](./mkdocs/), served by nginx at `docs.canadianpoliticaldata.ca`) |
 | Database | PostgreSQL 16 + PostGIS 3.4 + pgvector 0.8.2 + unaccent |
 | Change detection | [Thedurancode/change](https://github.com/Thedurancode/change) |
 | Uptime | Uptime Kuma |
@@ -211,7 +217,7 @@ Read [`CLAUDE.md`](CLAUDE.md) for project-level conventions (jurisdiction-specif
 
 ## License + attribution
 
-[PolyForm Noncommercial 1.0.0](./LICENSE) — free for personal, research, educational, and other noncommercial use. Commercial use requires a separate license; contact The Bunker Operations.
+[PolyForm Noncommercial 1.0.0](./LICENSE) — free for personal, research, educational, and other noncommercial use. Commercial use requires a separate licence; contact **[The Bunker Operations (BNKops)](https://bnkops.com/)** at [admin@thebunkerops.ca](mailto:admin@thebunkerops.ca).
 
 This project uses data from:
 

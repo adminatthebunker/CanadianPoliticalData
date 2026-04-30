@@ -177,7 +177,7 @@ function buildSvg(stats: Awaited<ReturnType<typeof gatherStats>>): string {
 
   <!-- Footer -->
   <g transform="translate(80, 588)">
-    <text x="0" y="0" font-family="DejaVu Sans, Noto Sans, Arial, sans-serif" font-size="20" font-weight="600" fill="#e2e8f0">canadianpoliticaldata.ca</text>
+    <text x="0" y="0" font-family="DejaVu Sans, Noto Sans, Arial, sans-serif" font-size="20" font-weight="600" fill="#e2e8f0">canadianpoliticaldata.org</text>
     <text x="220" y="0" font-family="DejaVu Sans, Noto Sans, Arial, sans-serif" font-size="20" fill="#94a3b8">· scanned ${totalPoliticians} politicians</text>
   </g>
   <!-- suppress unused refs -->

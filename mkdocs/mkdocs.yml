@@ -1,0 +1,174 @@
+site_name: Canadian Political Data — Docs
+site_url: https://docs.canadianpoliticaldata.org/
+site_description: >-
+  Help, reference, and guides for Canadian Political Data — search Hansard,
+  find your representatives, set up alerts, and request reports.
+site_author: Canadian Political Data
+copyright: >-
+  &copy; Canadian Political Data — civic transparency, rooted in democratic values.
+
+# Source repo — public on GitHub. The header GitHub icon links here, and
+# `edit_uri` puts an "Edit this page" pencil on every doc that opens the
+# corresponding markdown file straight in the GitHub editor.
+repo_name: adminatthebunker/CanadianPoliticalData
+repo_url: https://github.com/adminatthebunker/CanadianPoliticalData
+edit_uri: edit/main/mkdocs/docs/
+
+docs_dir: docs
+site_dir: site
+
+theme:
+  name: material
+  language: en
+  # custom_dir: overrides   # uncomment when adding template overrides
+  font:
+    text: Inter
+    code: JetBrains Mono
+  logo: assets/logo.svg
+  favicon: assets/logo.svg
+  icon:
+    repo: fontawesome/brands/github
+  palette:
+    # System preference (default landing).
+    - media: "(prefers-color-scheme)"
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-auto
+        name: Switch to light mode
+    # Light mode.
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    # Dark mode — Material's `slate` scheme is named for its slate base,
+    # which lines up nicely with the main site's #020617 / #0f172a palette.
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-4
+        name: Switch to system preference
+  features:
+    - navigation.instant
+    - navigation.instant.progress
+    - navigation.tracking
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.indexes
+    - navigation.top
+    - navigation.footer
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - search.share
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+    - content.action.edit
+    - content.tooltips
+
+extra:
+  generator: false
+  social:
+    - icon: fontawesome/solid/globe
+      link: https://canadianpoliticaldata.org
+      name: Main site
+  status:
+    new: Recently added
+    deprecated: Deprecated
+
+extra_css:
+  - stylesheets/extra.css
+
+markdown_extensions:
+  # Python-Markdown core
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+      permalink_title: Anchor link to this section
+
+  # PyMdown — Material's recommended set
+  - pymdownx.betterem
+  - pymdownx.caret
+  - pymdownx.details
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.keys
+  - pymdownx.mark
+  - pymdownx.smartsymbols
+  - pymdownx.snippets
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.tilde
+
+plugins:
+  - search
+  - tags
+  - blog:
+      blog_dir: blog
+      # Short permalinks — /blog/<slug>/ — match the existing React-app
+      # routes, so the in-app /blog/:slug redirect maps cleanly to docs.
+      post_url_format: "{slug}"
+      post_excerpt: optional
+      post_readtime: true
+      post_date_format: long
+      archive: false
+      categories: false
+      authors_file: "{blog}/.authors.yml"
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - getting-started/index.md
+      - Create an account: getting-started/account.md
+      - Coverage and data sources: getting-started/coverage.md
+  - Searching Hansard:
+      - searching/index.md
+      - How search works: searching/how-it-works.md
+      - Filters and tips: searching/filters.md
+      - Saved searches and alerts: searching/saved-searches.md
+  - Explore:
+      - explore/index.md
+  - Politicians and ridings:
+      - politicians/index.md
+      - The map: politicians/map.md
+      - Submitting corrections: politicians/corrections.md
+  - Reports and credits:
+      - reports/index.md
+      - Buying credits: reports/credits.md
+      - Generating a report: reports/generate.md
+  - Contributors:
+      - contributors/index.md
+      - Dataset download: contributors/data-download.md
+      - Local installation: contributors/local-install.md
+  - Blog:
+      - blog/index.md
+  - About:
+      - about/index.md
+      - Privacy: about/privacy.md
+      - Contact: about/contact.md

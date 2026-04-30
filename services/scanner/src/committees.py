@@ -59,7 +59,7 @@ console = Console()
 
 
 USER_AGENT = (
-    "CanadianPoliticalDataBot/1.0 (+https://canadianpoliticaldata.ca) "
+    "CanadianPoliticalDataBot/1.0 (+https://canadianpoliticaldata.org) "
     "committees-ingest"
 )
 

@@ -78,7 +78,7 @@ DEFAULT_CACHE_DIR = Path(
 )
 
 HEADERS = {
-    "User-Agent": "CanadianPoliticalDataBot/1.0 (+https://canadianpoliticaldata.ca)",
+    "User-Agent": "CanadianPoliticalDataBot/1.0 (+https://canadianpoliticaldata.org)",
     "Accept": "application/pdf,*/*;q=0.8",
 }
 

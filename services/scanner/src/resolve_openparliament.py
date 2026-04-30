@@ -37,7 +37,7 @@ console = Console()
 
 OPENPARL_USER_AGENT = (
     "CanadianPoliticalDataBot/1.0 "
-    "(+https://canadianpoliticaldata.ca; admin@thebunkerops.ca)"
+    "(+https://canadianpoliticaldata.org; admin@thebunkerops.ca)"
 )
 
 

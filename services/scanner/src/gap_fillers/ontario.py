@@ -761,7 +761,7 @@ async def fill_ontario(db: Database) -> dict[str, int]:
         headers={
             "User-Agent": (
                 "CanadianPoliticalData/1.0 "
-                "(+https://canadianpoliticaldata.ca; admin@thebunkerops.ca)"
+                "(+https://canadianpoliticaldata.org; admin@thebunkerops.ca)"
             ),
             "Accept": "*/*",
         },

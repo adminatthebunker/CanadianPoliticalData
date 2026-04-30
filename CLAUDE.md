@@ -14,10 +14,13 @@ Project goal: **the definitive source of Canadian political data** — who repre
 
 1. `docs/goals.md` — north star, audience, non-goals
 2. `docs/timeline.md` — current direction in horizons (Now / Next / Later) + the four standing priorities, in order
-3. `docs/plans/semantic-layer.md` — schema, vector store, embedding plan, phased rollout
-4. `docs/research/` — one self-contained research dossier per jurisdiction (federal + 13 provinces/territories), plus `overview.md` for cross-cutting schema log, probe hierarchy, research-handoff protocol, and known blockers
-5. `docs/architecture.md` — service-by-service runtime architecture
-6. `docs/scanner.md`, `docs/api.md`, `docs/operations.md` — per-component references
+3. `docs/gotchas.md` — codebase-wide guardrails distilled from past incidents. Every "do not X" rule lives here with rule + why + how to apply. Read before any non-trivial change.
+4. `docs/plans/semantic-layer.md` — schema, vector store, embedding plan, phased rollout
+5. `docs/research/` — one self-contained research dossier per jurisdiction (federal + 13 provinces/territories), plus `overview.md` for cross-cutting schema log, probe hierarchy, research-handoff protocol, and known blockers
+6. `docs/architecture.md` — service-by-service runtime architecture
+7. `docs/scanner.md`, `docs/api.md`, `docs/operations.md` — per-component references
+
+`docs/` is **internal-facing** — agent / operator notes, freely candid about gaps, blockers, and in-progress decisions. The **public documentation site** lives separately at `mkdocs/docs/` (rendered by MkDocs Material, served by nginx at `docs.canadianpoliticaldata.ca`). When you need to communicate with end users — explain a feature, document the public dataset, write up the local-install flow — edit `mkdocs/docs/`, not `docs/`.
 
 If you find yourself guessing at product direction, the goals doc is the authority. If you find yourself guessing at schema, the semantic-layer doc is the authority. If you find yourself guessing at *what to work on next*, the timeline doc is the authority.
 
@@ -43,10 +46,11 @@ If the user says "ignore the timeline for this one," that's a valid answer — b
 - **Scanner:** Python 3.13 + asyncio + Click, `services/scanner/`.
 - **Embed service:** HuggingFace **Text Embeddings Inference (TEI)** serving **Qwen3-Embedding-0.6B** (1024-dim, fp16 on GPU). Image `ghcr.io/huggingface/text-embeddings-inference:89-1.9`, compose service `tei`, reachable inside compose at `http://tei:80` (OpenAI-compatible `POST /v1/embeddings` + TEI-native `POST /embed`).
   - The legacy custom FastAPI + FlagEmbedding wrapper (BGE-M3 + reranker) lives on disk at `services/embed/` for rollback only; no compose service references it.
-  - **GPU attach:** `deploy.resources.reservations.devices` (driver `nvidia`, capabilities `[gpu]`). `TEI_MEMORY` caps host memory at 6 GiB; VRAM sits well under the RTX 4050's 6 GiB at `--max-batch-tokens=16384`. `docker compose stop tei` releases the card cleanly.
+  - **GPU attach:** `deploy.resources.reservations.devices` (driver `nvidia`, capabilities `[gpu]`). `TEI_MEMORY` caps host memory at 6 GiB; VRAM sits well under the RTX 4050's 6 GiB at `--max-batch-tokens=8192` (lowered from 16384 on 2026-04-28 — see § GPU resilience).
   - **Model cache:** `embedmodels` named volume mounted at `/data` (TEI expects HF_HOME-style layout there). First boot pulls ~1.3 GB from HuggingFace; subsequent boots are seconds.
   - **Reranker:** not in the critical path. Qwen3 retrieval quality on multilingual Hansard is strong enough that the cross-encoder rerank stage was removed. If reranking is reintroduced, do it as a separate service — don't resurrect the FlagEmbedding wrapper just for it.
-  - **Env the scanner reads:** `EMBED_URL` (default `http://tei:80`), `EMBED_MODEL_TAG` (default `qwen3-embedding-0.6b`, stored in `speech_chunks.embedding_model`), `EMBED_BATCH` (default 32).
+  - **Env the scanner reads:** `EMBED_URL` (default `http://tei:80`), `EMBED_MODEL_TAG` (default `qwen3-embedding-0.6b`, stored in `speech_chunks.embedding_model`), `EMBED_BATCH` (default 32). Resilience knobs: `EMBED_RETRY_MAX_ATTEMPTS` (5), `EMBED_RETRY_BASE_DELAY` (1.0s), `EMBED_MAX_CONSECUTIVE_FAILURES` (5), `EMBED_PREFLIGHT_DEVICE_LATENCY_MS` (1500 — set ≤0 to disable preflight for intentional CPU debug runs).
+  - **GPU resilience.** TEI carries a device-aware healthcheck (single-token /embed with `--max-time 1` — fails on CPU fallback) and `restart: on-failure:5` so a wedged-driver loop terminates instead of bouncing forever on CPU. The scanner-side embed client adds three layers: a preflight inference-latency check that refuses to start if TEI is on CPU, exponential-backoff retry per batch (5 attempts, 1s→16s — sized to absorb one TEI panic+restart), and an abort-on-5-consecutive-batch-failures guard so a dead TEI doesn't silently grind through the rest of the corpus marking everything `errors`. See `services/scanner/src/legislative/speech_embedder.py` and the 2026-04-28 runbook for the incident that motivated all three.
 - **Orchestration:** Docker Compose, single host, Pangolin tunnel to public.
 - **Public edge:** nginx → api / frontend / uptime-kuma.
 
@@ -153,11 +157,7 @@ If they diverge the worker refuses the command with `unknown command` — the UI
 
 ### What not to do
 
-- **Do not link `/admin` from the public nav.** Access is by direct URL.
-- **Do not mount `/var/run/docker.sock` anywhere.** The worker executes via subprocess in the same container — socket mounting is root-equivalent.
-- **Do not allow arbitrary commands.** Every admin-submitted command goes through the whitelist. `jobs_catalog.build_cli_args` validates args against schema before any subprocess spawn.
-- **Do not embed `is_admin` in the session JWT.** The per-request DB read is deliberate — it makes demotion instant. If admin traffic ever becomes large enough to matter (it won't), cache the lookup with a short TTL before moving it into the claim.
-- **Do not expose a self-promotion route.** `is_admin` is flipped only via psql; there is no HTTP endpoint that mutates it.
+See `docs/gotchas.md` § Admin panel & job queue (admin nav, docker.sock, command whitelist) and § Auth & sessions (`is_admin` JWT, self-promotion route).
 
 ## User accounts
 
@@ -217,16 +217,7 @@ Separate compose service `alerts-worker` (Python, same scanner image). Poll inte
 
 ### What not to do
 
-- **Do not bypass CSRF on new `/me/*` or `/admin/*` mutations.** Both surfaces use cookie auth, so every POST/PATCH/DELETE runs `requireCsrf` alongside `requireUser` (or `requireAdmin`).
-- **Do not store plaintext magic-link nonces** — only `sha256(nonce)` in `login_tokens.token_hash`.
-- **Do not log session cookies or CSRF tokens.** Fastify's default logger skips `Cookie`; add redact rules if custom logging is introduced.
-- **Do not call TEI from the alerts worker.** The query embedding is cached on `saved_searches.query_embedding` at save time; re-embedding at alert time would scale poorly and can drift from the user's original query.
-- **Do not add social login** (Google/Meta/GitHub). Wrong trust model for civic research — leaks user intent to ad platforms.
-- **Do not bump to Keycloak casually.** Revisit only when a concrete need surfaces (partner newsroom SSO, OAuth clients). The `verifyToken` seam is specifically designed so the swap is mechanical.
-
-## Premium reports / billing rail
-
-One-time Stripe credit purchases, an append-only credit ledger, an admin comp flow, and an LLM-driven report generator that spends credits. See `docs/plans/premium-reports.md` for the full design.
+See `docs/gotchas.md` § Auth & sessions (CSRF, plaintext nonces, cookie logging, social login, Keycloak) and § Embeddings & vector storage (TEI from alerts worker).
 
 ### The ledger discipline (do not break)
 
@@ -295,60 +286,83 @@ Refund discipline: a refund **before** the worker commits is a state-flip on the
 
 ### What not to do
 
-- **Do not add a mutable `balance` column** on `users`. Always `SUM(delta)`. Cached balances diverge under concurrent writes and make refunds incoherent.
-- **Do not grant credits from `session.metadata.credits`.** Always look up via `getPackBySku(metadata.sku)`. Stripe signs events after metadata edits — signature verification does NOT protect against tampered amounts.
-- **Do not log `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, or the `stripe-signature` header.** The webhook route logs event ids + types, never the raw signed body beyond failure messages.
-- **Do not return `credit_purchases.raw_webhook`** from any HTTP response. It holds the full Stripe event (customer email, payment intent); it's audit-only and stays in the DB.
-- **Do not accept negative credit amounts** in any route. Zod `z.number().int().positive()` at the route + `<= 0` throw in the lib.
-- **Do not build a second Stripe integration.** Subscriptions (dev-API plan) reuse `services/api/src/lib/stripe.ts` + `stripe_webhook_events`. One Stripe customer per user, one webhook endpoint, one client wrapper.
-- **Do not flip `STRIPE_TAX_ENABLED=true` without first activating Stripe Tax in the dashboard + adding a Canadian tax registration.** Stripe rejects every Session that requests `automatic_tax` without the upstream registration; the result is an outage on the buy-credits flow. The full activation checklist lives in `docs/operations.md` § Stripe Tax — run it end-to-end including the test-mode dry-run before flipping the flag in production.
-- **Do not bypass the "one pending rate-limit request per user" guard** without adding a DB-level partial unique index. App-level check is the minimum.
-- **Do not send the correction-reward email on idempotent re-applies.** The grant helper returns `alreadyGranted: true` when the ledger row already exists; the admin PATCH handler only dispatches the email on a fresh insert.
-- **Do not place the report hold outside the `report_jobs` insert transaction.** The hold's reference_id is the job id; both rows must commit together. If the hold insert fails (insufficient balance, unique-violation on duplicate enqueue), the job row must roll back too.
-- **Do not skip server-side HTML sanitisation on the report's stored html.** `bleach.clean` runs in the worker before persistence; the viewer renders via `dangerouslySetInnerHTML` and trusts that pass-through.
-- **Do not duplicate the OpenRouter error mapping** in `lib/reports.ts`. Both contradictions and reports route through `lib/openrouter.ts:callJsonObjectModel`. If you find yourself copying the 401/429/timeout switch, you've drifted from the shared client.
-- **Do not let the worker call the api over HTTP.** The worker speaks straight to Postgres for chunk selection, ledger flips, and `report_jobs` updates. The api is the user-facing surface; the worker is its own service.
+See `docs/gotchas.md` § Stripe, billing, credits ledger (mutable balance, metadata trust, secrets logging, raw webhook, negative amounts, second integration, Stripe Tax flag, rate-limit guard, correction-reward email, report-hold transaction) and § Reports worker & LLM map-reduce (HTML sanitisation, OpenRouter error mapping, worker→api HTTP).
 
-## Blog (MDX-in-repo)
+## Blog (MkDocs Material)
 
-Posts live as `.mdx` files under `services/frontend/src/content/blog/`. The frontend bundles them at build time via `@mdx-js/rollup`; there is no DB, no CMS, no auth. Git history is the editorial audit trail.
+Posts live under `mkdocs/docs/blog/posts/<slug>.md`, rendered by the MkDocs Material blog plugin and served at `docs.canadianpoliticaldata.ca/blog/`. The post-shape, draft workflow, publish checklist, and file map live in the **`blog-post` skill** at `.claude/skills/blog-post/SKILL.md` — that skill auto-loads when you ask to write or publish a post. Guardrails for what doesn't belong in the blog are in `docs/gotchas.md` § Blog & MkDocs.
 
-### Post shape
+The migration from React MDX (`services/frontend/src/content/blog/`) happened on 2026-04-27; `/blog` and `/blog/:slug` are now nginx 301 redirects to the docs site, and the redirect regex in `nginx/conf.d/default.conf` depends on the plugin's `post_url_format: "{slug}"` setting in `mkdocs/mkdocs.yml` — don't change one without the other.
 
-```yaml
----
-title: "Post headline"
-slug: "url-slug"          # becomes /blog/<slug>
-date: "2026-04-17"        # ISO-8601, drives sort order
-excerpt: "One-liner hook shown on the list page + as meta description."
-author: "adminatthebunker"
-tags: ["launch", "semantic-search"]
-draft: true               # true hides in production builds
----
+## Semantic mind-map / Explore
 
-MDX body…
+3D + 2D interactive mind-map of the full Hansard embedding space. Routes: `/semantic-map` (canonical) and `/explore` (alias). The surface is wired end-to-end; the first promoted projection will populate it with data.
+
+### What it does
+
+Runs UMAP dimensionality reduction over all `speech_chunks` embeddings, clusters the result with HDBSCAN at four hierarchical levels (broad → mid → fine → very fine), labels clusters with TF-IDF top-3 terms, and serves the result as a browseable 3D (desktop) or 2D (mobile/touch) map. Users can click into any cluster to see representative speech chunks and drill down to finer levels. Standard Hansard filters (jurisdiction, party, date, language, speech type) dim clusters rather than re-projecting — cluster positions are stable spatial landmarks.
+
+### Run-id + is_current discipline
+
+A full fit/cluster/label cycle is expensive (30–90 min). Results land in a new `projection_runs` row with `is_current = false`. After manual validation, `promote` atomically flips the new run's `is_current = true` and the old run's to `false`. A partial unique index (`idx_projection_runs_current`) enforces at most one current run. The API reads `is_current = true` per-request, so promotion takes effect immediately on the next request — no deploy, no restart.
+
+**Do not add mutable cluster-count, label, or centroid columns to `projection_runs`.** All mutable state lives in the per-run child tables. Immutable run metadata + a single `is_current` boolean is the discipline.
+
+### Pipeline stages
+
+```
+project-embeddings --stage=fit       # UMAP-3D + UMAP-2D, transform all chunks
+project-embeddings --stage=cluster   # HDBSCAN at 4 levels on 3D coords
+project-embeddings --stage=label     # TF-IDF top-3 terms per cluster
+project-embeddings --stage=promote   # atomic is_current flip
+project-embeddings --stage=gc        # drop runs older than --max-age-days (default 7)
+project-embeddings --stage=all       # fit → cluster → label in one pass (does not promote)
 ```
 
-Post filename convention: `YYYY-MM-DD-short-slug.mdx`. Sort is by frontmatter `date`, not filename.
+`--run-id` pins subsequent stages to a specific run. `--sample-size` (default 500k) controls the UMAP fit sample; all chunks are transformed regardless.
 
-### Draft workflow
+### Filtering model
 
-- `draft: true` → post is hidden in production; visible in dev (`npm run dev`) because `useBlogPosts` checks `import.meta.env.DEV`.
-- For a staging preview build that shows drafts, pass `--build-arg VITE_SHOW_DRAFTS=1` to `docker compose build frontend`. The resulting image exposes draft posts; revert with a plain rebuild.
-- To ship a draft: flip `draft: false` in the frontmatter, commit, rebuild the frontend image. That's the whole publish flow.
+When the user applies filters, the API returns `member_count_filtered` alongside `member_count` per cluster. The frontend fades clusters to ~15% opacity proportional to survival rate; it does **not** re-project. Re-projecting per filter defeats the point — the spatial topology is the stable reference frame.
 
-### Publish checklist
+### API parameter naming
 
-1. Edit `services/frontend/src/content/blog/<file>.mdx`; flip `draft: true` → `draft: false`.
-2. `docker compose build frontend && docker compose up -d frontend`.
-3. Verify at `/blog` and `/blog/<slug>`. Document title, meta description, and auto-linked headings come from MDX plugins (`remark-frontmatter`, `rehype-slug`, `rehype-autolink-headings`).
-4. Commit the change.
+The API uses `cluster_level=1|2|3|4` to mean HDBSCAN hierarchy depth. `level` is already taken by `baseFilterSchema` to mean federal/provincial/municipal. These are **different params**; do not conflate them.
 
-### What not to put in the blog
+Both read-only routes reuse `baseFilterSchema` and `effectivePoliticianIds` from `services/api/src/routes/search.ts` — single source of truth for valid filter shape.
 
-- Nothing that belongs in `docs/` (architecture, schema, operations — those are authoritative docs; blog is narrative).
-- No credentials, tokens, or private URLs.
-- No machine-generated status logs — the blog is for readers, not internal tracking.
+### Labelling approach
+
+TF-IDF only. No hosted LLM, no OpenRouter call, no per-label generation step. The label for a cluster is the top-3 TF-IDF terms joined by " · " computed over all chunk text in that cluster, with en+fr stopwords stripped. **Do not swap this for a hosted LLM without explicit user sign-off.**
+
+### 3D vs 2D rendering
+
+`useIsTouch()` returns true on phones/tablets → 2D SVG scatter (`ClusterCloud2D`). Desktop → 3D R3F Canvas with `InstancedMesh` + `OrbitControls` (`ClusterCloud3D`). Both consume identical cluster data from `useClusters()`. Do not fork the data model for the two renderers.
+
+### Files involved
+
+| Concern | Path |
+|---|---|
+| Migration | `db/migrations/0039_speech_chunk_projections.sql` |
+| Pipeline (fit/cluster/label/promote/gc) | `services/scanner/src/legislative/projection_builder.py` |
+| Click subcommand | `project-embeddings` in `services/scanner/src/__main__.py` |
+| API routes | `services/api/src/routes/projections.ts` |
+| Route registration | `services/api/src/index.ts` (`/api/v1/projections`) |
+| Page | `services/frontend/src/pages/SemanticMapPage.tsx` |
+| Route aliases | `/semantic-map` + `/explore` in `services/frontend/src/main.tsx` |
+| 2D renderer | `services/frontend/src/components/semantic-map/ClusterCloud2D.tsx` |
+| 3D renderer | `services/frontend/src/components/semantic-map/ClusterCloud3D.tsx` |
+| Cluster drawer | `services/frontend/src/components/semantic-map/ClusterDrawer.tsx` |
+| 2D/3D toggle | `services/frontend/src/components/semantic-map/ModeToggle.tsx` |
+| Filter bar | `services/frontend/src/components/semantic-map/SemanticMapFilters.tsx` |
+| Data hook | `services/frontend/src/hooks/useSemanticMap.ts` |
+| Styles | `services/frontend/src/styles/semantic-map.css` |
+| Explore nav link | `services/frontend/src/components/Layout.tsx` + `MobileBottomNav.tsx` |
+| Scanner deps | `umap-learn`, `hdbscan`, `scikit-learn`, `numpy` in `services/scanner/requirements.txt` |
+
+### What not to do
+
+See `docs/gotchas.md` § Semantic mind-map / Explore (re-projection, auto-promotion, `cluster_level` vs `level`, hosted-LLM labels, public API surface, frontend→scanner) and § Embeddings & vector storage (parallel vector columns).
 
 ## Database reference
 
@@ -374,6 +388,7 @@ For current row counts, ingestion coverage, or what's shipped: query the DB or r
 - `jurisdiction_sources` — coverage + blockers (one row per jurisdiction). Feeds the public coverage dashboard. Refreshed by `refresh-coverage-stats` scanner command. **Check this before assuming a data source is live.**
 - `correction_submissions` — corrections inbox (web + email sources).
 - `scanner_jobs` / `scanner_schedules` — admin queue + cron (see Admin panel section).
+- `projection_runs` / `speech_clusters` / `speech_chunk_projections` — semantic mind-map derived layer (migration `0039`). `projection_runs.is_current` partial unique index ensures at most one live run. Coords are derived from `speech_chunks.embedding`; do not treat them as canonical embeddings.
 
 ### Embedding column naming
 
@@ -432,12 +447,7 @@ The Click entrypoint is `python -m src` (module is `src`, not `scanner` — the 
 
 ## What not to do
 
-- **Do not make this apolitical.** It is civic transparency rooted in democratic values and progressive stances. Non-neutrality is a feature.
-- **Do not add hosted API dependencies** (OpenAI, Cohere, etc.) in the critical path. Self-hosted first; hosted only with user sign-off. The one sanctioned exception is the Anthropic API behind `ANTHROPIC_API_KEY`, used only by `agent-missing-socials` (Tier-3 socials backfill) and gated to abort cleanly when unset.
-- **Do not build per-jurisdiction UI variants** for the same data type. One speeches view, filterable.
-- **Do not redact non-politician names from source text.** Don't surface them as first-class entities either — the distinction lives in retrieval UX, not at ingest.
-- **Do not adopt OpenCivicData `ocd-person/*` IDs.** Per-jurisdiction slug columns + `politician_terms` covers the Canadian context.
-- **Do not create new `CLAUDE.md` / `AGENTS.md` files in subdirectories** without asking. This root one is the authority.
+The full guardrail list lives in `docs/gotchas.md` — every "do not X" rule is there with rule + why + how to apply, organised by topic (Auth & sessions, Admin panel & job queue, Database/migrations/schema, Embeddings & vector storage, Stripe/billing/credits ledger, Reports worker & LLM map-reduce, Blog & MkDocs, Semantic mind-map / Explore, Cross-cutting). Read it before any non-trivial change.
 
 ## When in doubt
 

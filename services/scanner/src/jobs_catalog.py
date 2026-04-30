@@ -140,6 +140,26 @@ COMMANDS: dict[str, dict[str, Any]] = {
              "help": "Cap speeches scanned (smoke-test aid)."},
         ],
     },
+    "resolve-bc-speakers-dated": {
+        "description": "Date-windowed BC speaker resolver. Extracts surname inline from speaker_name_raw (BC parser doesn't pre-stash surname); joins on politician_terms whose date span covers spoken_at, with cand_count=1 gate. Skips speaker_role-tagged rows. Run after pre-P35 historical-roster backfill.",
+        "cli": "resolve-bc-speakers-dated",
+        "category": "hansard",
+        "args": [
+            {"name": "limit", "type": "int", "required": False,
+             "help": "Cap candidate speeches scanned (smoke-test aid)."},
+        ],
+    },
+    "ingest-bc-former-mlas": {
+        "description": "Backfill BC pre-1992 MLA roster from Wikipedia per-parliament list articles (P29-P34, 1969-1991). Closes the pre-P35 gap left by LIMS. Inserts one politicians row per unique MLA + one politician_terms row per (politician, parliament). Idempotent.",
+        "cli": "ingest-bc-former-mlas",
+        "category": "hansard",
+        "args": [
+            {"name": "parliaments", "type": "str", "required": False,
+             "help": "Comma-separated parliament numbers (e.g. '29,30,31'). Default: 29-34."},
+            {"name": "delay", "type": "float", "required": False, "default": 0.5,
+             "help": "Seconds between MediaWiki API calls (politeness)."},
+        ],
+    },
     "ingest-qc-hansard": {
         "description": "Pull Quebec Journal des débats (HTML) into `speeches`. Bilingual source, French primary.",
         "cli": "ingest-qc-hansard",
@@ -355,6 +375,19 @@ COMMANDS: dict[str, dict[str, Any]] = {
              "help": "Max chunks to embed this run."},
             {"name": "batch_size", "type": "int", "required": False, "default": 32,
              "help": "Texts per TEI /embed call. Match TEI's --max-client-batch-size (default 64)."},
+        ],
+    },
+    "chunk-and-embed-speeches": {
+        "description": "Chunk pending speeches then embed the resulting chunks, in one process. Atomic ordering — used by the daily 02:00 MT schedule.",
+        "cli": "chunk-and-embed-speeches",
+        "category": "hansard",
+        "args": [
+            {"name": "chunk_limit", "type": "int", "required": False,
+             "help": "Max speeches to chunk this run (default: all pending)."},
+            {"name": "embed_limit", "type": "int", "required": False,
+             "help": "Max chunks to embed this run (default: all pending)."},
+            {"name": "batch_size", "type": "int", "required": False, "default": 32,
+             "help": "Texts per TEI /embed call."},
         ],
     },
     "resolve-acting-speakers": {

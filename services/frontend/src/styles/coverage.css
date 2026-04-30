@@ -239,11 +239,94 @@
 
 /* ── Narrow screens ────────────────────────────────────────── */
 
+/* ── Mobile cards (default hidden; shown <= 720px) ───── */
+
+.coverage__cards {
+  display: none;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  flex-direction: column;
+  gap: .75rem;
+}
+.coverage__card {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  padding: .9rem 1rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: .65rem;
+}
+.coverage__card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: .75rem;
+}
+.coverage__card-title {
+  display: flex;
+  flex-direction: column;
+  gap: .15rem;
+  min-width: 0;
+}
+.coverage__card .coverage__code { font-size: 1rem; }
+.coverage__card .coverage__legname {
+  display: block;
+  font-size: .8rem;
+  color: var(--ink-muted);
+  white-space: normal;
+  max-width: none;
+}
+.coverage__card-seats {
+  font-size: .75rem;
+  color: var(--ink-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.coverage__card-stats {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: .5rem .75rem;
+}
+.coverage__card-stats > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .5rem;
+  padding: .35rem .55rem;
+  background: var(--panel-2);
+  border-radius: 6px;
+}
+.coverage__card-stats dt {
+  font-size: .7rem;
+  color: var(--ink-muted);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  font-weight: 600;
+  margin: 0;
+}
+.coverage__card-stats dd {
+  margin: 0;
+}
+.coverage__card-notes {
+  font-size: .85rem;
+  line-height: 1.45;
+  color: var(--ink-muted);
+}
+.coverage__card-notes p { margin: .35rem 0 0; }
+
 @media (max-width: 720px) {
   .coverage__title { font-size: 1.6rem; }
   .coverage__summary { gap: .5rem; }
   .coverage__count { min-width: 3.8rem; padding: .5rem .75rem; }
   .coverage__count-value { font-size: 1.2rem; }
-  .coverage__legname { display: none; }
-  .coverage__notes { max-width: 200px; font-size: .8rem; }
+  /* Swap dense table for stacked cards on phones. */
+  .coverage__table-wrap { display: none; }
+  .coverage__cards { display: flex; }
+}
+@media (max-width: 420px) {
+  .coverage__card-stats { grid-template-columns: 1fr; }
 }

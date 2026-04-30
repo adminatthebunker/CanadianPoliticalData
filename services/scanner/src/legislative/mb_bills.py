@@ -47,7 +47,7 @@ BASE = "https://web2.gov.mb.ca"
 INDEX_URL = BASE + "/bills/{P}-{S}/index.php"
 CURRENT_INDEX_URL = BASE + "/bills/"
 HEADERS = {
-    "User-Agent": "CanadianPoliticalDataBot/1.0 (+https://canadianpoliticaldata.ca)",
+    "User-Agent": "CanadianPoliticalDataBot/1.0 (+https://canadianpoliticaldata.org)",
     "Accept": "text/html,application/xhtml+xml",
     "Accept-Language": "en-CA,en;q=0.9",
 }

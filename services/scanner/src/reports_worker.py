@@ -47,7 +47,7 @@ OPENROUTER_BASE_URL = os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.
 OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 OPENROUTER_REPORT_MODEL = os.environ.get("OPENROUTER_REPORT_MODEL", "anthropic/claude-sonnet-4.6")
 OPENROUTER_REPORT_TIMEOUT_MS = int(os.environ.get("OPENROUTER_REPORT_TIMEOUT_MS", "120000"))
-OPENROUTER_SITE_URL = os.environ.get("OPENROUTER_SITE_URL", "https://canadianpoliticaldata.ca")
+OPENROUTER_SITE_URL = os.environ.get("OPENROUTER_SITE_URL", "https://canadianpoliticaldata.org")
 OPENROUTER_APP_NAME = os.environ.get("OPENROUTER_APP_NAME", "Canadian Political Data")
 
 REPORT_BUCKET_SIZE = int(os.environ.get("REPORT_BUCKET_SIZE", "10"))

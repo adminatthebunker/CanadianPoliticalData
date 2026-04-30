@@ -89,7 +89,7 @@ REQUEST_TIMEOUT = 120  # PDFs are 1-2 MB; generous budget on slow links
 PDF_FETCH_DELAY_SECONDS = 1.5  # Be polite to docs.assembly.ab.ca
 
 HEADERS = {
-    "User-Agent": "SovereignWatchBot/1.0 (+https://canadianpoliticaldata.ca; civic-transparency)",
+    "User-Agent": "SovereignWatchBot/1.0 (+https://canadianpoliticaldata.org; civic-transparency)",
     "Accept": "text/html,application/xhtml+xml,application/pdf",
 }
 

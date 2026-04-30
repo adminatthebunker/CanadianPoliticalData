@@ -384,6 +384,32 @@ DB disk at 10M chunks × (1024×4 bytes embed + text + metadata) ≈ **30–50 G
 ### Phase 6 — municipal, non-elected, third-party media
 Deferred per goals doc.
 
+### Phase 7 — semantic mind-map (shipped 2026-04-27)
+
+A derived visualisation layer over the existing `speech_chunks.embedding` vectors. Ships as `/semantic-map` (alias `/explore`) on the frontend.
+
+**What was added:**
+
+- Migration `0039_speech_chunk_projections.sql` — three new tables:
+  - `projection_runs` — one row per fit/cluster/label cycle; `is_current` with a partial unique index (`idx_projection_runs_current`) ensures at most one live run.
+  - `speech_clusters` — per-run, per-level (1/2/3) cluster nodes with label, `top_terms` JSONB, `member_count`, 3D + 2D centroids, `top_chunk_ids` (15 representative chunks), and a `parent_id` for the hierarchy.
+  - `speech_chunk_projections` — one row per chunk per run with 3D coords (x,y,z), 2D coords (x2,y2), and `cluster_id_l1/l2/l3`. Noise points have NULL cluster IDs.
+- Pipeline (`projection_builder.py`) — five stages: `fit` (UMAP-3D + UMAP-2D on a stratified sample, then transform all chunks), `cluster` (HDBSCAN at min_cluster_sizes 2000/500/80 → ~30/200/1500 clusters per level), `label` (TF-IDF top-3 terms, en+fr stopwords), `promote` (atomic `is_current` flip), `gc` (drop superseded runs older than 7 days).
+- Click subcommand `project-embeddings --stage=[fit|cluster|label|promote|gc|all]`.
+- New scanner deps: `numpy`, `scikit-learn`, `umap-learn`, `hdbscan`; `build-essential` added to scanner Dockerfile.
+- API routes `GET /api/v1/projections/clusters` and `GET /api/v1/projections/points` (read-only, public, reuse `baseFilterSchema` + `effectivePoliticianIds` from `search.ts`).
+- Frontend: `SemanticMapPage`, five components under `services/frontend/src/components/semantic-map/`, `useSemanticMap` hook, `semantic-map.css`. New deps: `three`, `@react-three/fiber`, `@react-three/drei`.
+
+**Key design decisions:**
+
+- Coords are derived state. `speech_chunks.embedding` stays the canonical Qwen3 column; no parallel vector column was introduced.
+- Filters fade clusters (opacity proportional to `member_count_filtered / member_count`) rather than re-projecting. Spatial topology is a stable reference frame.
+- Labels are TF-IDF only — no hosted LLM on the critical path.
+- 3D is the desktop default; 2D SVG is the mobile/touch default. Both renderers consume the same cluster data.
+- Projection builds are triggered through the admin jobs queue, not a dedicated HTTP endpoint.
+
+The surface is wired end-to-end. The first `project-embeddings --stage=all` run followed by `--stage=promote` will populate the map.
+
 ## What we're explicitly not doing
 
 - **No dedicated vector DB.** Single Postgres only.

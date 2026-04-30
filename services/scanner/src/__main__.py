@@ -2278,6 +2278,39 @@ def cmd_resolve_bc_speakers(ctx: click.Context, limit: Optional[int]) -> None:
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 
 
+@cli.command("resolve-bc-speakers-dated")
+@click.option("--limit", type=int, default=None,
+              help="Cap candidate speeches scanned (smoke-test aid).")
+@click.pass_context
+def cmd_resolve_bc_speakers_dated(
+    ctx: click.Context, limit: Optional[int],
+) -> None:
+    """Date-windowed BC speaker resolver: joins NULL-politician_id
+    speeches against politician_terms whose date span covers s.spoken_at,
+    with cand_count=1 gate.
+
+    Mirrors resolve-mb-speakers-dated / resolve-qc-speakers-dated but
+    extracts the surname inline from speaker_name_raw (last
+    whitespace-separated token, lower+unaccent) — BC parser doesn't
+    pre-stash a surname field in raw. Rows where speaker_role IS NOT NULL
+    are skipped (those are presiding/role rows handled by
+    resolve-presiding-speakers --province BC).
+
+    Run after ingest-bc-former-mlas + enrich-bc-member-parliaments land
+    pre-P35 historical MLAs and per-parliament terms. Idempotent.
+    """
+    from .legislative.bc_hansard import resolve_bc_speakers_dated as _resolve
+
+    async def _wrap(db: Database) -> None:
+        stats = await _resolve(db, limit=limit)
+        console.print(
+            f"[green]resolve-bc-speakers-dated[/green]: "
+            f"scanned={stats.speeches_scanned} updated={stats.speeches_updated} "
+            f"still_ambiguous={stats.still_unresolved}"
+        )
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
 @cli.command("ingest-qc-hansard")
 @click.option("--parliament", type=int, default=None,
               help="QC parliament (législature) number. Default: latest in legislative_sessions.")
@@ -2449,6 +2482,52 @@ def cmd_resolve_mb_speakers_dated(ctx: click.Context, limit: Optional[int]) -> N
             f"scanned={stats.speeches_scanned} updated={stats.speeches_updated} "
             f"still_ambiguous={stats.still_unresolved}"
         )
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
+@cli.command("ingest-bc-former-mlas")
+@click.option("--parliaments", type=str, default=None,
+              help="Comma-separated parliament numbers (e.g. '29,30,31'). Default: 29-34.")
+@click.option("--delay", type=float, default=1.5,
+              help="Seconds between MediaWiki API calls (be polite to en.wikipedia.org).")
+@click.pass_context
+def cmd_ingest_bc_former_mlas(
+    ctx: click.Context, parliaments: Optional[str], delay: float,
+) -> None:
+    """Backfill BC pre-1992 MLA roster from Wikipedia per-parliament list articles.
+
+    Closes the pre-P35 gap left by enrich-bc-member-parliaments (LIMS only
+    knows P35+, 1992+). Inserts one politicians row per unique MLA across
+    parliaments 29-34 (1969-1991), with source_id='wikipedia:bc-mla:{slug}'.
+    Inserts one politician_terms row per (politician, parliament) with
+    source='wikipedia:bc-{N}th-parliament'.
+
+    Idempotent: re-runs hit partial UNIQUE on politicians.source_id and an
+    existence check on (politician_id, source) for terms.
+
+    Run before resolve-bc-speakers-dated to lift pre-P35 attribution.
+    """
+    from .legislative.bc_former_mlas import (
+        ingest_bc_former_mlas, DEFAULT_PARLIAMENTS,
+    )
+    parls: tuple[int, ...] = DEFAULT_PARLIAMENTS
+    if parliaments:
+        parls = tuple(int(p.strip()) for p in parliaments.split(",") if p.strip())
+
+    async def _wrap(db: Database) -> None:
+        stats = await ingest_bc_former_mlas(db, parliaments=parls, delay=delay)
+        console.print(
+            f"[green]ingest-bc-former-mlas[/green]: "
+            f"parliaments={stats.parliaments_seen} rows={stats.rows_parsed} "
+            f"unique={stats.unique_members} "
+            f"pols_inserted={stats.politicians_inserted} "
+            f"pols_name_matched={stats.politicians_name_matched} "
+            f"terms_inserted={stats.terms_inserted} "
+            f"terms_skipped={stats.terms_skipped_existing} "
+            f"failures={len(stats.parse_failures)}"
+        )
+        if stats.parse_failures:
+            console.print(f"[yellow]parse warnings:[/yellow] {stats.parse_failures[:5]}")
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 
 
@@ -2988,6 +3067,171 @@ def cmd_embed_speech_chunks(ctx: click.Context, limit, batch_size) -> None:
             f"aborted={stats.aborted_consecutive_failures} "
             f"server_ms={stats.total_elapsed_ms}"
         )
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
+@cli.command("chunk-and-embed-speeches")
+@click.option("--chunk-limit", type=int, default=None,
+              help="Max speeches to chunk this run (default: all pending).")
+@click.option("--embed-limit", type=int, default=None,
+              help="Max chunks to embed this run (default: all pending).")
+@click.option("--batch-size", type=int, default=32,
+              help="Texts per TEI /embed call.")
+@click.pass_context
+def cmd_chunk_and_embed_speeches(
+    ctx: click.Context, chunk_limit, embed_limit, batch_size
+) -> None:
+    """Run chunk-speeches then embed-speech-chunks in a single process.
+
+    Atomic ordering: chunk_pending always completes before embed_pending
+    starts, so the embed pass picks up the chunks the same job just
+    produced. Use this as the daily post-ingest schedule rather than two
+    separate scanner_jobs rows — one process means no queue-ordering
+    assumption and no parallel-worker race.
+    """
+    from .legislative.speech_chunker import chunk_pending as _chunk
+    from .legislative.speech_embedder import embed_pending as _embed
+
+    async def _wrap(db: Database) -> None:
+        cstats = await _chunk(db, limit_speeches=chunk_limit)
+        console.print(
+            f"[green]chunk-speeches[/green]: seen={cstats.speeches_seen} "
+            f"chunked={cstats.speeches_chunked} skipped={cstats.speeches_skipped} "
+            f"chunks={cstats.chunks_inserted}"
+        )
+        estats = await _embed(db, limit_chunks=embed_limit, batch_size=batch_size)
+        colour = "red" if estats.aborted_consecutive_failures else "green"
+        console.print(
+            f"[{colour}]embed-speech-chunks[/{colour}]: seen={estats.chunks_seen} "
+            f"embedded={estats.chunks_embedded} batches={estats.batches} "
+            f"errors={estats.errors} retries={estats.retries} "
+            f"aborted={estats.aborted_consecutive_failures} "
+            f"server_ms={estats.total_elapsed_ms}"
+        )
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
+@cli.command("project-embeddings")
+@click.option("--stage", type=click.Choice(["fit", "cluster", "label", "promote", "gc", "all"]),
+              default="all",
+              help="Which stage to run. 'all' chains fit -> cluster -> label and "
+                   "leaves promotion to the operator (no auto-go-live).")
+@click.option("--run-id", type=str, default=None,
+              help="Override run id. Defaults to latest 'running' for cluster/label/promote, "
+                   "creates a new run for fit, required for promote.")
+@click.option("--sample-size", type=int, default=500_000,
+              help="UMAP fit sample size (rows). Stratification is uniform-random.")
+@click.option("--transform-batch", type=int, default=50_000,
+              help="Rows per UMAP transform + DB write batch.")
+@click.option("--max-age-days", type=int, default=7,
+              help="gc only: drop superseded/failed runs older than this.")
+@click.option("--limit", type=int, default=None,
+              help="fit only: cap total chunks projected (smoke-test aid). Production runs leave unset.")
+@click.pass_context
+def cmd_project_embeddings(
+    ctx: click.Context, stage: str, run_id, sample_size, transform_batch, max_age_days, limit,
+) -> None:
+    """UMAP-project speech_chunks.embedding into 3D + 2D coords; HDBSCAN-cluster
+    at four levels; TF-IDF label.
+
+    Stages are idempotent and split so each can be retried independently:
+
+      fit     -> writes speech_chunk_projections rows (cluster_id NULL)
+      cluster -> writes speech_clusters rows; stamps cluster_id_lN
+      label   -> fills cluster.label / top_terms / top_chunk_ids
+      promote -> flips is_current; the API reads this on every request
+      gc      -> drops old superseded runs (cascades clusters + projections)
+      all     -> fit + cluster + label (does NOT promote — explicit step)
+
+    Powers /semantic-map. See db/migrations/0039 for the schema.
+    """
+    import logging as _logging
+    _logging.basicConfig(
+        level=_logging.INFO,
+        format="%(asctime)s %(name)s %(levelname)s %(message)s",
+    )
+    from .legislative.projection_builder import (
+        cluster as _cluster,
+        create_run, fit as _fit, find_latest_running_run,
+        gc as _gc, label as _label, mark_run_status, promote as _promote,
+    )
+
+    async def _wrap(db: Database) -> None:
+        nonlocal run_id
+        if stage == "gc":
+            n = await _gc(db, max_age_days=max_age_days)
+            console.print(f"[green]project-embeddings gc[/green]: dropped {n} runs")
+            return
+
+        if stage == "promote":
+            if not run_id:
+                raise click.UsageError("--run-id required for --stage=promote")
+            await _promote(db, run_id=run_id)
+            console.print(f"[green]project-embeddings promote[/green]: run {run_id} is_current=true")
+            return
+
+        if stage in ("fit", "all"):
+            run_id, fit_stats = await _fit(
+                db, run_id=run_id,
+                sample_size=sample_size,
+                transform_batch=transform_batch,
+                limit=limit,
+            )
+            await mark_run_status(
+                db, run_id, status="running",
+                chunk_count=fit_stats.rows_written,
+            )
+            console.print(
+                f"[green]project-embeddings fit[/green]: run={run_id} "
+                f"sample={fit_stats.sample_size} fit3d={fit_stats.fit_seconds_3d:.1f}s "
+                f"fit2d={fit_stats.fit_seconds_2d:.1f}s "
+                f"transform={fit_stats.transform_seconds:.1f}s "
+                f"rows={fit_stats.rows_written}"
+            )
+
+        if stage in ("cluster", "all"):
+            if not run_id:
+                run_id = await find_latest_running_run(db)
+                if not run_id:
+                    raise click.UsageError("no --run-id and no 'running' run found")
+            cluster_stats = await _cluster(db, run_id=run_id)
+            await mark_run_status(
+                db, run_id, status="running",
+                cluster_counts=(
+                    cluster_stats.level_counts.get(1, 0),
+                    cluster_stats.level_counts.get(2, 0),
+                    cluster_stats.level_counts.get(3, 0),
+                    cluster_stats.level_counts.get(4, 0),
+                ),
+            )
+            console.print(
+                f"[green]project-embeddings cluster[/green]: run={run_id} "
+                f"L1={cluster_stats.level_counts.get(1, 0)} "
+                f"L2={cluster_stats.level_counts.get(2, 0)} "
+                f"L3={cluster_stats.level_counts.get(3, 0)} "
+                f"L4={cluster_stats.level_counts.get(4, 0)} "
+                f"({cluster_stats.cluster_seconds:.1f}s)"
+            )
+
+        if stage in ("label", "all"):
+            if not run_id:
+                run_id = await find_latest_running_run(db)
+                if not run_id:
+                    raise click.UsageError("no --run-id and no 'running' run found")
+            label_stats = await _label(db, run_id=run_id)
+            console.print(
+                f"[green]project-embeddings label[/green]: run={run_id} "
+                f"clusters={label_stats.clusters_labelled} "
+                f"chunks_read={label_stats.chunks_read} "
+                f"({label_stats.seconds:.1f}s)"
+            )
+
+        if stage == "all":
+            console.print(
+                f"[yellow]project-embeddings[/yellow]: run {run_id} ready. "
+                f"Run with --stage=promote --run-id={run_id} to make it live."
+            )
+
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 
 

@@ -1,0 +1,162 @@
+/*
+ * Canadian Political Data — docs site overrides.
+ * Mirrors the main site's palette: slate base + rose-600 accent.
+ *
+ * Site palette reference (services/frontend/src/styles/global.css):
+ *   --bg:     #020617   (slate-950)
+ *   --panel:  #0f172a   (slate-900)
+ *   --ink:    #e2e8f0   (slate-200)
+ *   --muted:  #94a3b8   (slate-400)
+ *   --accent: #e11d48   (rose-600)
+ *   --leaf:   #dc2626   (red-600)
+ *   --border: #1e293b   (slate-800)
+ */
+
+/* ── Light mode ────────────────────────────────────────────────────── */
+[data-md-color-scheme="default"] {
+  --md-primary-fg-color:        #0f172a;          /* slate-900 — header */
+  --md-primary-fg-color--light: #1e293b;          /* slate-800 — header hover */
+  --md-primary-fg-color--dark:  #020617;          /* slate-950 — deepest */
+  --md-primary-bg-color:        #f1f5f9;          /* slate-100 — text on header (active tab, title) */
+  /* Inactive nav-tab labels — keep visible against the dark slate header.
+     Higher alpha than Material's stock 0.7 so the tabs read at AA contrast. */
+  --md-primary-bg-color--light: rgba(241, 245, 249, 0.88);
+
+  --md-accent-fg-color:             #e11d48;      /* rose-600 — links + actions */
+  --md-accent-fg-color--transparent: rgba(225, 29, 72, 0.1);
+  --md-accent-bg-color:             #ffffff;
+  --md-accent-bg-color--light:      rgba(255, 255, 255, 0.7);
+
+  /* Body + nav-tree links. Material defaults this to --md-primary-fg-color,
+     which we've pinned to slate-900 for the header — so we MUST override here
+     or every inline link in body copy renders invisible against the page. */
+  --md-typeset-a-color: #e11d48;                  /* rose-600 */
+
+  /* Code blocks pick up a slate-tinted surface so they don't look stark. */
+  --md-code-bg-color: #f8fafc;     /* slate-50 */
+  --md-code-fg-color: #1e293b;     /* slate-800 */
+}
+
+/* ── Dark mode ─────────────────────────────────────────────────────── */
+[data-md-color-scheme="slate"] {
+  --md-hue: 222;                                  /* slate-leaning hue */
+  --md-default-bg-color:        #020617;          /* slate-950 — page bg */
+  --md-default-fg-color:        #e2e8f0;          /* slate-200 — body text */
+  /* TOC entries + muted body copy — slate-300 reads cleanly on slate-950
+     where slate-400 starts to feel washed out. */
+  --md-default-fg-color--light:   #cbd5e1;        /* slate-300 — muted text + TOC */
+  --md-default-fg-color--lighter: #94a3b8;        /* slate-400 — placeholders */
+  --md-default-fg-color--lightest: #475569;       /* slate-600 — dividers */
+
+  --md-primary-fg-color:        #0f172a;          /* slate-900 — header */
+  --md-primary-fg-color--light: #1e293b;          /* slate-800 */
+  --md-primary-fg-color--dark:  #020617;
+  --md-primary-bg-color:        #f1f5f9;          /* slate-100 — text on header (active tab, title) */
+  /* Inactive nav-tab labels — same calibration as light mode. */
+  --md-primary-bg-color--light: rgba(241, 245, 249, 0.88);
+
+  /* On a near-black background, rose-600 reads slightly muddy — pull up to
+     rose-500 for better luminance contrast. */
+  --md-accent-fg-color:             #f43f5e;      /* rose-500 */
+  --md-accent-fg-color--transparent: rgba(244, 63, 94, 0.12);
+
+  /* Body + nav-tree links — see note in the light-mode block. Use rose-500
+     here for the same dark-bg luminance reason as --md-accent-fg-color. */
+  --md-typeset-a-color: #f43f5e;                  /* rose-500 */
+
+  /* Surface tones — keep panels lifted off the slate-950 base. */
+  --md-code-bg-color: #0f172a;     /* slate-900 */
+  --md-code-fg-color: #e2e8f0;
+}
+
+/* ── Left-sidebar nav tree ─────────────────────────────────────────── */
+/* Material's sidebar nav links get a slight opacity reduction by default for
+   non-current items. Combined with the dark slate base that pushes them below
+   comfortable contrast — pin the inactive colour to slate-200 (full body
+   colour), and let the active/hover states use the accent. */
+[data-md-color-scheme="slate"] .md-nav__link {
+  color: var(--md-default-fg-color);              /* slate-200 */
+  opacity: 0.85;
+}
+[data-md-color-scheme="slate"] .md-nav__link:hover,
+[data-md-color-scheme="slate"] .md-nav__link:focus {
+  color: var(--md-accent-fg-color);
+  opacity: 1;
+}
+[data-md-color-scheme="slate"] .md-nav__link--active,
+[data-md-color-scheme="slate"] .md-nav__item--active > .md-nav__link {
+  color: var(--md-accent-fg-color);               /* rose-500 — current page */
+  opacity: 1;
+}
+
+/* Same calibration in light mode for parity, just against a white panel. */
+[data-md-color-scheme="default"] .md-nav__link {
+  opacity: 0.85;
+}
+[data-md-color-scheme="default"] .md-nav__link:hover,
+[data-md-color-scheme="default"] .md-nav__link:focus,
+[data-md-color-scheme="default"] .md-nav__link--active,
+[data-md-color-scheme="default"] .md-nav__item--active > .md-nav__link {
+  opacity: 1;
+}
+
+/* ── Buttons (.md-button family) ───────────────────────────────────── */
+/* Material's stock buttons take their colour from --md-primary-fg-color,
+   which we've pinned to slate-900 for the header. That makes outlined
+   buttons invisible and primary buttons low-contrast on the dark base.
+   Reroute the whole family to the rose accent. */
+.md-typeset .md-button {
+  color: var(--md-typeset-a-color);
+  border-color: var(--md-typeset-a-color);
+  transition: background-color 75ms, color 75ms, border-color 75ms;
+}
+.md-typeset .md-button--primary {
+  color: #ffffff;
+  background-color: var(--md-typeset-a-color);
+  border-color: var(--md-typeset-a-color);
+}
+.md-typeset .md-button:hover,
+.md-typeset .md-button:focus,
+.md-typeset .md-button--primary:hover,
+.md-typeset .md-button--primary:focus {
+  color: #ffffff;
+  background-color: var(--md-accent-fg-color);
+  border-color: var(--md-accent-fg-color);
+}
+/* Inline icons (`:material-arrow-right:` etc.) inherit text colour. */
+.md-typeset .md-button .twemoji,
+.md-typeset .md-button svg {
+  fill: currentColor;
+}
+
+/* ── Typography polish ─────────────────────────────────────────────── */
+.md-typeset {
+  line-height: 1.65;
+}
+
+.md-typeset .admonition,
+.md-typeset details {
+  border-radius: 8px;
+}
+
+/* "Edit this page" pencil — quieter by default, full opacity on hover. */
+.md-content__button {
+  opacity: 0.55;
+}
+.md-content__button:hover {
+  opacity: 1;
+}
+
+/* Footer brand line — quieter, smaller. */
+.md-copyright {
+  font-size: 0.7rem;
+  opacity: 0.75;
+}
+
+/* Logo: the SVG ships with its own dark-navy rounded background, so it sits
+   nicely on the slate header in both schemes. Just nudge the size up a touch. */
+.md-header__button.md-logo img,
+.md-header__button.md-logo svg {
+  height: 1.6rem;
+  width: 1.6rem;
+}

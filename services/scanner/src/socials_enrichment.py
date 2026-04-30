@@ -51,7 +51,7 @@ console = Console()
 # service in particular asks every client to provide a project URL + contact.
 ENRICH_USER_AGENT = (
     "CanadianPoliticalData-SocialsEnrichment/1.0 "
-    "(+https://canadianpoliticaldata.ca; admin@thebunkerops.ca)"
+    "(+https://canadianpoliticaldata.org; admin@thebunkerops.ca)"
 )
 
 
@@ -178,17 +178,21 @@ async def _load_politician_index(
     db: Database,
     *,
     level: Optional[str] = None,
+    include_inactive: bool = False,
 ) -> dict[tuple[str, str], str]:
-    """Return {(level, name_key): politician_id} for active politicians.
+    """Return {(level, name_key): politician_id} for politicians.
 
     When two distinct politicians share a name_key within a level, we
     keep the first and skip ambiguous matches; they'll be reported during
-    enrichment.
+    enrichment. With ``include_inactive=True`` also pulls former members —
+    needed when backfilling Wikidata socials for historical-roster rows
+    so Hansard speech_references resolution improves on pre-current
+    sessions.
     """
-    where = "WHERE is_active = true"
+    where = "WHERE TRUE" if include_inactive else "WHERE is_active = true"
     args: list[Any] = []
     if level is not None:
-        where += " AND level = $1"
+        where += f" AND level = ${len(args) + 1}"
         args.append(level)
     rows = await db.fetch(
         f"SELECT id, name, level, province_territory FROM politicians {where}",
@@ -213,6 +217,7 @@ async def enrich_from_wikidata(
     db: Database,
     *,
     level: Optional[str] = None,
+    include_inactive: bool = False,
 ) -> int:
     """Pull social handles for every Canadian legislator on Wikidata.
 
@@ -262,9 +267,12 @@ async def enrich_from_wikidata(
 
     # Build a {qid: level} we need for matching, plus load the politician
     # index scoped to the relevant levels.
-    idx = await _load_politician_index(db, level=level)
+    idx = await _load_politician_index(
+        db, level=level, include_inactive=include_inactive
+    )
+    scope = "all" if include_inactive else "active"
     console.print(
-        f"[cyan]Indexed {len(idx)} active politicians "
+        f"[cyan]Indexed {len(idx)} {scope} politicians "
         f"(level filter={level or 'all'})[/cyan]"
     )
 
@@ -392,14 +400,21 @@ async def _list_openparl_politicians(client: httpx.AsyncClient) -> list[dict[str
     return out
 
 
-async def enrich_from_openparl(db: Database) -> int:
+async def enrich_from_openparl(
+    db: Database,
+    *,
+    include_inactive: bool = False,
+) -> int:
     """Fetch openparliament.ca detail pages for federal MPs missing socials."""
 
-    # Build a name -> politician_id map for federal MPs (active only).
+    # Build a name -> politician_id map for federal MPs.
+    where = "WHERE level = 'federal'" if include_inactive else (
+        "WHERE is_active = true AND level = 'federal'"
+    )
     rows = await db.fetch(
-        """
+        f"""
         SELECT id, name FROM politicians
-         WHERE is_active = true AND level = 'federal'
+         {where}
         """
     )
     by_name: dict[str, str] = {}
@@ -537,182 +552,249 @@ async def enrich_from_openparl(db: Database) -> int:
 # ── canada.masto.host lookup ──────────────────────────────────────────────
 
 MASTO_HOST = "canada.masto.host"
-MASTO_LOOKUP_URL = f"https://{MASTO_HOST}/api/v1/accounts/lookup"
-MASTO_CONCURRENCY = 4
-# Any valid Mastodon account receives a display_name that usually contains
-# at least one of the politician's name tokens; require >= 50 % overlap so
-# we don't attach random accounts that happen to match a common handle.
-MASTO_DISPLAY_MIN_OVERLAP = 0.5
+MASTO_DIRECTORY_URL = f"https://{MASTO_HOST}/api/v1/directory"
+MASTO_DIRECTORY_PAGE = 80
+# Mastodon adoption among Canadian politicians is sparse — the realistic
+# yield is in the single digits across 1800+ politicians. False-positive
+# inserts cost much more than missed matches (they corrupt
+# politician_socials and need manual cleanup), so the matching gate is
+# deliberately strict:
+#   - require *all* politician name tokens (last+first, no stopwords) to
+#     appear as tokens in the display_name (not the acct, which routinely
+#     contains nicknames / unrelated handles like "Janet_52square");
+#   - require a Canadian-political keyword in the account bio so we don't
+#     attach to a same-named theatre director or activist;
+#   - persist new rows with flagged_low_confidence=true so an admin
+#     reviews each match in /admin/socials before it surfaces publicly.
+# These three together turned a 2095-row false-positive run into the
+# ~handful of correct matches the platform actually has.
+MASTO_POLITICAL_KEYWORDS = (
+    "mp", "m.p.", "member of parliament", "mla", "m.l.a.", "mpp", "m.p.p.",
+    "mna", "m.n.a.", "mha", "m.h.a.", "senator", "senate", "sénatrice",
+    "sénateur", "mayor", "councillor", "councilor", "deputy mayor",
+    "liberal", "conservative", "ndp", "bloc", "green party",
+    "house of commons", "parliament", "parlement",
+    "legislative assembly", "assemblée nationale",
+    "constituency", "riding", "caucus", "minister", "ministre",
+    "parl.gc.ca", "ourcommons.ca", "sencanada.ca",
+    "député", "députée",
+)
 
 
-def _mastodon_candidate_handles(name: str) -> list[str]:
-    """Yield a handful of guessed account names for a given full name.
-
-    Example 'Marie-France Lalonde' ->
-        ['MarieFranceLalonde', 'Marie_France_Lalonde',
-         'mlalonde', 'lalonde', 'mariefrance']
-    Duplicates eliminated; returns an ordered list.
-    """
-    if not name:
-        return []
-    cleaned = unicodedata.normalize("NFKD", name)
-    cleaned = "".join(c for c in cleaned if not unicodedata.combining(c))
-    tokens = [t for t in re.split(r"[\s'\-]+", cleaned) if t]
-    if not tokens:
-        return []
-
-    first = tokens[0]
-    last = tokens[-1]
-    candidates = [
-        "".join(tokens),
-        "_".join(tokens),
-        f"{first[0]}{last}".lower() if len(first) > 0 else None,
-        last,
-        f"{first}{last}",
-        f"{first}_{last}",
-    ]
-    out: list[str] = []
-    seen: set[str] = set()
-    for c in candidates:
-        if not c:
-            continue
-        c = c.strip()
-        if len(c) < 3:
-            continue
-        low = c.lower()
-        if low in seen:
-            continue
-        seen.add(low)
-        out.append(c)
-    return out[:5]  # hard cap; we don't need to hammer the server
-
-
-async def _mastodon_lookup(
+async def _walk_masto_directory(
     client: httpx.AsyncClient,
-    handle: str,
-) -> Optional[dict[str, Any]]:
-    """Single canada.masto.host lookup. Returns account dict or None."""
-    try:
-        resp = await client.get(MASTO_LOOKUP_URL, params={"acct": handle})
-    except httpx.HTTPError:
-        return None
-    if resp.status_code == 404:
-        return None
-    if resp.status_code != 200:
-        return None
-    try:
-        data = resp.json()
-    except ValueError:
-        return None
-    if not isinstance(data, dict) or "error" in data or not data.get("id"):
-        return None
-    return data
+    *,
+    local_only: bool,
+) -> list[dict[str, Any]]:
+    """Page through ``/api/v1/directory`` until empty.
+
+    The previous implementation called ``/api/v1/accounts/lookup?acct=...``
+    one handle at a time, which only resolves *local* canada.masto.host
+    accounts. After the platform shrunk to ~58 local users that approach
+    yields ~0 matches per run regardless of candidate quality. The
+    directory endpoint instead enumerates every account the instance
+    knows about (locally, or federated when ``local_only=False``), giving
+    us a finite candidate set we can match by display_name.
+    """
+    out: list[dict[str, Any]] = []
+    offset = 0
+    while True:
+        try:
+            resp = await client.get(
+                MASTO_DIRECTORY_URL,
+                params={
+                    "limit": MASTO_DIRECTORY_PAGE,
+                    "offset": offset,
+                    "local": "true" if local_only else "false",
+                    "order": "active",
+                },
+            )
+        except httpx.HTTPError as exc:
+            log.warning("masto directory page offset=%d failed: %s", offset, exc)
+            break
+        if resp.status_code != 200:
+            log.warning("masto directory page offset=%d HTTP %d", offset, resp.status_code)
+            break
+        try:
+            page = resp.json()
+        except ValueError:
+            break
+        if not isinstance(page, list) or not page:
+            break
+        out.extend(page)
+        if len(page) < MASTO_DIRECTORY_PAGE:
+            break
+        offset += MASTO_DIRECTORY_PAGE
+        # safety stop: federated directory observed at ~4k accounts
+        if offset > 8000:
+            log.info("masto directory walk stopped at offset=%d (safety cap)", offset)
+            break
+        await asyncio.sleep(0.1)  # be polite
+    return out
 
 
-async def enrich_mastodon_candidates(db: Database) -> int:
-    """Probe canada.masto.host for plausible handles of our politicians."""
+async def enrich_mastodon_candidates(
+    db: Database,
+    *,
+    include_inactive: bool = False,
+) -> int:
+    """Match politicians to canada.masto.host accounts via directory walk.
+
+    Walks the instance's directory once (one HTTP request per 80 accounts)
+    and matches each account's ``display_name`` to politician names. Beats
+    handle-guessing on cost (O(N+M) requests vs O(N×5)) and on coverage
+    (federated accounts visible from canada.masto.host are matched too,
+    not just local users).
+    """
+    where = "WHERE TRUE" if include_inactive else "WHERE p.is_active = true"
     rows = await db.fetch(
-        """
+        f"""
         SELECT p.id, p.name
           FROM politicians p
           LEFT JOIN politician_socials ps
             ON ps.politician_id = p.id AND ps.platform = 'mastodon'
-         WHERE p.is_active = true AND ps.id IS NULL
+         {where} AND ps.id IS NULL
         """
     )
     if not rows:
         console.print("[yellow]No politicians missing a Mastodon handle[/yellow]")
         return 0
+
+    # Build a list of (politician_id, name, normalized-name-variants) for
+    # substring matching. We keep variants in both orders ("first last"
+    # AND "last first") because Mastodon display_names commonly carry
+    # the "Lastname, Firstname" form. Politicians with single-token names
+    # are skipped — they would match every account that shares that one
+    # token.
+    pol_index: list[tuple[str, str, list[str]]] = []
+    for r in rows:
+        name = r["name"] or ""
+        norm = _normalize_name(name)
+        toks = [t for t in norm.split() if t]
+        if len(toks) < 2:
+            continue
+        # "first last" + "last first" — handles both display orders.
+        variants = [
+            " ".join(toks),
+            " ".join(reversed(toks)),
+        ]
+        pol_index.append((str(r["id"]), name, variants))
+
     console.print(
-        f"[cyan]Checking canada.masto.host for {len(rows)} politicians…[/cyan]"
+        f"[cyan]Walking canada.masto.host directory to match against "
+        f"{len(pol_index)} politicians…[/cyan]"
     )
 
-    sem = asyncio.Semaphore(MASTO_CONCURRENCY)
     inserted = 0
-    checked_candidates = 0
-    found_accounts = 0
+    accounts_walked = 0
+    matches_attempted = 0
 
     async with httpx.AsyncClient(
-        timeout=httpx.Timeout(15.0, connect=8.0),
+        timeout=httpx.Timeout(20.0, connect=8.0),
         headers={
             "User-Agent": ENRICH_USER_AGENT,
             "Accept": "application/json",
         },
         follow_redirects=True,
     ) as client:
+        # Local first (high-signal): users who explicitly chose
+        # canada.masto.host as their home server.
+        local = await _walk_masto_directory(client, local_only=True)
+        # Federated next: accounts the instance has interacted with —
+        # noisier, but a Canadian politician on (e.g.) socialbc.ca will
+        # show up here once any canada.masto.host user follows them.
+        federated = await _walk_masto_directory(client, local_only=False)
 
-        async def try_one(row) -> int:
-            nonlocal checked_candidates, found_accounts
-            pid = str(row["id"])
-            name = row["name"] or ""
-            name_tokens = {
-                t.lower()
-                for t in _normalize_name(name).split()
-                if len(t) >= 3
-            }
-            if not name_tokens:
-                return 0
+        # De-dup by `acct` (acct strings include the home instance for
+        # federated rows: ``user@instance``).
+        seen_acct: set[str] = set()
+        for acct_dict in (*local, *federated):
+            key = (acct_dict.get("acct") or "").lower()
+            if not key or key in seen_acct:
+                continue
+            seen_acct.add(key)
+            accounts_walked += 1
 
-            inserted_here = 0
-            for handle in _mastodon_candidate_handles(name):
-                async with sem:
-                    checked_candidates += 1
-                    account = await _mastodon_lookup(client, handle)
-                    # polite pacing
-                    await asyncio.sleep(0.05)
-                if not account:
-                    continue
+            disp_raw = acct_dict.get("display_name") or ""
+            # Normalize display the same way we normalize politician names —
+            # strip diacritics, lowercase, collapse non-alphanumerics to
+            # single spaces — so substring-search works across accent
+            # variants and punctuation choices.
+            disp_norm = " ".join(_normalize_name(disp_raw).split())
+            if not disp_norm:
+                continue
 
-                # Confirmation: does the display_name actually look like
-                # this politician? If not, we refuse to attach the handle.
-                disp = (account.get("display_name") or "").lower()
-                disp_tokens = {
-                    t for t in re.split(r"[^a-z0-9]+", disp) if len(t) >= 3
-                }
-                overlap = (
-                    len(name_tokens & disp_tokens) / max(1, len(name_tokens))
-                )
-                if overlap < MASTO_DISPLAY_MIN_OVERLAP:
-                    continue
+            # Bio gate: refuse any match whose bio doesn't carry at least
+            # one Canadian-politics keyword. Stripping HTML tags first.
+            bio = re.sub(r"<[^>]+>", " ", acct_dict.get("note") or "").lower()
+            if not any(kw in bio for kw in MASTO_POLITICAL_KEYWORDS):
+                continue
 
-                found_accounts += 1
-                username = account.get("username") or handle
-                url = account.get("url") or f"https://{MASTO_HOST}/@{username}"
-                try:
-                    canon = await upsert_social(
-                        db, pid, "mastodon", url,
-                        source="masto_host",
-                        confidence=min(1.0, 0.70 + overlap * 0.30),
-                        evidence_url=url,
-                    )
-                except Exception as exc:
-                    log.warning("mastodon upsert failed for %s: %s", pid, exc)
-                    continue
-                if canon is not None:
-                    inserted_here += 1
-                    # One confirmed account is enough — don't keep probing.
+            # Strict full-name substring match: politician's normalized
+            # name must appear as a contiguous substring of the
+            # normalized display_name (in either word order). This is
+            # much stricter than token-overlap — "michael ma" no longer
+            # matches every Mastodon "Michael Mxxx" account.
+            best: Optional[tuple[str, str]] = None
+            for pid, pname, variants in pol_index:
+                if any(
+                    f" {v} " in f" {disp_norm} "
+                    for v in variants
+                ):
+                    best = (pid, pname)
                     break
-            return inserted_here
+            if best is None:
+                continue
 
-        results = await asyncio.gather(*(try_one(r) for r in rows))
-        inserted = sum(results)
+            matches_attempted += 1
+            pid, pname = best
+            username = acct_dict.get("username") or ""
+            url = acct_dict.get("url") or (
+                f"https://{MASTO_HOST}/@{username}" if username else None
+            )
+            if not url:
+                continue
+            try:
+                canon = await upsert_social(
+                    db, pid, "mastodon", url,
+                    source="masto_host",
+                    # Even with the strict gate, route to the admin
+                    # review queue — Mastodon display_name can be
+                    # impersonated and the platform has no verification.
+                    confidence=0.85,
+                    evidence_url=url,
+                )
+            except Exception as exc:
+                log.warning("mastodon upsert failed for %s: %s", pid, exc)
+                continue
+            if canon is not None:
+                inserted += 1
+                log.info(
+                    "matched mastodon %s -> %s (display=%r)",
+                    acct_dict.get("acct"), pname, disp_raw,
+                )
 
     console.print(
-        f"[green]✓ Mastodon enrichment: probed {checked_candidates} candidate "
-        f"handles, matched {found_accounts} accounts, upserted {inserted}[/green]"
+        f"[green]✓ Mastodon enrichment: walked {accounts_walked} accounts, "
+        f"attempted {matches_attempted} matches, upserted {inserted}[/green]"
     )
     return inserted
 
 
 # ── Orchestrator ──────────────────────────────────────────────────────────
 
-async def enrich_all_socials(db: Database) -> None:
+async def enrich_all_socials(
+    db: Database,
+    *,
+    include_inactive: bool = False,
+) -> None:
     """Run wikidata → openparl → mastodon in that order."""
-    total_wiki = await enrich_from_wikidata(db)
-    total_parl = await enrich_from_openparl(db)
-    total_masto = await enrich_mastodon_candidates(db)
+    total_wiki = await enrich_from_wikidata(db, include_inactive=include_inactive)
+    total_parl = await enrich_from_openparl(db, include_inactive=include_inactive)
+    total_masto = await enrich_mastodon_candidates(db, include_inactive=include_inactive)
+    scope = "inactive+active" if include_inactive else "active"
     console.print(
-        f"[bold green]Enrichment complete — "
+        f"[bold green]Enrichment complete ({scope}) — "
         f"wikidata={total_wiki} openparl={total_parl} mastodon={total_masto}"
         f"[/bold green]"
     )

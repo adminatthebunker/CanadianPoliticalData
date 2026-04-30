@@ -1,0 +1,718 @@
+/* ── /semantic-map ───────────────────────────────────────── */
+/*
+ * Layout: header → filters → breadcrumbs → stage (the renderer fills
+ * remaining viewport height) → drawer (slides in from right on
+ * desktop, bottom sheet on mobile). 2D and 3D renderers share the
+ * stage; their pointer events fan out to the same handlers.
+ */
+
+.semantic-map {
+  display: flex;
+  flex-direction: column;
+  min-height: calc(100vh - 4rem);
+  padding: 1rem 1.25rem 0 1.25rem;
+  gap: .75rem;
+}
+/* When the explorer is the page, neutralise the shell's bottom padding
+   so the stage can run to the bottom edge of the viewport. */
+.shell:has(> .semantic-map) { padding-bottom: 0; }
+
+.semantic-map__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+.semantic-map__title {
+  margin: 0 0 .25rem 0;
+  font-size: 1.65rem;
+  font-weight: 600;
+}
+.semantic-map__subtitle {
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: .95rem;
+  max-width: 60ch;
+}
+.semantic-map__header-actions {
+  display: flex;
+  gap: .5rem;
+  align-items: center;
+}
+
+/* ── Mode toggle ──────────────────────────────────────── */
+
+.semantic-map__mode-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--panel);
+}
+.semantic-map__mode-btn {
+  border: 0;
+  background: transparent;
+  color: var(--ink-muted);
+  padding: .4rem .9rem;
+  font-weight: 600;
+  cursor: pointer;
+  border-radius: 0;
+}
+.semantic-map__mode-btn.is-active {
+  background: var(--accent);
+  color: #fff;
+}
+.semantic-map__mode-btn:disabled {
+  opacity: .4;
+  cursor: not-allowed;
+}
+
+/* ── Filter panel ─────────────────────────────────────── */
+
+.semantic-map__filters {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: .75rem;
+  display: flex;
+  flex-direction: column;
+  gap: .5rem;
+}
+.semantic-map__filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .75rem;
+  align-items: end;
+}
+.semantic-map__filter-row--types {
+  gap: .35rem;
+}
+.semantic-map__filter-field {
+  display: flex;
+  flex-direction: column;
+  gap: .2rem;
+  font-size: .8rem;
+  color: var(--ink-muted);
+}
+.semantic-map__filter-field span { font-weight: 500; }
+.semantic-map__filter-field select,
+.semantic-map__filter-field input[type="text"],
+.semantic-map__filter-field input[type="date"] {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--ink);
+  padding: .35rem .5rem;
+  border-radius: 5px;
+  font: inherit;
+}
+.semantic-map__filter-field--checkbox {
+  flex-direction: row;
+  align-items: center;
+  gap: .4rem;
+  padding-bottom: .35rem;
+  color: var(--ink);
+}
+.semantic-map__filter-reset {
+  margin-left: auto;
+}
+
+.semantic-map__type-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: .35rem;
+  padding: .25rem .55rem;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--panel-2);
+  color: var(--ink-muted);
+  font-size: .8rem;
+  cursor: pointer;
+  user-select: none;
+}
+.semantic-map__type-chip input { margin: 0; }
+.semantic-map__type-chip.is-active {
+  border-color: var(--accent);
+  color: var(--ink);
+  background: rgba(225,29,72,.18);
+}
+
+/* ── Breadcrumbs ──────────────────────────────────────── */
+
+.semantic-map__breadcrumbs {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  font-size: .85rem;
+  color: var(--ink-muted);
+  flex-wrap: wrap;
+}
+.semantic-map__crumb-btn {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--ink);
+  padding: .25rem .55rem;
+  border-radius: 14px;
+  font-size: .8rem;
+}
+.semantic-map__crumb-btn:disabled {
+  opacity: .4;
+  cursor: not-allowed;
+}
+.semantic-map__crumb-meta {
+  margin-left: auto;
+}
+
+/* ── Workspace: stage + panel side-by-side ───────────── */
+
+.semantic-map__workspace {
+  display: flex;
+  gap: .75rem;
+  flex: 1 1 auto;
+  min-height: 0;
+  align-items: stretch;
+}
+@media (max-width: 768px) {
+  .semantic-map__workspace {
+    flex-direction: column;
+  }
+}
+
+/* ── Panel column (search + list) ────────────────────── */
+
+.semantic-map__panel-column {
+  flex: 0 0 320px;
+  display: flex;
+  flex-direction: column;
+  gap: .5rem;
+  min-height: 0;
+  max-height: min(78vh, 880px);
+}
+@media (max-width: 768px) {
+  .semantic-map__panel-column {
+    flex: 0 0 auto;
+    max-height: 56vh;
+  }
+}
+
+/* ── Search ──────────────────────────────────────────── */
+
+.semantic-map__search {
+  position: relative;
+  flex: 0 0 auto;
+}
+.semantic-map__search-input {
+  width: 100%;
+  padding: .5rem .75rem;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--ink);
+  font-size: .85rem;
+  outline: none;
+  box-sizing: border-box;
+}
+.semantic-map__search-input:focus-visible {
+  border-color: rgba(125, 211, 252, 0.55);
+  box-shadow: 0 0 0 2px rgba(125, 211, 252, 0.18);
+}
+.semantic-map__search-input::placeholder {
+  color: var(--ink-muted);
+}
+.semantic-map__search-results {
+  position: absolute;
+  inset: 100% 0 auto 0;
+  margin-top: .25rem;
+  list-style: none;
+  padding: .25rem 0;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  max-height: 320px;
+  overflow-y: auto;
+  z-index: 50;
+}
+.semantic-map__search-empty {
+  padding: .55rem .75rem;
+  color: var(--ink-muted);
+  font-size: .8rem;
+}
+.semantic-map__search-result {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .55rem;
+  padding: .42rem .75rem;
+  font-size: .82rem;
+  cursor: pointer;
+  border-left: 3px solid transparent;
+}
+.semantic-map__search-result:hover,
+.semantic-map__search-result.is-active {
+  background: rgba(148, 163, 184, 0.16);
+  border-left-color: rgba(125, 211, 252, 0.65);
+}
+.semantic-map__search-result-label {
+  flex: 1 1 auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.semantic-map__search-result-meta {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  font-size: .72rem;
+  color: var(--ink-muted);
+}
+
+/* ── Cluster list panel ──────────────────────────────── */
+
+.semantic-map__panel {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  min-height: 200px;
+}
+.semantic-map__panel-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: .5rem;
+  padding: .65rem .85rem;
+  border-bottom: 1px solid var(--border);
+}
+.semantic-map__panel-heading {
+  font-size: .9rem;
+  font-weight: 600;
+  margin: 0;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1 1 auto;
+}
+.semantic-map__panel-meta {
+  font-size: .72rem;
+  color: var(--ink-muted);
+  flex: 0 0 auto;
+}
+.semantic-map__panel-empty {
+  padding: 1rem;
+  color: var(--ink-muted);
+  font-size: .85rem;
+}
+.semantic-map__panel-list {
+  list-style: none;
+  margin: 0;
+  padding: .25rem 0;
+  overflow-y: auto;
+  flex: 1 1 auto;
+}
+.semantic-map__panel-list li {
+  margin: 0;
+}
+.semantic-map__panel-row {
+  display: flex;
+  align-items: center;
+  gap: .55rem;
+  width: 100%;
+  padding: .42rem .85rem;
+  background: transparent;
+  border: 0;
+  border-left: 3px solid transparent;
+  color: var(--ink);
+  text-align: left;
+  cursor: pointer;
+  font-size: .82rem;
+  transition: background-color 100ms ease, border-color 100ms ease;
+}
+.semantic-map__panel-row:hover,
+.semantic-map__panel-row:focus-visible,
+.semantic-map__panel-row.is-hovered {
+  background: rgba(148, 163, 184, 0.12);
+  border-left-color: rgba(148, 163, 184, 0.55);
+  outline: none;
+}
+.semantic-map__panel-row.is-hovered {
+  background: rgba(148, 163, 184, 0.18);
+}
+.semantic-map__panel-swatch {
+  flex: 0 0 10px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35);
+}
+.semantic-map__panel-label {
+  flex: 1 1 auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.semantic-map__panel-row-count {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  font-size: .72rem;
+  color: var(--ink-muted);
+  letter-spacing: .01em;
+}
+
+/* ── Stage (renderer canvas) ─────────────────────────── */
+
+.semantic-map__stage {
+  flex: 1 1 auto;
+  min-height: min(78vh, 880px);
+  /* Subtle radial gradient: brighter at the centre, fading to near-black
+     at the corners. Adds depth so the empty space reads as space, not
+     void. The fallback solid colour kicks in if browsers ever drop
+     radial-gradient support — they won't, but defence-in-depth. */
+  background:
+    radial-gradient(ellipse at center,
+      rgba(56, 84, 129, 0.28) 0%,
+      rgba(15, 23, 42, 0.95) 55%,
+      #020617 100%);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  justify-content: stretch;
+  box-shadow: inset 0 0 60px rgba(0, 0, 0, 0.45);
+}
+
+.semantic-map__svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+  touch-action: none;
+  user-select: none;
+}
+/* R3F's <Canvas> renders a wrapper div whose inline height:100% can't
+   resolve against the stage's `min-height` (CSS percentage heights only
+   resolve against an explicit `height`). Pin it absolutely instead —
+   the stage is already `position: relative`. */
+.semantic-map__stage > .semantic-map__canvas {
+  position: absolute !important;
+  inset: 0;
+  width: 100% !important;
+  height: 100% !important;
+}
+.semantic-map__canvas canvas {
+  display: block;
+  /* Prevent the browser from interpreting wheel/touch as page scroll
+     when the cursor is over the WebGL canvas — OrbitControls owns
+     those gestures. Without this, scroll-to-zoom fights page scroll. */
+  touch-action: none;
+}
+/* While the cursor is in the stage, suppress page-level wheel-to-scroll
+   so OrbitControls' zoom handler is the sole consumer. The stage is
+   also overscroll-contained so that even when zoom is at max, the page
+   doesn't start scrolling on continued wheel input. */
+.semantic-map__stage {
+  overscroll-behavior: contain;
+}
+.semantic-map__cluster:hover circle { stroke-opacity: 0.95; }
+.semantic-map__point { cursor: default; }
+.semantic-map__tooltip {
+  background: rgba(15, 23, 42, 0.92);
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  color: #f1f5f9;
+  font-size: .8rem;
+  padding: .4rem .6rem;
+  border-radius: 6px;
+  pointer-events: none;
+  white-space: nowrap;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+}
+/* 3D cluster label rendered as an HTML overlay (drei <Html>) so it
+   always sits above the WebGL scene regardless of depth. */
+.semantic-map__cluster-label {
+  pointer-events: none;
+  user-select: none;
+  text-align: center;
+  font-family: inherit;
+  text-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.9),
+    0 0 12px rgba(0, 0, 0, 0.7);
+  white-space: nowrap;
+}
+.semantic-map__cluster-label-title {
+  color: #f8fafc;
+  font-weight: 600;
+  font-size: 1rem;
+  letter-spacing: -.005em;
+}
+.semantic-map__cluster-label-count {
+  color: #cbd5e1;
+  font-size: .78rem;
+  margin-top: .1rem;
+}
+/* ── Navigation hints overlay ─────────────────────────────── */
+
+.semantic-map__hints {
+  position: absolute;
+  right: .85rem;
+  bottom: .85rem;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: .5rem;
+  pointer-events: none;
+}
+.semantic-map__hints-toggle {
+  pointer-events: auto;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 50%;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: rgba(15, 23, 42, 0.78);
+  color: #f1f5f9;
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(4px);
+  transition: background .15s, border-color .15s, transform .15s;
+  font-weight: 500;
+}
+.semantic-map__hints-toggle:hover {
+  background: rgba(15, 23, 42, 0.95);
+  border-color: rgba(148, 163, 184, 0.6);
+  transform: scale(1.06);
+}
+.semantic-map__hints-body {
+  pointer-events: auto;
+  background: rgba(15, 23, 42, 0.92);
+  border: 1px solid rgba(148, 163, 184, 0.32);
+  border-radius: 10px;
+  padding: .7rem .85rem .65rem;
+  color: #f1f5f9;
+  font-size: .82rem;
+  min-width: 14rem;
+  backdrop-filter: blur(4px);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
+  animation: semantic-map-hints-in .18s ease-out;
+}
+@keyframes semantic-map-hints-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.semantic-map__hints-title {
+  font-size: .72rem;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--ink-muted);
+  margin-bottom: .4rem;
+}
+.semantic-map__hints-list {
+  list-style: none;
+  margin: 0 0 .55rem 0;
+  padding: 0;
+  display: grid;
+  gap: .3rem;
+}
+.semantic-map__hints-list li {
+  display: grid;
+  grid-template-columns: 5.2rem 1fr;
+  align-items: center;
+  gap: .55rem;
+}
+.semantic-map__hints-list kbd {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: .72rem;
+  background: rgba(30, 41, 59, 0.95);
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  color: #cbd5e1;
+  border-radius: 4px;
+  padding: .12rem .4rem;
+  text-align: center;
+  min-width: 0;
+}
+.semantic-map__hints-reset {
+  pointer-events: auto;
+  width: 100%;
+  background: rgba(225, 29, 72, 0.18);
+  border: 1px solid rgba(225, 29, 72, 0.5);
+  color: #fda4af;
+  border-radius: 6px;
+  padding: .35rem .5rem;
+  font-size: .8rem;
+  cursor: pointer;
+  transition: background .15s;
+}
+.semantic-map__hints-reset:hover {
+  background: rgba(225, 29, 72, 0.32);
+  color: #fff;
+}
+@media (max-width: 640px) {
+  .semantic-map__hints { right: .55rem; bottom: .55rem; }
+  .semantic-map__hints-body { min-width: 12rem; font-size: .78rem; }
+}
+
+/* Hover-label variant: shown only while a non-headliner cluster is
+   hovered, so it gets a subtle pill background to read against any
+   neighbour sphere. */
+.semantic-map__cluster-label--hover {
+  background: rgba(2, 6, 23, 0.78);
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 8px;
+  padding: .35rem .6rem;
+  white-space: nowrap;
+  text-shadow: none;
+}
+
+.semantic-map__empty {
+  margin: auto;
+  padding: 2rem;
+  text-align: center;
+  color: var(--ink-muted);
+  max-width: 36rem;
+}
+.semantic-map__empty code {
+  background: var(--panel-2);
+  padding: .1rem .35rem;
+  border-radius: 4px;
+  font-size: .9em;
+}
+.semantic-map__empty-hint {
+  margin-top: .25rem;
+  font-size: .85rem;
+  opacity: .8;
+}
+
+/* ── Drawer ───────────────────────────────────────────── */
+
+.semantic-map__drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(420px, 100vw);
+  background: var(--panel);
+  border-left: 1px solid var(--border);
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  z-index: 50;
+  overflow-y: auto;
+}
+.semantic-map__drawer-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: 1rem 1.1rem .25rem 1.1rem;
+  gap: .5rem;
+}
+.semantic-map__drawer-eyebrow {
+  font-size: .75rem;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--ink-muted);
+}
+.semantic-map__drawer-title {
+  font-size: 1.15rem;
+  margin: .15rem 0 0 0;
+}
+.semantic-map__drawer-close {
+  font-size: 1.4rem;
+  line-height: 1;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  width: 2rem;
+  height: 2rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.semantic-map__drawer-section {
+  padding: .25rem 1.1rem 1rem 1.1rem;
+}
+.semantic-map__drawer-section h3 {
+  font-size: .85rem;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--ink-muted);
+  margin: .25rem 0 .5rem 0;
+}
+.semantic-map__drawer-terms {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: .15rem .75rem;
+  font-size: .9rem;
+}
+.semantic-map__drawer-terms .weight {
+  color: var(--ink-muted);
+  font-variant-numeric: tabular-nums;
+  font-size: .82rem;
+}
+.semantic-map__drawer-chunks {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: .35rem;
+}
+.semantic-map__chunk-link {
+  display: block;
+  padding: .55rem .65rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-2);
+  color: var(--ink);
+  text-decoration: none;
+}
+.semantic-map__chunk-link:hover {
+  background: rgba(225,29,72,.12);
+  border-color: var(--accent);
+  text-decoration: none;
+}
+.semantic-map__chunk-meta {
+  font-size: .75rem;
+  color: var(--ink-muted);
+  margin-bottom: .15rem;
+}
+.semantic-map__chunk-party {
+  color: var(--ink);
+}
+.semantic-map__chunk-snippet {
+  font-size: .9rem;
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.semantic-map__drawer-empty {
+  color: var(--ink-muted);
+  font-size: .9rem;
+}
+
+/* ── Mobile (max-width: 640px) ────────────────────────── */
+
+@media (max-width: 640px) {
+  .semantic-map { padding: .75rem .75rem 0 .75rem; }
+  .semantic-map__filter-row { flex-direction: column; align-items: stretch; gap: .5rem; }
+  .semantic-map__filter-reset { margin-left: 0; align-self: flex-start; }
+  .semantic-map__drawer {
+    top: auto;
+    width: 100vw;
+    max-height: 70vh;
+    border-left: 0;
+    border-top: 1px solid var(--border);
+    border-radius: 12px 12px 0 0;
+  }
+}

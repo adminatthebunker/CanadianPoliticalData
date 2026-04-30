@@ -1,6 +1,6 @@
 # Timeline / direction
 
-Where the project is going, in priority order. Written 2026-04-26.
+Where the project is going, in priority order. Last reviewed 2026-04-29.
 
 This is the **what we're building next** doc. For the **why**, read [`goals.md`](./goals.md). For the **how**, read the per-feature plan under [`plans/`](./plans/) linked from each item below. When this file disagrees with the plan docs, the plan docs win — keep this one short and reorder it as priorities shift.
 
@@ -28,10 +28,10 @@ These are partially built and the goal is to finish them, not to start something
 
 The product is only as definitive as the data behind it. Database expansion stays priority one until the remaining Hansard pipelines are live and votes are modelled.
 
-- **Remaining Hansard pipelines: ON → NT/NU → SK → PE/YT.** Six jurisdictions left. ON is the largest caucus and the highest-value next build; NT/NU need consensus-government schema (no party whip); SK is PDF-only and needs dedicated parser investment; PE/YT sit behind WAFs/CAPTCHAs. Each is gated on the **research-handoff rule** (see CLAUDE.md convention #5) — user research pass first, code second. Status table: [`research/overview.md`](./research/overview.md).
+- **Remaining Hansard pipelines: NT/NU → SK → PE/YT.** Five jurisdictions left (ON shipped 2026-04-24). NT/NU need consensus-government schema (no party whip); SK is PDF-only and needs dedicated parser investment; PE/YT sit behind WAFs/CAPTCHAs. Each is gated on the **research-handoff rule** (see CLAUDE.md convention #5) — user research pass first, code second. Status table: [`research/overview.md`](./research/overview.md).
 - **Votes table — apply migration 0018.** Drafted, intentionally unapplied. Holding for real NT/NU consensus-government data so the `vote_type` discriminator (`division | voice | acclamation | consensus`) gets exercised on every shape it needs to handle. Plan: [`plans/semantic-layer.md`](./plans/semantic-layer.md) § 0018.
 - **Committee transcripts.** Same speech pipeline as Hansard, `speech_type='committee'`. Deferred until votes land so the table stays coherent. Plan: [`plans/semantic-layer.md`](./plans/semantic-layer.md) § phase 4.
-- **Historical-roster backfill — propagate AB/MB pattern to ON/BC/QC.** AB (+901 former MLAs) and MB (+764) shipped 2026-04-22/23 and unlocked date-windowed speaker resolution on pre-current-session Hansard. Same pattern needed for ON/BC/QC before their Hansard speaker attribution is meaningful pre-2010s.
+- **Historical-roster backfills — ✅ done across AB / MB / ON / QC / BC.** AB (+901, 2026-04-22), MB (+764, 2026-04-23), ON (2026-04-26), QC (~2K via assnat alphabet-walk, 2026-04-27), BC pre-P35 (+160 via Wikipedia + extended Speaker roster P29-P37, 2026-04-29). BC corpus 67.6% → 91.9% attributed. Remaining 8% residual (Committee-Chair / Chairman / Deputy-Speaker rotating roles) needs per-sitting committee-membership data — different workstream, not date-windowed-only.
 - **Corrections inbox — SMTP poller + admin review queue.** Web flag-button shipped; `correction_submissions` table exists (migration 0020); SMTP ingest and admin UI not built yet. Small but blocks the public correction policy.
 - **Apify social-post deep enrichment.** Phase 0/1 (schema + Twitter pilot) → 2–5 (Instagram, TikTok, Bluesky direct, Mastodon direct, reverse-WHOIS). $100–$250/mo steady-state on quarterly refresh. Plan: [`plans/apify-social-deep-enrichment.md`](./plans/apify-social-deep-enrichment.md).
 - **Bill text for SK/PE/YT.** 10/13 sub-national + federal already have bills. Lower priority than Hansard for the same three jurisdictions; bundle the work when their Hansard pipeline lands.
@@ -89,9 +89,18 @@ Not horizon-bound. These need attention every cycle regardless of what else is i
 
 ---
 
-## Recently shipped (last two cycles, 2026-04-16 → 2026-04-26)
+## Recently shipped (last two cycles, 2026-04-23 → 2026-04-29)
 
 For context on what just landed, so this doc reads against a known baseline.
+
+### Cycle 2026-04-26 → 2026-04-29
+
+- **BC pre-P35 historical roster + dated resolver + extended Speaker roster** — Wikipedia per-parliament wikitable parser ingested 160 pre-1992 MLAs across P29-P34 + 359 per-parliament term rows; new `resolve-bc-speakers-dated` CTE with inline surname extraction; `SPEAKER_ROSTER["BC"]` extended back from P38 to P29 (+13 historical Speakers). BC corpus attribution lift: 67.6% → 91.9% (+136K speeches, +20K Speaker-tagged, +186K chunks). Runbook: [`runbooks/handoff-2026-04-29-bc-pre-p35-roster.md`](./runbooks/handoff-2026-04-29-bc-pre-p35-roster.md) (2026-04-29).
+- **TEI + scanner-side embed resilience layer** — device-aware TEI healthcheck (single-token /embed, fails on CPU fallback), restart-on-failure cap, preflight inference-latency check, per-batch exponential backoff, abort-on-5-consecutive-failures guard. Closes the GPU-regression silent-CPU-fallback gap. (2026-04-28)
+- **`chunk-and-embed-speeches` daily schedule** — single combined Click command + `scanner_schedules` row at 08:00 UTC (02:00 Mountain), atomic chunk → embed ordering in one process. (2026-04-29)
+- **BC + QC historical-roster backfills** — QC alphabet-walk of assnat.qc.ca (2,090 career spans extracted; migration 0038 promoted `qc_assnat_id` to UNIQUE partial after merging an Open North Éric/Eric Girard duplicate); BC `enrich-bc-member-parliaments` (LIMS GraphQL `allMemberParliaments`, 750 edges, BC terms 103 → 853). QC P39-P42 +12-33% on resolution. (2026-04-27)
+- **BC pre-P38 Hansard parser** — era-branching `bc_hansard_parse.py` extension for legacy ALL-CAPS (P29-P34) + mixed-case (P36-P37) markup. +378K BC speeches; corpus ~198K → ~577K. (2026-04-27)
+- **ON historical MPP roster + pre-2007 Hansard parser** — propagated date-windowed-resolver pattern to ON. (2026-04-26)
 
 ### Cycle 2026-04-23 → 2026-04-26
 
@@ -102,11 +111,3 @@ For context on what just landed, so this doc reads against a known baseline.
 - **Operational hygiene** — `OPENROUTER_MODEL` → `OPENROUTER_CONTRADICTIONS_MODEL` rename with legacy fallback + boot-time deprecation warning; `scripts/backup-database.sh` hardened (`.env`-sourced knobs, file-pinned `DB_PASSWORD`, zstd default 19 → 3); BetaBadge in the site header; `docs/api.md` Search section finally written (2026-04-26).
 - **Stripe Tax wiring** — `STRIPE_TAX_ENABLED` env flag, `automatic_tax` + address collection + `tax_id_collection` on the Checkout Session when on, `tax_enabled` field on `/me/credits/packs`, frontend disclosure on `/account/credits`, plan-doc + operations.md activation checklist. Default off — operator dashboard activation (Stripe Tax + Canadian registration + per-product tax codes) is the remaining deploy step (2026-04-26).
 
-### Cycle 2026-04-16 → 2026-04-23
-
-- **Phase 1a billing rail** — credit ledger, credit-pack purchases, admin comp, suspended-tier enforcement (migration 0033).
-- **Qwen3-Embedding-0.6B migration** — re-embedded 1.48 M chunks, dropped legacy BGE-M3 column, retired the FastAPI/FlagEmbedding wrapper from the critical path (migrations 0023–0025).
-- **MB Hansard full-span ingest** — legs 37–43, 1999-11-26 → 2026-04-16, 407,695 speeches across 2,325 sittings; modern + Word-97-era parsers.
-- **AB + MB historical roster backfill** — +901 former AB MLAs, +764 former MB MLAs; date-windowed speaker resolver pattern.
-- **Magic-link user accounts + saved searches + alerts worker** (migrations 0027–0029).
-- **`is_admin` flag collapse** — old `ADMIN_TOKEN` flow removed; admin is now a DB role on the user-session flow (migration 0029).

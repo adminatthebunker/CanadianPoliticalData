@@ -51,7 +51,7 @@ console = Console()
 USER_AGENT = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
     "CanadianPoliticalDataBot/1.0 Chrome/126.0.0.0 Safari/537.36 "
-    "(+https://canadianpoliticaldata.ca)"
+    "(+https://canadianpoliticaldata.org)"
 )
 
 # Concurrency / politeness knobs.

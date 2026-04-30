@@ -72,7 +72,7 @@ REQUEST_TIMEOUT = 60
 REQUEST_DELAY_SECONDS = 1.0  # Polite to gov.mb.ca
 
 HEADERS = {
-    "User-Agent": "CanadianPoliticalDataBot/1.0 (+https://canadianpoliticaldata.ca)",
+    "User-Agent": "CanadianPoliticalDataBot/1.0 (+https://canadianpoliticaldata.org)",
     "Accept": "text/html,application/xhtml+xml",
     "Accept-Language": "en-CA,en;q=0.9",
 }

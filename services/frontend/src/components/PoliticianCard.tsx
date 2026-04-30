@@ -74,9 +74,7 @@ export function PoliticianCard({ politician }: Props) {
 
   return (
     <div className="pol-card">
-      <Link to={detailHref} className="pol-card__stretch" aria-label={`View ${name}`} />
-
-      <div className="pol-card__top">
+      <Link to={detailHref} className="pol-card__top" aria-label={`View ${name}`}>
         <div className="pol-card__photo">
           {photo_url ? (
             <img src={photo_url} alt="" loading="lazy" referrerPolicy="no-referrer" />
@@ -95,7 +93,7 @@ export function PoliticianCard({ politician }: Props) {
             {province_territory ? ` · ${province_territory}` : ""}
           </div>
         </div>
-      </div>
+      </Link>
 
       {latest_speech_text && (
         <Link

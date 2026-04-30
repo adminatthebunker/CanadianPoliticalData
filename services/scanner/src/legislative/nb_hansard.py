@@ -99,7 +99,7 @@ REQUEST_TIMEOUT = 120
 PDF_FETCH_DELAY_SECONDS = 1.5
 
 HEADERS = {
-    "User-Agent": "SovereignWatchBot/1.0 (+https://canadianpoliticaldata.ca; civic-transparency)",
+    "User-Agent": "SovereignWatchBot/1.0 (+https://canadianpoliticaldata.org; civic-transparency)",
     "Accept": "text/html,application/xhtml+xml,application/pdf",
 }
 

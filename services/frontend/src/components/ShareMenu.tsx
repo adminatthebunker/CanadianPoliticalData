@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 
-const SHARE_URL = "https://canadianpoliticaldata.ca";
+const SHARE_URL = "https://canadianpoliticaldata.org";
 const SHARE_TITLE = "Canadian Political Data";
 const SHARE_TEXT = "Canada's open source for political data.";
 

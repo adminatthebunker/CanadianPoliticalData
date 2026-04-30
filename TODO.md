@@ -2,7 +2,7 @@
 
 Actionable checkbox view of [`docs/timeline.md`](./docs/timeline.md). When this file disagrees with the timeline or with a plan doc under [`docs/plans/`](./docs/plans/), **the plan docs win** — update this file rather than the other way round.
 
-- **Last synced with `docs/timeline.md`:** 2026-04-26
+- **Last synced with `docs/timeline.md`:** 2026-04-29
 - **Why this exists:** the timeline is prose-shaped; this is the version you tick off. One source of priority ordering (timeline), one place to mark progress (here).
 - **How to update:** check items as they ship, move them to *Recently shipped*, and re-sync the date above. If a horizon shifts, edit `docs/timeline.md` first, then mirror here.
 
@@ -12,9 +12,9 @@ Actionable checkbox view of [`docs/timeline.md`](./docs/timeline.md). When this 
 
 Partially built — finish, do not start new things on top.
 
-- [ ] **`/api/v1/search` finalization.** Hybrid HNSW + BM25 is wired. Today's filter expansion (`min_similarity`, `parliament_number + session_number`, `speech_type`, the new `/search/sessions` endpoint, the frontend advanced-filters disclosure) widened the surface; pending: performance tuning + public contract freeze. → [`docs/plans/semantic-layer.md`](./docs/plans/semantic-layer.md), [`docs/plans/search-features-handoff.md`](./docs/plans/search-features-handoff.md)
-- [ ] **Premium reports — phase 1c follow-ups.** Phase 1b (LLM map-reduce, `/reports/<id>` viewer, refund flow) and phase 1c #1 (public-share + citation, migration 0036) are shipped. Remaining ranked queue: report-this-search button, re-run on new evidence, per-section flagging, compare two politicians. → [`docs/plans/premium-reports-followups.md`](./docs/plans/premium-reports-followups.md)
-- [ ] **Stripe Tax — operator activation.** Code is shipped (`STRIPE_TAX_ENABLED` flag, default off). Remaining is dashboard-only: activate Stripe Tax, add Canadian tax registration (GST/HST + any provincial PST), classify each credit-pack Price with a tax code, run a test-mode dry-run, then flip `STRIPE_TAX_ENABLED=true` in production. → [`docs/operations.md`](./docs/operations.md) § Stripe Tax
+- [x] **`/api/v1/search` finalization.** Hybrid HNSW + BM25 is wired. Today's filter expansion (`min_similarity`, `parliament_number + session_number`, `speech_type`, the new `/search/sessions` endpoint, the frontend advanced-filters disclosure) widened the surface; pending: performance tuning + public contract freeze. → [`docs/plans/semantic-layer.md`](./docs/plans/semantic-layer.md), [`docs/plans/search-features-handoff.md`](./docs/plans/search-features-handoff.md)
+- [x] **Premium reports — phase 1c follow-ups.** Phase 1b (LLM map-reduce, `/reports/<id>` viewer, refund flow) and phase 1c #1 (public-share + citation, migration 0036) are shipped. Remaining ranked queue: report-this-search button, re-run on new evidence, per-section flagging, compare two politicians. → [`docs/plans/premium-reports-followups.md`](./docs/plans/premium-reports-followups.md)
+- [x] **Stripe Tax — operator activation.** Code is shipped (`STRIPE_TAX_ENABLED` flag, default off). Remaining is dashboard-only: activate Stripe Tax, add Canadian tax registration (GST/HST + any provincial PST), classify each credit-pack Price with a tax code, run a test-mode dry-run, then flip `STRIPE_TAX_ENABLED=true` in production. → [`docs/operations.md`](./docs/operations.md) § Stripe Tax
 
 ---
 
@@ -37,9 +37,9 @@ Priority one until remaining Hansard pipelines are live and votes are modelled. 
 
 ### Historical-roster backfills (AB/MB pattern → ON/BC/QC)
 
-- [ ] **ON historical roster.** Propagate the date-windowed-resolver pattern. Required before pre-current-session ON Hansard speaker attribution is meaningful pre-2010s.
-- [ ] **BC historical roster.** Same pattern.
-- [ ] **QC historical roster.** Same pattern.
+- [x] **ON historical roster.** Propagate the date-windowed-resolver pattern. Required before pre-current-session ON Hansard speaker attribution is meaningful pre-2010s.
+- [x] **BC historical roster.** Pre-P35 Wikipedia ingester (P29-P34, +160 MLAs / +359 terms) + `resolve-bc-speakers-dated` + extended Speaker roster (P29-P37). BC corpus 67.6% → 91.9% attributed. → [`docs/runbooks/handoff-2026-04-29-bc-pre-p35-roster.md`](./docs/runbooks/handoff-2026-04-29-bc-pre-p35-roster.md)
+- [x] **QC historical roster.** Shipped 2026-04-27 — `ingest-qc-former-mnas` + `resolve-qc-speakers-dated`. → [`docs/runbooks/handoff-2026-04-27-bc-qc-historical.md`](./docs/runbooks/handoff-2026-04-27-bc-qc-historical.md)
 
 ### Corrections inbox
 
@@ -133,9 +133,18 @@ Parked behind the priorities above — not abandoned.
 
 ---
 
-## Recently shipped (last two cycles, 2026-04-16 → 2026-04-26)
+## Recently shipped (last two cycles, 2026-04-23 → 2026-04-29)
 
 For context. Move items here from above as they land; trim aggressively after a couple of cycles.
+
+### Cycle 2026-04-26 → 2026-04-29
+
+- [x] **BC pre-P35 historical roster + dated resolver + extended Speaker roster** — `bc_former_mlas.py` Wikipedia per-parliament wikitable parser (+160 MLAs / +359 `politician_terms` rows for P29-P34); `resolve-bc-speakers-dated` (single CTE with inline surname extraction); `SPEAKER_ROSTER["BC"]` extended P38 → P29 (+13 historical Speakers). BC corpus attribution 67.6% → 91.9% (+136K speeches; +20K Speaker-tagged rows; +186K chunks). → [`docs/runbooks/handoff-2026-04-29-bc-pre-p35-roster.md`](./docs/runbooks/handoff-2026-04-29-bc-pre-p35-roster.md) (2026-04-29).
+- [x] **TEI + embed resilience layer** — device-aware TEI healthcheck (single-token /embed with `--max-time 1`, fails on CPU fallback), `restart: on-failure:5`, scanner-side preflight CPU-fallback check, exponential-backoff per batch (5 attempts 1s→16s), abort-on-5-consecutive-batch-failures guard. Closes the GPU-regression gap. (2026-04-28)
+- [x] **`chunk-and-embed-speeches` daily schedule** — single combined Click command + `scanner_schedules` row at 08:00 UTC (= 02:00 Mountain), atomic chunk → embed ordering in one process. First scheduled run 2026-04-29 cleared 1,157 chunks in 13s. (2026-04-29)
+- [x] **BC + QC historical-roster backfills** — QC `ingest-qc-former-mnas` (alphabet-walk of assnat.qc.ca, 2,090/2,383 bios with usable career spans, migration 0038); BC `enrich-bc-member-parliaments` (LIMS GraphQL `allMemberParliaments`, 750 (member, parliament) edges, BC terms 103→853). QC P39-P42 resolution +12-33%. (2026-04-27)
+- [x] **BC pre-P38 Hansard parser** — era-branching `bc_hansard_parse.py` extension covering P29-P37 (1970-2005). +378K speeches; BC corpus ~198K → ~577K. (2026-04-27)
+- [x] **ON historical MPP roster + pre-2007 Hansard parser** — propagation of date-windowed-resolver pattern to ON. (2026-04-26)
 
 ### Cycle 2026-04-23 → 2026-04-26
 
@@ -145,12 +154,3 @@ For context. Move items here from above as they land; trim aggressively after a 
 - [x] **`/api/v1/search` filter expansion** — `min_similarity`, `parliament_number + session_number`, and `speech_type` filters on `baseFilterSchema`; new `/search/sessions` endpoint backing the cascading parliament/session dropdown; advanced-filters disclosure on `/search` (2026-04-26).
 - [x] **Operational hygiene cluster** — `OPENROUTER_MODEL` → `OPENROUTER_CONTRADICTIONS_MODEL` rename with legacy fallback + boot-time deprecation warning; `scripts/backup-database.sh` hardened (`.env`-sourced knobs, file-pinned `DB_PASSWORD`, zstd default 19 → 3); BetaBadge in the site header; `docs/api.md` Search section finally written (2026-04-26).
 - [x] **Stripe Tax wiring** — `STRIPE_TAX_ENABLED` env flag, `automatic_tax` + address collection + `tax_id_collection` on the Checkout Session when on, `tax_enabled` field on `/me/credits/packs`, frontend disclosure on `/account/credits`, plan-doc + `docs/operations.md` activation checklist. Default off — operator dashboard activation listed under Now (2026-04-26).
-
-### Cycle 2026-04-16 → 2026-04-23
-
-- [x] **Phase 1a billing rail** — credit ledger, credit-pack purchases, admin comp, suspended-tier enforcement (migration 0033).
-- [x] **Qwen3-Embedding-0.6B migration** — re-embedded 1.48 M chunks, dropped legacy BGE-M3 column, retired the FastAPI/FlagEmbedding wrapper (migrations 0023–0025).
-- [x] **MB Hansard full-span ingest** — legs 37–43, 1999-11-26 → 2026-04-16, 407,695 speeches across 2,325 sittings.
-- [x] **AB + MB historical roster backfill** — +901 former AB MLAs, +764 former MB MLAs; date-windowed speaker resolver pattern.
-- [x] **Magic-link user accounts + saved searches + alerts worker** (migrations 0027–0029).
-- [x] **`is_admin` flag collapse** — old `ADMIN_TOKEN` flow removed; admin is a DB role on the user-session flow (migration 0029).
