@@ -106,6 +106,56 @@ async def discover_ola_bills(
     return stats
 
 
+async def discover_ola_bills_all_sessions(
+    db: Database,
+) -> dict[str, int]:
+    """Walk every (parliament, session) pair in legislative_sessions for ON
+    and discover bills for each.
+
+    Mirrors federal_bills.py's --all-sessions pattern. Idempotent on
+    source_id, so repeat runs only insert newly-listed bills (which
+    matters for the *current* session as new bills are introduced;
+    historical session indexes are stable). Returns aggregate stats.
+
+    Sessions with no listed bills (e.g. very old or empty sessions
+    where ola.org's index page returns no `bill-N` hrefs) are logged
+    and skipped — not an error.
+    """
+    rows = await db.fetch(
+        """
+        SELECT parliament_number, session_number
+          FROM legislative_sessions
+         WHERE level='provincial' AND province_territory='ON'
+         ORDER BY parliament_number, session_number
+        """
+    )
+    targets = [(r["parliament_number"], r["session_number"]) for r in rows]
+    if not targets:
+        log.warning("discover_ola_bills_all_sessions: no ON sessions in DB")
+        return {"sessions_touched": 0, "bills": 0}
+
+    log.info(
+        "discover_ola_bills_all_sessions: walking %d ON sessions", len(targets),
+    )
+    aggregate = {"sessions_touched": 0, "bills": 0}
+    for parl, sess in targets:
+        try:
+            sub = await discover_ola_bills(db, parliament=parl, session=sess)
+        except Exception as exc:
+            log.warning(
+                "discover_ola_bills_all_sessions: P%d-S%d failed: %s",
+                parl, sess, exc,
+            )
+            continue
+        aggregate["sessions_touched"] += 1
+        aggregate["bills"] += sub.get("bills", 0)
+    log.info(
+        "discover_ola_bills_all_sessions: total sessions=%d bills=%d",
+        aggregate["sessions_touched"], aggregate["bills"],
+    )
+    return aggregate
+
+
 async def _upsert_session(db: Database, parliament: int, session: int) -> str:
     row = await db.fetchrow(
         """

@@ -884,15 +884,38 @@ def cmd_fetch_ns_bill_pages(ctx: click.Context, limit, force, delay_secs, jitter
 @cli.command("discover-on-bills")
 @click.option("--parliament", type=int, default=44)
 @click.option("--session", type=int, default=1)
+@click.option("--all-sessions", is_flag=True,
+              help="Walk every ON session in legislative_sessions. "
+                   "Overrides --parliament/--session.")
 @click.pass_context
-def cmd_discover_on_bills(ctx: click.Context, parliament: int, session: int) -> None:
-    """Enumerate Ontario bills from ola.org session index (phase 1)."""
+def cmd_discover_on_bills(
+    ctx: click.Context, parliament: int, session: int, all_sessions: bool,
+) -> None:
+    """Enumerate Ontario bills from ola.org session index (phase 1).
+
+    With --all-sessions, walks every (parliament, session) pair already
+    in legislative_sessions for ON. Idempotent on source_id. Use this
+    after a one-time historical-roster ingest has populated the
+    sessions table; subsequent runs only pick up newly-listed bills.
+    """
+    from .legislative.on_bills import discover_ola_bills_all_sessions
+
     async def _wrap(db: Database) -> None:
-        stats = await discover_ola_bills(db, parliament=parliament, session=session)
-        console.print(
-            f"[green]discover-on-bills[/green] P{parliament}-S{session}: "
-            f"bills={stats['bills']}"
-        )
+        if all_sessions:
+            stats = await discover_ola_bills_all_sessions(db)
+            console.print(
+                f"[green]discover-on-bills[/green] (all sessions): "
+                f"sessions={stats['sessions_touched']} "
+                f"bills={stats['bills']}"
+            )
+        else:
+            stats = await discover_ola_bills(
+                db, parliament=parliament, session=session,
+            )
+            console.print(
+                f"[green]discover-on-bills[/green] P{parliament}-S{session}: "
+                f"bills={stats['bills']}"
+            )
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 
 
