@@ -394,7 +394,14 @@ def _parse_rss_item(item: ET.Element) -> Optional[dict[str, Any]]:
 
 
 async def ingest_qc_bills_rss(db: Database) -> dict[str, int]:
-    """Fetch the bills RSS feed and fill in stage-transition events."""
+    """Fetch the bills RSS feed and fill in stage-transition events.
+
+    Final step also derives `bills.introduced_date` from the earliest
+    event with stage='introduced' in `bill_events` — RSS is the only
+    QC phase that records pre-current-stage history, so this is the
+    natural place to roll up the bill_events timeline into the bill
+    row's flat `introduced_date` column.
+    """
     async with httpx.AsyncClient(headers=HEADERS, follow_redirects=True) as client:
         r = await client.get(RSS_URL, timeout=REQUEST_TIMEOUT)
         r.raise_for_status()
@@ -402,7 +409,8 @@ async def ingest_qc_bills_rss(db: Database) -> dict[str, int]:
 
     root = ET.fromstring(xml)
     items = root.findall(".//item")
-    stats = {"items": len(items), "matched": 0, "events_added": 0, "unmatched": 0}
+    stats = {"items": len(items), "matched": 0, "events_added": 0,
+             "unmatched": 0, "dated": 0}
 
     for item in items:
         parsed = _parse_rss_item(item)
@@ -441,8 +449,43 @@ async def ingest_qc_bills_rss(db: Database) -> dict[str, int]:
         )
         stats["events_added"] += 1
 
+    stats["dated"] = await derive_qc_introduced_dates(db)
+
     log.info("ingest_qc_bills_rss: %s", stats)
     return stats
+
+
+async def derive_qc_introduced_dates(db: Database) -> int:
+    """Roll up bill_events 'introduced' rows → bills.introduced_date.
+
+    Idempotent. Returns the number of rows updated this call. Safe to
+    run on its own (e.g. after a backfill of older session events).
+    """
+    result = await db.fetchrow(
+        """
+        WITH first_intro AS (
+            SELECT bill_id, MIN(event_date) AS event_date
+              FROM bill_events
+             WHERE stage IN ('introduced', 'first_reading')
+               AND event_date IS NOT NULL
+             GROUP BY bill_id
+        ),
+        applied AS (
+            UPDATE bills b
+               SET introduced_date = fi.event_date,
+                   updated_at = now()
+              FROM first_intro fi
+             WHERE b.id = fi.bill_id
+               AND b.level = 'provincial'
+               AND b.province_territory = 'QC'
+               AND (b.introduced_date IS NULL
+                    OR b.introduced_date <> fi.event_date)
+            RETURNING 1
+        )
+        SELECT count(*) AS updated FROM applied
+        """
+    )
+    return int(result["updated"] or 0)
 
 
 # ─────────────────────────────────────────────────────────────────────

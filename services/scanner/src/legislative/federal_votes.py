@@ -464,3 +464,98 @@ async def extract_federal_votes(
         stats.api_calls, len(stats.failures),
     )
     return stats
+
+
+# ── Re-link pass (no API calls) ─────────────────────────────────────
+
+
+@dataclass
+class RelinkStats:
+    candidates: int = 0           # federal votes with bill_url in raw
+    already_linked: int = 0       # bill_id was already populated
+    newly_linked: int = 0         # bill_id flipped NULL → uuid this run
+    unchanged: int = 0            # bill_url has no matching bills row
+    bill_index_size: int = 0      # how many federal bills available for matching
+
+
+async def relink_federal_votes(db: Database) -> RelinkStats:
+    """Re-derive `votes.bill_id` for federal votes against the current bills table.
+
+    Pure-SQL UPDATE pass — no openparliament.ca API calls. Each vote's
+    `raw->'openparliament_vote'->>'bill_url'` is matched against
+    `bills.raw->>'url'` (the same key the live extractor uses to build
+    its in-memory `bill_index`). Run this whenever federal bills are
+    added (e.g. after `ingest-federal-bills --all-sessions`) to lift
+    the linkage rate without re-fetching ballots.
+
+    Idempotent: votes that already have the correct bill_id are left
+    alone (the UPDATE sets `bill_id` only where it differs).
+    """
+    stats = RelinkStats()
+
+    stats.bill_index_size = await db.fetchval(
+        """
+        SELECT count(*) FROM bills
+         WHERE level = 'federal' AND raw->>'url' IS NOT NULL
+        """
+    )
+
+    counts = await db.fetchrow(
+        """
+        SELECT
+          count(*) FILTER (WHERE raw->'openparliament_vote'->>'bill_url' IS NOT NULL)
+            AS candidates,
+          count(*) FILTER (WHERE bill_id IS NOT NULL)
+            AS already_linked
+        FROM votes
+        WHERE level = 'federal'
+        """
+    )
+    stats.candidates = counts["candidates"] or 0
+    stats.already_linked = counts["already_linked"] or 0
+
+    # Match votes to bills via the raw payload's bill_url.
+    result = await db.fetchrow(
+        """
+        WITH matches AS (
+            SELECT v.id AS vote_id, b.id AS new_bill_id
+              FROM votes v
+              JOIN bills b
+                ON b.level = 'federal'
+               AND b.raw->>'url' = v.raw->'openparliament_vote'->>'bill_url'
+             WHERE v.level = 'federal'
+               AND v.raw->'openparliament_vote'->>'bill_url' IS NOT NULL
+               AND v.bill_id IS DISTINCT FROM b.id
+        ),
+        applied AS (
+            UPDATE votes v
+               SET bill_id = m.new_bill_id,
+                   updated_at = now()
+              FROM matches m
+             WHERE v.id = m.vote_id
+            RETURNING 1
+        )
+        SELECT count(*) AS updated FROM applied
+        """
+    )
+    stats.newly_linked = result["updated"] or 0
+
+    # Anything left that has bill_url but still no bill_id → no
+    # matching bill in our table (pre-37-1 corpus floor or a renamed
+    # / withdrawn bill openparliament still references).
+    stats.unchanged = await db.fetchval(
+        """
+        SELECT count(*) FROM votes
+         WHERE level = 'federal'
+           AND bill_id IS NULL
+           AND raw->'openparliament_vote'->>'bill_url' IS NOT NULL
+        """
+    )
+
+    log.info(
+        "relink_federal_votes: bills available=%d, candidates=%d, "
+        "already_linked=%d, newly_linked=%d, no_match=%d",
+        stats.bill_index_size, stats.candidates,
+        stats.already_linked, stats.newly_linked, stats.unchanged,
+    )
+    return stats

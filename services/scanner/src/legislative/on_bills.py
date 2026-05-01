@@ -516,6 +516,33 @@ async def _persist_events(db: Database, bill_id: str, events: list[dict]) -> int
     return written
 
 
+async def _persist_introduced_date(
+    db: Database, bill_id: str, events: list[dict],
+) -> bool:
+    """Derive introduced_date from the earliest first_reading event.
+
+    Ontario's /status table records "First Reading" as the introduction
+    event. We pick the earliest such row (defensive — duplicates would
+    be rare but the table is technically unordered) and write its date
+    to bills.introduced_date. Returns True if a date was written.
+    """
+    candidates = sorted(
+        (ev["event_date"] for ev in events
+         if ev.get("stage") in ("first_reading", "introduced") and ev.get("event_date")),
+    )
+    if not candidates:
+        return False
+    await db.execute(
+        """
+        UPDATE bills SET introduced_date = $2, updated_at = now()
+         WHERE id = $1
+           AND (introduced_date IS NULL OR introduced_date <> $2)
+        """,
+        bill_id, candidates[0],
+    )
+    return True
+
+
 async def parse_ola_bill_pages(
     db: Database, *, limit: Optional[int] = None
 ) -> dict[str, int]:
@@ -535,7 +562,8 @@ async def parse_ola_bill_pages(
         sql += f" LIMIT {int(limit)}"
     rows = await db.fetch(sql, SOURCE_SYSTEM)
 
-    stats = {"bills": 0, "sponsors": 0, "events": 0, "no_sponsor": 0, "titled": 0}
+    stats = {"bills": 0, "sponsors": 0, "events": 0, "no_sponsor": 0,
+             "titled": 0, "dated": 0}
     for row in rows:
         bill_id = str(row["id"])
         stats["bills"] += 1
@@ -552,10 +580,13 @@ async def parse_ola_bill_pages(
         if row["raw_status_html"]:
             events = extract_status_events(row["raw_status_html"])
             stats["events"] += await _persist_events(db, bill_id, events)
+            if await _persist_introduced_date(db, bill_id, events):
+                stats["dated"] += 1
 
     log.info(
-        "parse_ola_bill_pages: bills=%d sponsors=%d events=%d titled=%d no_sponsor=%d",
+        "parse_ola_bill_pages: bills=%d sponsors=%d events=%d "
+        "titled=%d dated=%d no_sponsor=%d",
         stats["bills"], stats["sponsors"], stats["events"],
-        stats["titled"], stats["no_sponsor"],
+        stats["titled"], stats["dated"], stats["no_sponsor"],
     )
     return stats

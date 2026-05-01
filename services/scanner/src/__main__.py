@@ -922,14 +922,18 @@ def cmd_fetch_on_bill_pages(ctx: click.Context, limit, force, delay_secs, jitter
 @click.option("--limit", type=int, default=None)
 @click.pass_context
 def cmd_parse_on_bill_pages(ctx: click.Context, limit) -> None:
-    """Parse cached ola.org HTML into sponsors + events (phase 3)."""
+    """Parse cached ola.org HTML into sponsors + events (phase 3).
+
+    Also derives bills.introduced_date from the earliest first_reading
+    event scraped from the /status sub-page table.
+    """
     async def _wrap(db: Database) -> None:
         stats = await parse_ola_bill_pages(db, limit=limit)
         console.print(
             f"[green]parse-on-bill-pages[/green]: "
             f"bills={stats['bills']} sponsors={stats['sponsors']} "
             f"events={stats['events']} titled={stats['titled']} "
-            f"no_sponsor={stats['no_sponsor']}"
+            f"dated={stats['dated']} no_sponsor={stats['no_sponsor']}"
         )
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 
@@ -1291,7 +1295,8 @@ def cmd_ingest_qc_bills_rss(ctx: click.Context) -> None:
     """Refresh current-session QC stage events from the public RSS feed.
 
     One request — every stage transition on every current-session bill.
-    Idempotent (bill_events_uniq). Safe to schedule daily.
+    Idempotent (bill_events_uniq). Safe to schedule daily. Final step
+    rolls up bill_events 'introduced' rows into bills.introduced_date.
     """
     async def _wrap(db: Database) -> None:
         stats = await ingest_qc_bills_rss(db)
@@ -1299,7 +1304,7 @@ def cmd_ingest_qc_bills_rss(ctx: click.Context) -> None:
             f"[green]ingest-qc-bills-rss[/green]: "
             f"items={stats['items']} matched={stats['matched']} "
             f"events_added={stats['events_added']} "
-            f"unmatched={stats['unmatched']}"
+            f"unmatched={stats['unmatched']} dated={stats['dated']}"
         )
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 
@@ -1931,6 +1936,35 @@ def cmd_extract_federal_votes(
                 f"[yellow]federal_votes failures (first 5):[/yellow] "
                 f"{stats.failures[:5]}"
             )
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
+@cli.command("relink-federal-votes")
+@click.pass_context
+def cmd_relink_federal_votes(ctx: click.Context) -> None:
+    """Re-derive federal votes.bill_id from votes.raw against current bills.
+
+    Pure-SQL UPDATE pass — no openparliament.ca API calls. Each vote's
+    raw payload retains the openparliament `bill_url` from the original
+    extraction; this command joins that against the current `bills`
+    table to lift the linkage rate after a federal-bills backfill (e.g.
+    `ingest-federal-bills --all-sessions`). Idempotent: votes already
+    linked to the right bill are skipped via `IS DISTINCT FROM`.
+
+    Run after any federal-bills ingest. Cheap enough to schedule daily.
+    """
+    from .legislative.federal_votes import relink_federal_votes as _relink
+
+    async def _wrap(db: Database) -> None:
+        stats = await _relink(db)
+        console.print(
+            f"[green]relink-federal-votes[/green]: "
+            f"bills_available={stats.bill_index_size} "
+            f"candidates={stats.candidates} "
+            f"already_linked={stats.already_linked} "
+            f"newly_linked={stats.newly_linked} "
+            f"no_match={stats.unchanged}"
+        )
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 
 
