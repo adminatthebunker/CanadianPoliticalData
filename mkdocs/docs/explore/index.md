@@ -16,14 +16,17 @@ that powers Hansard search.
 
 ## What you're looking at
 
-The map is built in three steps:
+The map is built in four steps:
 
-1. Every speech chunk is reduced from its 1024-dimensional embedding to 3D (and 2D) coordinates using UMAP. Semantically similar chunks land near each other.
-2. The resulting point cloud is clustered automatically at three levels of granularity — broad topic areas, mid-level sub-topics, and fine-grained clusters.
-3. Each cluster is labelled with its three most distinctive terms, computed from the text of its member speeches.
+1. Every speech chunk is converted to a 1024-number "fingerprint of meaning" by the same embedding model that powers Hansard search.
+2. Those 1024 numbers are reduced to 3D (and 2D) coordinates using UMAP. Semantically similar chunks land near each other.
+3. The resulting point cloud is clustered automatically at five levels of granularity — broad topic areas, sub-topics, specific debates, narrow conversations, and individual exchanges.
+4. Each cluster is labelled with its three most distinctive terms, computed from the text of its member speeches.
 
 The result is a birds-eye view of what Canadian politicians talk about —
 without having to know what to search for first.
+
+[Learn how this is built →](how-it-works.md){ .md-button }
 
 !!! note "First projection"
     The map populates after the first projection build completes and is
@@ -51,17 +54,19 @@ You can switch between 2D and 3D manually using the toggle in the top-right corn
 
 ## Drilling down
 
-Clusters are organised at three levels:
+Clusters are organised at five levels:
 
 | Level | Approximate count | What it represents |
 |-------|------------------|--------------------|
 | 1 — broad | ~30 | Major topic areas (e.g. "health care", "energy", "Indigenous rights") |
-| 2 — mid | ~200 | Sub-topics within each area |
-| 3 — fine | ~1 500 | Specific debates and recurring themes |
+| 2 — mid | ~150 | Sub-topics within each area |
+| 3 — specific | ~600 | Recurring debates and themes |
+| 4 — narrow | ~2 000 | Particular bills or controversies |
+| 5 — leaf | ~6 000 | Individual exchanges between a handful of speakers |
 
-Click a broad cluster to zoom in and reveal its mid-level sub-clusters. Click
-again to see fine-grained clusters. The cluster drawer shows up to 15
-representative speech excerpts with links to the full speech.
+Click a broad cluster to zoom in and reveal its sub-clusters. Keep clicking
+to drill deeper. The cluster drawer shows up to 15 representative speech
+excerpts with links to the full speech.
 
 ## Filtering the map
 

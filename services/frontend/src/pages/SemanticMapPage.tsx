@@ -329,6 +329,15 @@ export default function SemanticMapPage() {
             {effectiveMode === "3d"
               ? " Tap a topic to explore inside it; orbit and pinch to navigate."
               : " Click a cluster to view representative speeches."}
+            {" "}
+            <a
+              className="semantic-map__how-link"
+              href="https://docs.canadianpoliticaldata.org/explore/how-it-works/"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              How it works ↗
+            </a>
           </p>
         </div>
         <div className="semantic-map__header-actions">

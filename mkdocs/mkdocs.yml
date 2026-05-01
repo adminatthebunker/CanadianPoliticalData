@@ -154,6 +154,7 @@ nav:
       - Saved searches and alerts: searching/saved-searches.md
   - Explore:
       - explore/index.md
+      - How it works: explore/how-it-works.md
   - Politicians and ridings:
       - politicians/index.md
       - The map: politicians/map.md

@@ -40,6 +40,17 @@
   gap: .5rem;
   align-items: center;
 }
+.semantic-map__how-link {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  white-space: nowrap;
+}
+.semantic-map__how-link:hover,
+.semantic-map__how-link:focus-visible {
+  text-decoration-thickness: 2px;
+  outline: none;
+}
 
 /* ── Mode toggle ──────────────────────────────────────── */
 
@@ -573,6 +584,22 @@
 .semantic-map__hints-reset:hover {
   background: rgba(225, 29, 72, 0.32);
   color: #fff;
+}
+.semantic-map__hints-docs {
+  pointer-events: auto;
+  display: block;
+  margin-top: .4rem;
+  padding-top: .5rem;
+  border-top: 1px solid var(--border);
+  color: var(--ink-muted);
+  font-size: .78rem;
+  text-decoration: none;
+  text-align: center;
+}
+.semantic-map__hints-docs:hover,
+.semantic-map__hints-docs:focus-visible {
+  color: var(--accent);
+  outline: none;
 }
 @media (max-width: 640px) {
   .semantic-map__hints { right: .55rem; bottom: .55rem; }

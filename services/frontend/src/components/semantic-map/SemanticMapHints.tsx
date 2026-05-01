@@ -75,6 +75,14 @@ export default function SemanticMapHints({ mode, level, onResetView }: Props) {
               ↻ Reset view
             </button>
           )}
+          <a
+            className="semantic-map__hints-docs"
+            href="https://docs.canadianpoliticaldata.org/explore/how-it-works/"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Read how this map is built ↗
+          </a>
         </div>
       )}
     </div>
