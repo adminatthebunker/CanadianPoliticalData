@@ -4,9 +4,11 @@
 >
 > Who represents you, what they've said, how they've voted, and where their infrastructure lives. Across every level of government, every province and territory, as far back as the digital record goes.
 
-Canadian Political Data tracks ~2,800 elected officials across every level of Canadian government — every currently-sitting federal MP and senator (plus historical MPs back to 1994 pulled in via the Hansard pipeline), every provincial and territorial legislature, and municipal councils from coast to coast — plus the organizations driving Alberta's October 19, 2026 independence referendum.
+Canadian Political Data tracks elected officials across every level of Canadian government — every currently-sitting federal MP and senator (plus historical MPs back to 1994 via the Hansard pipeline), every provincial and territorial legislature, and municipal councils from coast to coast.
 
-The public site is **free and dataset is open**. Enter a postal code and see your own MP, MLA, and councillors — with their parliamentary record (mirrored from [openparliament.ca](https://openparliament.ca) for federal MPs), their social handles, and — as one lens among many — where their websites are hosted.
+The public site is **free and the dataset is open**. Enter a postal code at **[canadianpoliticaldata.ca](https://canadianpoliticaldata.ca)** and see your own MP, MLA, and councillors — with their parliamentary record, their social handles, and where their websites are hosted.
+
+Live coverage numbers, route map, and what's currently ingested live on the site itself — see **[/coverage](https://canadianpoliticaldata.ca/coverage)** for the honest, up-to-the-minute picture.
 
 ---
 
@@ -16,65 +18,23 @@ The public site is **free and dataset is open**. Enter a postal code and see you
 
 This project takes that seriously. Three principles fall out of it:
 
-1. **Free and frictionless for the public.** No accounts for basic search or dark patterns on the public site. Postal-code lookup is the front door. Search is the next one.
-2. **Source-available to the core.** Every ingester, every schema decision, every upstream quirk and blocker lives in this repo under [PolyForm Noncommercial 1.0.0](./LICENSE) — free for personal, research, educational, and other noncommercial use. Per-jurisdiction research dossiers under [`docs/research/`](docs/research/) document exactly how each legislature's data was sourced, what's reliable, and what's not. If we got something wrong, you can see where.
-3. **Honest about gaps.** Coverage holes are surfaced on the public [`/coverage`](https://canadianpoliticaldata.ca/coverage) dashboard rather than hidden. Four provincial bills pipelines are still blocked (MB/SK PDFs; PEI/YT WAFs); the dashboard says so.
+1. **Free and frictionless for the public.** No accounts for basic search, no dark patterns. Postal-code lookup is the front door. Search is the next one.
+2. **Source-available to the core.** Every ingester, every schema decision, every upstream quirk and blocker lives in this repo under [PolyForm Noncommercial 1.0.0](./LICENSE) — free for personal, research, educational, and other noncommercial use. Per-jurisdiction research dossiers under [`docs/research/`](docs/research/) document exactly how each legislature's data was sourced, what's reliable, and what's not.
+3. **Honest about gaps.** Coverage holes are surfaced on the public [`/coverage`](https://canadianpoliticaldata.ca/coverage) dashboard rather than hidden.
 
-The project is **not apolitical**. It's rooted in democratic values, civic transparency, and progressive stances on access to information. See [`docs/goals.md`](docs/goals.md) for the full framing, and [`docs/timeline.md`](docs/timeline.md) for what's being built next and in what order.
-
----
-
-## Coverage
-
-| Level | Count | Source |
-|---|---:|---|
-| **Federal** | 1,424 | Every currently-sitting MP + senator, plus historical MPs back to 1994 (pulled in via the Hansard pipeline) |
-| **Provincial / territorial** | 807 | Every MLA / MPP / MNA / MHA across all 10 provinces and 3 territories |
-| **Municipal** | 571 | Council members across major cities — ON, QC, BC, AB, and the Atlantic provinces |
-| **Referendum organizations** | 20 | Both sides of Alberta's Oct 19, 2026 independence question plus the UCP's nine referendum questions |
-| **Websites tracked** | ~2,350 | Personal sites, campaign sites, official handles |
-| **Provincial bills** | ~18,800 | NS + ON + BC + QC + AB + NB + NL + NT + NU (9 of 13 sub-national legislatures). Federal bills aren't in the `bills` table — they surface via the openparliament.ca mirror on each MP's detail page |
-| **Bill stage events** | ~21,300 | Full Westminster progression per bill (1R / 2R / Committee / 3R / Royal Assent ± `comes_into_force` for AB) |
-| **Hansard speeches** | ~1.7M | Federal (1994+, via openparliament.ca) + AB (assembly.ab.ca) + BC (hansard-bc), speaker-resolved including presiding-officer attributions |
-| **Speech chunks (semantic-search ready)** | ~2.1M | ~74% embedded with Qwen3-Embedding-0.6B (1024-dim, multilingual EN/FR), HNSW-indexed in pgvector — historical backfill still running, embedding rate trailing chunk generation |
-
-Coverage is built jurisdiction-by-jurisdiction via dedicated ingesters — Open North where available, then per-legislature scrapers for everything else. Bills are ingested from a mix of Socrata APIs, Drupal JSON, GraphQL backends, official CSVs, and server-rendered HTML. Each province is its own beast, and each one has a self-contained dossier in [`docs/research/`](docs/research/) (plus [`docs/research/overview.md`](docs/research/overview.md) for the cross-cutting probe hierarchy and schema log).
+The project is **not apolitical**. It's rooted in democratic values, civic transparency, and progressive stances on access to information. See [`docs/goals.md`](docs/goals.md) for the full framing and [`docs/timeline.md`](docs/timeline.md) for what's being built next.
 
 ---
 
-## What you can do today
+## Where to go
 
-| Route | Purpose |
+| If you want to… | Go to |
 |---|---|
-| `/` | Lander with postal-code "Find your data" lookup |
-| `/map` | Full map, polygons, flow lines, party report card, referendum view |
-| `/politicians` | Cards grid of every tracked politician, filterable by level/province/party/socials |
-| `/politicians/:id` | Per-politician detail — socials, offices, terms, changes, and (federal MPs) a Parliament timeline sourced from openparliament.ca |
-| `/coverage` | Honest coverage dashboard — every Canadian legislature with status of bills / Hansard / votes / committees layers, blockers flagged |
-| `/blog`, `/blog/:slug` | 301 redirects to the docs-site blog (see below) |
-
-The public **documentation site** lives at
-**[docs.canadianpoliticaldata.ca](https://docs.canadianpoliticaldata.ca/)**
-— end-user guides (search, accounts, reports), contributor docs (local
-installation, dataset download, architecture), and the project blog.
-Built with MkDocs Material; source under [`mkdocs/`](./mkdocs/).
-
-Federal MPs additionally get a lazily-mirrored **Parliament** tab backed by a local JSONB cache of openparliament.ca — 30-day TTL for the profile blob, 1-day TTL for their speeches+bills feed, coalesced per-politician so concurrent requests share one outbound call.
-
----
-
-## What's coming next
-
-**Semantic search over Hansard speeches and recorded votes.** The moment you can finally search what your MP actually said — in plain language, not parliamentary jargon, across English and French sources — is the next major milestone.
-
-The data and inference layer are shipped:
-
-- pgvector 0.8.2 in Postgres with HNSW indexes (`hnsw.iterative_scan = relaxed_order`, `ef_search = 200`) so filtered semantic queries — e.g. "BC speeches about housing" — actually return rows
-- **Hugging Face TEI** (Text Embeddings Inference) container serving **Qwen3-Embedding-0.6B** (1024-dim, multilingual, fp16) on a local NVIDIA RTX 4050 — ~75 chunks/sec pure GPU, **50.9 chunks/sec end-to-end** through the scanner's batched-UNNEST writes. Cutover from BGE-M3 + BGE-reranker landed 2026-04-19; eval comparison lives in [`services/embed/eval/REPORT.md`](services/embed/eval/REPORT.md). No paid API in the critical path.
-- ~1.7M speeches ingested (federal 1994+ via openparliament.ca mirror, AB via assembly.ab.ca, BC via hansard-bc), ~2.1M chunks generated, **~1.6M (~74%) embedded** — historical backfill + embedding are still running concurrently, so chunk generation is ahead of embedding and both numbers climb daily
-- `speeches`, `speech_chunks`, `speech_references`, `jurisdiction_sources`, `correction_submissions` tables live; presiding-officer speech attributions resolved to the politician occupying the chair at the time
-
-Remaining for v1: hybrid (dense + Postgres tsvector) retrieval API, public search UI, provincial Hansard expansion beyond AB/BC, and corrections-inbox SMTP ingest. See [`docs/plans/semantic-layer.md`](docs/plans/semantic-layer.md) and [`docs/plans/search-features-handoff.md`](docs/plans/search-features-handoff.md) for the phased rollout.
+| Look up your representatives | **[canadianpoliticaldata.ca](https://canadianpoliticaldata.ca)** |
+| See current coverage and known gaps | **[/coverage](https://canadianpoliticaldata.ca/coverage)** |
+| Read end-user / contributor docs and the blog | **[docs.canadianpoliticaldata.ca](https://docs.canadianpoliticaldata.ca/)** |
+| Understand a specific jurisdiction's data sources | [`docs/research/`](docs/research/) |
+| Run it locally | [Quick Start](#quick-start) below |
 
 ---
 
@@ -107,20 +67,9 @@ Remaining for v1: hybrid (dense + Postgres tsvector) retrieval API, public searc
                                      └─────────────────┘
 ```
 
-| Layer | Technology |
-|---|---|
-| Backend | Node.js 20 + Fastify + zod |
-| Scanner | Python 3.13 + asyncio + dnspython + httpx |
-| Embed service | Hugging Face Text Embeddings Inference (TEI) serving `Qwen/Qwen3-Embedding-0.6B` on CUDA fp16 |
-| Frontend | React 18 + TypeScript 5 + Vite + Leaflet + React Router 6 |
-| Docs site | MkDocs Material (in [`mkdocs/`](./mkdocs/), served by nginx at `docs.canadianpoliticaldata.ca`) |
-| Database | PostgreSQL 16 + PostGIS 3.4 + pgvector 0.8.2 + unaccent |
-| Change detection | [Thedurancode/change](https://github.com/Thedurancode/change) |
-| Uptime | Uptime Kuma |
-| Reverse proxy | nginx alpine |
-| Containers | Docker Compose, single host, Pangolin tunnel to public |
+Node 20 + Fastify API, React 18 + Vite frontend, Python 3.13 + asyncio scanner, Postgres 16 + PostGIS + pgvector, Hugging Face TEI serving Qwen3-Embedding-0.6B on a local GPU. Single-host Docker Compose, Pangolin tunnel to public.
 
-See [`docs/architecture.md`](docs/architecture.md) for service-by-service detail.
+Service-by-service detail in [`docs/architecture.md`](docs/architecture.md).
 
 ---
 
@@ -156,41 +105,7 @@ make scan
 open http://localhost
 ```
 
-See [`docs/`](./docs) for deeper guides — including [`docs/operations.md`](docs/operations.md) for day-to-day ops and [`docs/scanner.md`](docs/scanner.md) for the full ingestion playbook.
-
----
-
-## CLI
-
-```bash
-# Ingest (roster)
-sovpro ingest-mps                     # Federal MPs from Open North
-sovpro ingest-senators                # 105 senators (sencanada.ca)
-sovpro ingest-legislatures            # Every provincial / territorial legislature
-sovpro ingest-all-councils            # Every municipal council Open North exposes
-sovpro fill-gaps                      # Gap-fillers for legislatures Open North doesn't cover
-sovpro seed-orgs                      # Seed referendum organizations
-
-# Enrichment (personal sites + socials)
-sovpro harvest-personal-socials       # Mine campaign sites for social handles
-sovpro enrich-socials-all             # Wikidata → openparliament → Mastodon pipeline
-sovpro resolve-openparliament-slugs   # Match federal MPs to openparliament.ca slugs
-
-# Legislative + semantic
-sovpro ingest-federal-hansard         # Federal Hansard speeches (1994+, EN+FR)
-sovpro ingest-ab-hansard              # Alberta Hansard speeches
-sovpro ingest-bc-hansard              # BC Hansard speeches
-sovpro chunk-speeches                 # Split speeches into embedding-ready chunks
-sovpro embed-speech-chunks            # Embed pending chunks via TEI (Qwen3-Embedding-0.6B)
-sovpro refresh-coverage-stats         # Recompute the public /coverage dashboard
-
-# Scan + maintenance
-sovpro scan [--limit N]               # Scan websites (DNS, GeoIP, TLS, HTTP)
-sovpro stats                          # Print sovereignty summary
-sovpro refresh-views                  # Refresh PostGIS materialized views
-```
-
-Run `sovpro --help` for the complete list — there are ~95 subcommands including per-province ingesters, per-legislature gap-fillers, and the full Hansard → chunk → embed → resolve-speakers pipeline.
+The full CLI is `sovpro --help` (~95 subcommands across ingest, enrichment, Hansard, scan, and maintenance). Day-to-day ops in [`docs/operations.md`](docs/operations.md); the full ingestion playbook in [`docs/scanner.md`](docs/scanner.md).
 
 ---
 
@@ -201,7 +116,7 @@ The project serves two audiences in sequence:
 - **Engaged citizens (free, public, forever).** Postal-code lookup, per-politician pages, the map, the change feed, and — soon — semantic search over Hansard. No account ever required.
 - **Lobbyists, journalists, academics, advocacy orgs (paid API tiers, future).** Bulk export (CSV/Parquet), programmatic semantic search, scheduled topic alerts, "compare A vs. B" tooling. Funds the public side.
 
-Funding model: free public UI + paid API tiers for institutional users + grant funding for long-term sustainability. The public side stays free forever. See [`docs/goals.md`](docs/goals.md) for non-goals and what's explicitly deferred.
+The public side stays free forever. See [`docs/goals.md`](docs/goals.md) for non-goals and [`docs/timeline.md`](docs/timeline.md) for what's being built next.
 
 ---
 
