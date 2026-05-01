@@ -1886,6 +1886,211 @@ def cmd_ingest_nt_bills(ctx: click.Context, delay) -> None:
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 
 
+@cli.command("extract-federal-votes")
+@click.option("--session", type=str, default=None,
+              help="Parliament-session slug like '44-1'. Default: current.")
+@click.option("--limit-votes", type=int, default=None,
+              help="Cap on votes processed (newest-first; smoke-test aid).")
+@click.option("--delay", type=float, default=0.5,
+              help="Seconds between openparliament.ca API calls (politeness).")
+@click.pass_context
+def cmd_extract_federal_votes(
+    ctx: click.Context, session, limit_votes, delay,
+) -> None:
+    """Extract federal votes + per-MP positions from openparliament.ca.
+
+    Two structured-JSON endpoints: vote list at /votes/?session={S} for
+    summary records, and /votes/ballots/?vote={URL} for per-MP ballots.
+    Politician attribution by exact-string FK match against
+    politicians.openparliament_slug. Bill linkage via bill_url against
+    bills.raw->>'url'. speech_id stays NULL (future post-pass).
+
+    Idempotent: votes upsert on (source_system='votes-federal', source_url);
+    vote_positions upsert on (vote_id, politician_name_raw=slug). Re-runs
+    UPDATE in place; politician_id can lift on subsequent passes if the
+    roster fills.
+    """
+    from .legislative.federal_votes import extract_federal_votes as _extract
+
+    async def _wrap(db: Database) -> None:
+        stats = await _extract(
+            db, session=session, limit_votes=limit_votes, delay=delay,
+        )
+        console.print(
+            f"[green]extract-federal-votes[/green]: "
+            f"votes seen={stats.votes_seen} inserted={stats.votes_inserted} "
+            f"updated={stats.votes_updated} "
+            f"positions inserted={stats.positions_inserted} "
+            f"updated={stats.positions_updated} "
+            f"bill_links={stats.bill_links} pol_links={stats.politician_links} "
+            f"pol_unresolved={stats.politicians_unresolved} "
+            f"api_calls={stats.api_calls}"
+        )
+        if stats.failures:
+            console.print(
+                f"[yellow]federal_votes failures (first 5):[/yellow] "
+                f"{stats.failures[:5]}"
+            )
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
+def _make_provincial_votes_cmd(prov_lower: str, prov_upper: str, source_label: str):
+    """Helper: build a Click command for a provincial votes extractor."""
+    @cli.command(f"extract-{prov_lower}-votes")
+    @click.option("--limit-sittings", type=int, default=None,
+                  help="Cap to most-recent N sittings (smoke-test aid).")
+    @click.pass_context
+    def _cmd(ctx: click.Context, limit_sittings) -> None:
+        from importlib import import_module
+        mod = import_module(f".legislative.{prov_lower}_votes", package="src")
+        extract_fn = getattr(mod, f"extract_{prov_lower}_votes")
+        async def _wrap(db: Database) -> None:
+            stats = await extract_fn(db, limit_sittings=limit_sittings)
+            console.print(
+                f"[green]extract-{prov_lower}-votes[/green]: "
+                f"scanned={stats.speeches_scanned} "
+                f"inserted={stats.votes_inserted} updated={stats.votes_updated} "
+                f"skipped={stats.votes_skipped_no_outcome} "
+                f"bill_links={stats.bill_linkage_hits}"
+            )
+            if stats.by_type:
+                console.print(f"[dim]by_type:[/dim] {stats.by_type}")
+            if stats.by_result:
+                console.print(f"[dim]by_result:[/dim] {stats.by_result}")
+        asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+    _cmd.__doc__ = (
+        f"Derive `votes` rows from already-ingested {prov_upper} Hansard speeches.\n\n"
+        f"    Source corpus: source_system='{source_label}'.\n"
+        f"    Idempotent: upsert keyed on (source_system='votes-{prov_lower}', source_url).\n"
+        f"    Run after the corresponding ingest-{prov_lower}-hansard command."
+    )
+    return _cmd
+
+
+_extract_bc_votes_cmd = _make_provincial_votes_cmd("bc", "BC", "hansard-bc")
+_extract_ab_votes_cmd = _make_provincial_votes_cmd("ab", "AB", "assembly.ab.ca")
+_extract_qc_votes_cmd = _make_provincial_votes_cmd("qc", "QC", "hansard-qc")
+_extract_on_votes_cmd = _make_provincial_votes_cmd("on", "ON", "hansard-on")
+_extract_mb_votes_cmd = _make_provincial_votes_cmd("mb", "MB", "hansard-mb")
+_extract_ns_votes_cmd = _make_provincial_votes_cmd("ns", "NS", "hansard-ns")
+_extract_nl_votes_cmd = _make_provincial_votes_cmd("nl", "NL", "hansard-nl")
+_extract_nb_votes_cmd = _make_provincial_votes_cmd("nb", "NB", "legnb-hansard")
+
+
+@cli.command("extract-nt-votes")
+@click.option("--limit-sittings", type=int, default=None,
+              help="Cap to most-recent N sittings (smoke-test aid).")
+@click.pass_context
+def cmd_extract_nt_votes(ctx: click.Context, limit_sittings) -> None:
+    """Derive `votes` rows from already-ingested NT Hansard speeches.
+
+    NT consensus government → most votes are `vote_type='consensus'` with
+    NULL ayes/nays (no per-member tracking in Hansard text). The Hansard
+    convention `---Carried` / `---Defeated` annotation is the canonical
+    signal. Bill linkage is opportunistic via `Bill N` mention.
+
+    Idempotent: upsert keyed on (source_system='votes-nt', source_url).
+    Re-runs UPDATE in place. Run after ingest-nt-hansard.
+    """
+    from .legislative.nt_votes import extract_nt_votes as _extract
+
+    async def _wrap(db: Database) -> None:
+        stats = await _extract(db, limit_sittings=limit_sittings)
+        console.print(
+            f"[green]extract-nt-votes[/green]: "
+            f"scanned={stats.speeches_scanned} "
+            f"inserted={stats.votes_inserted} updated={stats.votes_updated} "
+            f"skipped={stats.votes_skipped_no_outcome} "
+            f"bill_links={stats.bill_linkage_hits}"
+        )
+        if stats.by_type:
+            console.print(f"[dim]by_type:[/dim] {stats.by_type}")
+        if stats.by_result:
+            console.print(f"[dim]by_result:[/dim] {stats.by_result}")
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
+@cli.command("ingest-nt-hansard")
+@click.option("--limit-sittings", type=int, default=None,
+              help="Cap on sittings ingested (newest-first). Smoke-test friendly.")
+@click.option("--since", "since_hn_id", type=str, default=None,
+              help="Only ingest sittings with hn_id sorting strictly above this (e.g. 'hn250101').")
+@click.option("--url", "only_url", type=str, default=None,
+              help="Bypass discovery and ingest a single transcript URL directly.")
+@click.option("--delay", type=float, default=1.0,
+              help="Seconds between per-sitting fetches.")
+@click.pass_context
+def cmd_ingest_nt_hansard(
+    ctx: click.Context, limit_sittings, since_hn_id, only_url, delay,
+) -> None:
+    """Ingest Northwest Territories Hansard from ntlegislativeassembly.ca.
+
+    Discovery walks /documents-proceedings/hansard?page=N until empty
+    (~30 pages back to ~2002). Per-sitting HTML at /hansard/hn{YYMMDD}
+    parsed into one speech row per views-row--type-statement. Speaker
+    attribution by direct nt_mla_slug FK (run ingest-nt-mlas first).
+    Idempotent: upsert keyed on (source_system, source_url, sequence).
+    """
+    from .legislative.nt_hansard import ingest_nt_hansard as _ingest
+
+    async def _wrap(db: Database) -> None:
+        stats = await _ingest(
+            db,
+            limit_sittings=limit_sittings,
+            since_hn_id=since_hn_id,
+            only_url=only_url,
+            delay=delay,
+        )
+        console.print(
+            f"[green]ingest-nt-hansard[/green]: "
+            f"seen={stats.sittings_seen} fetched={stats.sittings_fetched} "
+            f"skipped={stats.sittings_skipped} "
+            f"inserted={stats.speeches_inserted} updated={stats.speeches_updated} "
+            f"sessions={len(stats.sessions_touched)} "
+            f"warns={stats.parse_warnings} fails={len(stats.fetch_failures)}"
+        )
+        if stats.fetch_failures:
+            console.print(
+                f"[yellow]nt_hansard fail samples:[/yellow] {stats.fetch_failures[:3]}"
+            )
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
+@cli.command("ingest-nt-mlas")
+@click.option("--include-former/--no-include-former", default=True,
+              help="Walk /members/former-members and insert any MLA missing from politicians.")
+@click.pass_context
+def cmd_ingest_nt_mlas(ctx: click.Context, include_former: bool) -> None:
+    """Stamp `nt_mla_slug` on existing NT politicians + insert former MLAs.
+
+    Current 19 MLAs typically already exist via Open North roster
+    (`opennorth:northwest-territories-legislature:{slug}`); this stamps
+    `nt_mla_slug` on those rows so the Hansard parser can attribute
+    speaker turns by FK. Former MLAs (~100+, paginated at
+    /members/former-members) get inserted fresh with `is_active=false`,
+    `party=NULL` (NT is consensus government — no party affiliation).
+
+    Idempotent. Re-runs only stamp newly-discovered slugs.
+    """
+    from .legislative.nt_mlas import ingest_nt_mlas as _ingest
+
+    async def _wrap(db: Database) -> None:
+        stats = await _ingest(db, include_former=include_former)
+        console.print(
+            f"[green]ingest-nt-mlas[/green]: "
+            f"current={stats.current_slugs_seen} former={stats.former_slugs_seen} "
+            f"stamped={stats.politicians_stamped} "
+            f"inserted={stats.politicians_inserted} "
+            f"skipped={stats.politicians_skipped}"
+        )
+        if stats.failures:
+            console.print(
+                f"[yellow]nt_mlas warnings:[/yellow] "
+                f"{stats.failures[:5]}"
+            )
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
 @cli.command("ingest-nu-bills")
 @click.option("--assembly", type=int, default=None,
               help="Assembly number (default: current sitting).")
@@ -3202,6 +3407,7 @@ def cmd_project_embeddings(
                     cluster_stats.level_counts.get(2, 0),
                     cluster_stats.level_counts.get(3, 0),
                     cluster_stats.level_counts.get(4, 0),
+                    cluster_stats.level_counts.get(5, 0),
                 ),
             )
             console.print(
@@ -3210,6 +3416,7 @@ def cmd_project_embeddings(
                 f"L2={cluster_stats.level_counts.get(2, 0)} "
                 f"L3={cluster_stats.level_counts.get(3, 0)} "
                 f"L4={cluster_stats.level_counts.get(4, 0)} "
+                f"L5={cluster_stats.level_counts.get(5, 0)} "
                 f"({cluster_stats.cluster_seconds:.1f}s)"
             )
 
@@ -3240,32 +3447,46 @@ def cmd_project_embeddings(
 def cmd_refresh_coverage_stats(ctx: click.Context) -> None:
     """Recompute jurisdiction_sources counts from live tables.
 
-    Drives the public /coverage page. Flips Hansard status 'none'/
-    'partial'/'live' based on speech-count thresholds, updates
-    speeches_count / politicians_count / bills_count, stamps
-    last_verified_at = now(). Status flags for bills/votes/committees
-    are left alone — those are editorial.
+    Drives the public /coverage page. Auto-flips:
+      * hansard_status: 'live' if speeches ≥ 50k, 'partial' if 1k-49k.
+      * votes_status: 'live' if votes ≥ 100, 'partial' if 1-99, 'none' otherwise.
+      * bills_status: 'live' if bills ≥ 500, 'partial' if 1-499, 'none' otherwise.
+    Updates speeches_count / politicians_count / bills_count / votes_count
+    and stamps last_verified_at = now(). 'blocked' status flags are
+    preserved across all three columns. Committees status remains editorial.
     """
     from .legislative.coverage_stats import refresh_coverage_stats as _refresh
 
     async def _wrap(db: Database) -> None:
         report = await _refresh(db)
         for code, stats in sorted(report.items()):
-            arrow = (
+            h_arrow = (
                 f"hansard {stats['prev_hansard_status']}→{stats['hansard_status']}"
                 if stats["prev_hansard_status"] != stats["hansard_status"]
                 else f"hansard={stats['hansard_status']}"
             )
+            v_arrow = (
+                f"votes {stats['prev_votes_status']}→{stats['votes_status']}"
+                if stats["prev_votes_status"] != stats["votes_status"]
+                else f"votes={stats['votes_status']}"
+            )
+            b_arrow = (
+                f"bills {stats['prev_bills_status']}→{stats['bills_status']}"
+                if stats["prev_bills_status"] != stats["bills_status"]
+                else f"bills={stats['bills_status']}"
+            )
             console.print(
                 f"[green]{code}[/green]: speeches={stats['speeches']} "
                 f"(was {stats['prev_speeches']}) politicians={stats['politicians']} "
-                f"bills={stats['bills']}  {arrow}"
+                f"bills={stats['bills']} (was {stats['prev_bills']}) "
+                f"votes={stats['votes']} (was {stats['prev_votes']})  "
+                f"{h_arrow}  {v_arrow}  {b_arrow}"
             )
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 
 
 @cli.command("resolve-presiding-speakers")
-@click.option("--province", type=click.Choice(["AB", "BC", "QC", "MB", "NB", "NL", "NS", "ON"]), default="AB",
+@click.option("--province", type=click.Choice(["AB", "BC", "QC", "MB", "NB", "NL", "NS", "ON", "NT"]), default="AB",
               help="Jurisdiction whose Speaker roster to seed + resolve.")
 @click.option("--limit", type=int, default=None,
               help="Cap candidate speeches scanned (smoke-test aid).")
