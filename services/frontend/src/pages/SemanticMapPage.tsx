@@ -150,17 +150,44 @@ export default function SemanticMapPage() {
     setUrl(filter, selectedId, focusedId, next);
   };
 
+  // Walks past singleton-only parent → child edges so a click never
+  // lands on a focused view that's "just one sphere stuck in space".
+  // The hierarchy was built with majority-vote-parent linkage and at
+  // mcs ratios near 2× ~half of L1→L2 edges are singletons (and the
+  // chain can keep going). Returns the original cluster unchanged
+  // when it already branches (≥2 children) — this only kicks in for
+  // dead-end navigation paths.
+  const findFocusTarget = (start: ClusterRow): ClusterRow => {
+    let current = start;
+    // Hard cap: max chain length is the hierarchy depth (currently 4,
+    // soon 5). 6 is a defensive ceiling.
+    for (let i = 0; i < 6; i++) {
+      if (current.level >= 5) return current;
+      const children = allClusters.filter((c) => c.parent_id === current.id);
+      if (children.length !== 1) return current; // 0=leaf, ≥2=branch
+      current = children[0];
+    }
+    return current;
+  };
+
   // Focus navigation. Tapping a cluster:
-  //   - If the cluster has children at a deeper level → focus on it
-  //     (camera flies in, scene shows only those children).
-  //   - If it's a leaf (level=4) → open the drawer for its chunks.
+  //   - If the cluster (after auto-skipping singleton chains) has
+  //     children at a deeper level → focus on it (camera flies in,
+  //     scene shows only those children).
+  //   - If it resolves to a leaf → open the drawer for its chunks.
   // Click on background or back button → step out of focus.
   const onClusterClick = (c: ClusterRow) => {
-    if (c.level >= 4) {
-      setUrl(filter, c.id, focusedId, mode);
+    const target = findFocusTarget(c);
+    const targetChildren = allClusters.filter((x) => x.parent_id === target.id);
+    if (target.level >= 5 || targetChildren.length === 0) {
+      // Leaf — open drawer at the resolved cluster, not the click
+      // origin. Parent set to target.parent_id so closing the drawer
+      // returns to the deepest branching ancestor instead of all the
+      // way back to where the user clicked.
+      setUrl(filter, target.id, target.parent_id, mode);
       return;
     }
-    setUrl(filter, null, c.id, mode);
+    setUrl(filter, null, target.id, mode);
   };
   const closeDrawer = () => {
     setUrl(filter, null, focusedId, mode);
@@ -181,16 +208,18 @@ export default function SemanticMapPage() {
     setUrl(filter, null, currentFocused.parent_id, mode);
   };
 
-  // Search-to-jump: same semantics as clicking a cluster on the map
-  // (focus if it has descendants, open the drawer if it's a leaf).
-  // Routes through onClusterClick so any cluster-click side effects
-  // (URL state, etc.) stay in lockstep.
+  // Search-to-jump: same auto-skip semantics as clicking a cluster on
+  // the map. If the target's descent chain is all singletons we walk
+  // past them so the user lands at a branching descendant or the
+  // deepest leaf, not the search-hit's exact level.
   const onSearchJump = (c: ClusterRow) => {
-    if (c.level >= 4) {
-      setUrl(filter, c.id, c.parent_id, mode);
+    const target = findFocusTarget(c);
+    const targetChildren = allClusters.filter((x) => x.parent_id === target.id);
+    if (target.level >= 5 || targetChildren.length === 0) {
+      setUrl(filter, target.id, target.parent_id, mode);
       return;
     }
-    setUrl(filter, null, c.id, mode);
+    setUrl(filter, null, target.id, mode);
   };
 
   const [hoveredId, setHoveredId] = useState<number | null>(null);
@@ -265,14 +294,28 @@ export default function SemanticMapPage() {
     return clusterData?.clusters.find((c) => c.id === selectedId) ?? null;
   }, [clusterData, selectedId]);
 
+  // Two situations want the points payload:
+  //   1. The user opened a cluster's drawer (selected != null) — list
+  //      representative chunks in the side drawer.
+  //   2. The focused cluster is L5 — render its individual chunks as
+  //      points in the canvas, the deepest LOD layer ("right down to
+  //      the quotes themselves").
+  // L5-focus takes priority since it's what the canvas renders. The
+  // drawer can only open for L5 if the user has *also* selected that
+  // L5 — same cluster, same hook call, no conflict.
+  const pointsTarget = useMemo<ClusterRow | null>(() => {
+    if (focusedCluster?.level === 5) return focusedCluster;
+    return selected;
+  }, [focusedCluster, selected]);
   const { data: pointsData, loading: pointsLoading } = usePoints({
     filter,
-    clusterLevel: selected?.level ?? 1,
-    clusterId: selected?.id ?? null,
-    enabled: selected != null,
+    clusterLevel: pointsTarget?.level ?? 1,
+    clusterId: pointsTarget?.id ?? null,
+    limit: focusedCluster?.level === 5 ? 2000 : 500,
+    enabled: pointsTarget != null,
   });
 
-  const noRun = clusterData?.run_id == null;
+  const noRun = clusterData != null && clusterData.run_id == null;
   const totalCount = clusterData?.clusters.length ?? 0;
 
   return (
@@ -334,10 +377,9 @@ export default function SemanticMapPage() {
           </>
         ) : (
           <span className="semantic-map__crumb-meta">
-            {clustersLoading && "Loading clusters…"}
             {!clustersLoading && clusterData && (
               effectiveMode === "3d"
-                ? `${totalCount.toLocaleString()} clusters across 4 levels — tap a topic to explore`
+                ? `${totalCount.toLocaleString()} clusters across 5 levels — tap a topic to explore`
                 : `${clusters2D.length.toLocaleString()} top-level topics`
             )}
           </span>
@@ -389,6 +431,12 @@ export default function SemanticMapPage() {
               level={1}
               onResetView={() => setResetSignal((n) => n + 1)}
             />
+          )}
+          {!noRun && !clusterError && clustersLoading && !clusterData && (
+            <div className="mapview__loading" role="status" aria-live="polite">
+              <span className="mapview__leaf" aria-hidden>🍁</span>
+              <span className="mapview__loading-text">Loading semantic map…</span>
+            </div>
           )}
         </div>
         {!noRun && !clusterError && (

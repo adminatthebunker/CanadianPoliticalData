@@ -15,7 +15,7 @@ import { baseFilterSchema, effectivePoliticianIds } from "./search.js";
 //     extra round-trips on drilldown.
 //
 //   GET /projections/clusters       (legacy)
-//     query: baseFilterSchema + { cluster_level: 1|2|3|4, parent_cluster_id?: int }
+//     query: baseFilterSchema + { cluster_level: 1|2|3|4|5, parent_cluster_id?: int }
 //     returns one row per cluster at the given level (optionally restricted
 //     to children of parent_cluster_id). Kept for the 2D fallback renderer
 //     and any external consumers; the 3D renderer no longer uses it.
@@ -37,6 +37,7 @@ interface ProjectionRunRow {
   cluster_count_l2: number | null;
   cluster_count_l3: number | null;
   cluster_count_l4: number | null;
+  cluster_count_l5: number | null;
   finished_at: string | null;
 }
 
@@ -73,12 +74,12 @@ interface PointRow {
 }
 
 const clustersQuery = baseFilterSchema.extend({
-  cluster_level: z.coerce.number().int().min(1).max(4).default(1),
+  cluster_level: z.coerce.number().int().min(1).max(5).default(1),
   parent_cluster_id: z.coerce.number().int().positive().optional(),
 });
 
 const pointsQuery = baseFilterSchema.extend({
-  cluster_level: z.coerce.number().int().min(1).max(4),
+  cluster_level: z.coerce.number().int().min(1).max(5),
   cluster_id: z.coerce.number().int().positive(),
   limit: z.coerce.number().int().min(1).max(2000).default(500),
 });
@@ -158,6 +159,7 @@ function clusterCol(level: number): string {
     case 2: return "cluster_id_l2";
     case 3: return "cluster_id_l3";
     case 4: return "cluster_id_l4";
+    case 5: return "cluster_id_l5";
     default: throw new Error(`invalid cluster level ${level}`);
   }
 }
@@ -165,7 +167,8 @@ function clusterCol(level: number): string {
 async function getCurrentRun(): Promise<ProjectionRunRow | null> {
   return queryOne<ProjectionRunRow>(
     `SELECT id::text AS id,
-            cluster_count_l1, cluster_count_l2, cluster_count_l3, cluster_count_l4,
+            cluster_count_l1, cluster_count_l2, cluster_count_l3,
+            cluster_count_l4, cluster_count_l5,
             finished_at
        FROM projection_runs
       WHERE is_current = true
@@ -223,7 +226,8 @@ export default async function projectionRoutes(app: FastifyInstance) {
       : `
         WITH filtered AS (
           SELECT p.cluster_id_l1, p.cluster_id_l2,
-                 p.cluster_id_l3, p.cluster_id_l4
+                 p.cluster_id_l3, p.cluster_id_l4,
+                 p.cluster_id_l5
             FROM speech_chunk_projections p
             JOIN speech_chunks ch ON ch.id = p.chunk_id
            WHERE p.run_id = $1::uuid
@@ -242,6 +246,9 @@ export default async function projectionRoutes(app: FastifyInstance) {
           UNION ALL
           SELECT cluster_id_l4, count(*)::int FROM filtered
            WHERE cluster_id_l4 IS NOT NULL GROUP BY 1
+          UNION ALL
+          SELECT cluster_id_l5, count(*)::int FROM filtered
+           WHERE cluster_id_l5 IS NOT NULL GROUP BY 1
         )
         SELECT c.id::int AS id,
                c.parent_id::int AS parent_id,
@@ -268,6 +275,7 @@ export default async function projectionRoutes(app: FastifyInstance) {
         l2: run.cluster_count_l2,
         l3: run.cluster_count_l3,
         l4: run.cluster_count_l4,
+        l5: run.cluster_count_l5,
       },
       clusters,
     };

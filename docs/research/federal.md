@@ -63,7 +63,7 @@ docker compose run --rm scanner python -m src ingest-federal-hansard \
 - **Format:** JSON via openparliament; CSV at source. Each vote includes party-line tally + per-MP position.
 - **Roll-call availability:** Yes, every recorded division back to 1994 is named-MP-resolved.
 - **Difficulty (1–5):** **2**.
-- **Status:** Migration `0018_votes.sql` exists on disk but **intentionally unapplied** — waiting until we model NT/NU consensus-government decisions cleanly so the same schema works for partisan and non-partisan jurisdictions. Federal voting ingestion is not blocked by code, only by that schema decision.
+- **Status:** ✅ **LIVE (2026-04-30).** Migration `0018_votes.sql` applied; federal votes extracted via `services/scanner/src/legislative/federal_votes.py` (openparliament.ca structured-JSON pipeline). **4,481 votes / 1.45M vote_positions / 2006-05 → 2024-12 (18.5 years) / 99.98% politician-FK** via `openparliament_slug` exact match. Daily 11:30 UTC schedule slot. → [`docs/runbooks/handoff-2026-04-30-federal-votes.md`](../runbooks/handoff-2026-04-30-federal-votes.md). Earliest available structured data is 39-1 (2006); openparliament.ca and ourcommons.ca both lack pre-2004 vote coverage. Pre-2004 = parl.canadiana.ca archive (scanned PDFs, not structured).
 
 ## Committee Activity
 
@@ -118,7 +118,9 @@ docker compose run --rm scanner python -m src ingest-federal-hansard \
 - [x] Speech chunker + embedder running on GPU
 - [x] Frontend surfaces (tab + timeline) showing per-politician federal activity
 - [ ] Bills ingestion via openparliament JSON (LEGISinfo-only at present)
-- [ ] Votes ingestion (gated on `0018_votes.sql` apply, which is gated on consensus-gov't modeling)
+- [x] **Votes ingestion live (2026-04-30)** — 4,481 votes / 1.45M positions / 2006-2024 / 99.98% pol-FK via openparliament_slug. Daily 11:30 UTC schedule.
+- [ ] Federal historical bills ingestion — would lift vote-to-bill linkage from 10.2% (44-1 only) to ~50% corpus-wide via trivial UPDATE pass. Separate workstream.
+- [ ] Pre-2004 archival votes (parl.canadiana.ca scans) — would require OCR + heavy parsing; deferred indefinitely.
 - [ ] Committees full pipeline (`ingest-committees-federal` exists; not on a schedule)
 
 ## Open issues

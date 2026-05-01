@@ -61,7 +61,7 @@ DEFAULT_TRANSFORM_BATCH = 50_000
 # L4 (mcs=20) yields ~3-4 children per L3 cluster on average — fine
 # enough to be worth drilling into without exploding the cluster count
 # beyond what the labelling stage can chew through.
-HDBSCAN_MIN_SIZES = (200, 100, 40, 15)
+HDBSCAN_MIN_SIZES = (900, 300, 100, 30, 10)
 
 # Fitting HDBSCAN on the full corpus OOMs the box at ~5M points: the MST
 # construction working set bloats past available RAM. Instead, we fit on
@@ -189,7 +189,10 @@ async def mark_run_status(
         args.append(chunk_count)
         sets.append(f"chunk_count = ${len(args)}")
     if cluster_counts is not None:
-        keys = ("cluster_count_l1", "cluster_count_l2", "cluster_count_l3", "cluster_count_l4")
+        keys = (
+            "cluster_count_l1", "cluster_count_l2", "cluster_count_l3",
+            "cluster_count_l4", "cluster_count_l5",
+        )
         for key, count in zip(keys, cluster_counts):
             args.append(count)
             sets.append(f"{key} = ${len(args)}")
@@ -345,6 +348,7 @@ async def _transform_all_chunks(
                     x2 = EXCLUDED.x2, y2 = EXCLUDED.y2,
                     cluster_id_l1 = NULL, cluster_id_l2 = NULL,
                     cluster_id_l3 = NULL, cluster_id_l4 = NULL,
+                    cluster_id_l5 = NULL,
                     projected_at = now()
             """,
             run_id,
@@ -487,7 +491,7 @@ async def cluster(
     db: Database, *, run_id: str,
     min_sizes: Sequence[int] = HDBSCAN_MIN_SIZES,
 ) -> ClusterStats:
-    """Stage 2: HDBSCAN at four levels on the 3D coords. Writes clusters
+    """Stage 2: HDBSCAN at five levels on the 3D coords. Writes clusters
     and updates speech_chunk_projections.cluster_id_lN. Each level fits
     HDBSCAN on a uniform sample (HDBSCAN_SAMPLE_SIZE) and assigns the
     remaining points by nearest centroid — running over the full corpus
@@ -499,8 +503,8 @@ async def cluster(
     # Idempotent re-run: clear any prior cluster rows + FK references
     # for this run_id before re-clustering. Done as two passes because
     # a single DELETE relies on the FK's ON DELETE SET NULL cascade
-    # rewriting 4 cluster_id_lN columns across all projection rows of
-    # the run (4.9M × 4 ≈ 20M cell writes), which routinely overruns
+    # rewriting 5 cluster_id_lN columns across all projection rows of
+    # the run (4.9M × 5 ≈ 25M cell writes), which routinely overruns
     # asyncpg's default timeout. Pre-NULLing the FK columns lets the
     # subsequent DELETE run with no cascade work to do.
     log.info("cluster: clearing prior cluster_id_lN FK references...")
@@ -508,7 +512,8 @@ async def cluster(
         """
         UPDATE speech_chunk_projections
            SET cluster_id_l1 = NULL, cluster_id_l2 = NULL,
-               cluster_id_l3 = NULL, cluster_id_l4 = NULL
+               cluster_id_l3 = NULL, cluster_id_l4 = NULL,
+               cluster_id_l5 = NULL
          WHERE run_id = $1::uuid
         """,
         run_id,
@@ -559,11 +564,12 @@ async def cluster(
     stats.cluster_seconds = time.perf_counter() - t0
 
     # Build hierarchy: each L2 cluster's parent is the L1 cluster
-    # containing the plurality of its members. Same L2→L3, L3→L4.
+    # containing the plurality of its members. Same L2→L3, L3→L4, L4→L5.
     log.info("cluster: building parent links via majority vote...")
     parent_l2_to_l1 = _majority_vote_parent(level_labels[2], level_labels[1])
     parent_l3_to_l2 = _majority_vote_parent(level_labels[3], level_labels[2])
     parent_l4_to_l3 = _majority_vote_parent(level_labels[4], level_labels[3]) if 4 in level_labels else {}
+    parent_l5_to_l4 = _majority_vote_parent(level_labels[5], level_labels[4]) if 5 in level_labels else {}
 
     # Compute centroids per (level, cluster_label).
     cluster_records: list[dict[str, Any]] = []
@@ -602,6 +608,10 @@ async def cluster(
             parent_orig = parent_l4_to_l3.get(cl)
             if parent_orig is not None and parent_orig != -1:
                 parent_db_id = orig_to_db.get((3, parent_orig))
+        elif level == 5:
+            parent_orig = parent_l5_to_l4.get(cl)
+            if parent_orig is not None and parent_orig != -1:
+                parent_db_id = orig_to_db.get((4, parent_orig))
 
         # Placeholder label / top_terms — filled in the label stage.
         new_id = await db.fetchval(
@@ -625,7 +635,8 @@ async def cluster(
         orig_to_db[(level, cl)] = int(new_id)
 
     # Update speech_chunk_projections with cluster_id_lN. Build per-chunk
-    # arrays of (level1, level2, level3, level4) DB ids and write via UNNEST.
+    # arrays of (l1..l5) DB ids and write via UNNEST. Levels with no
+    # corresponding label array (sparse run) write None → NULL.
     log.info("cluster: stamping cluster_id_lN onto projection rows...")
     BATCH = 50_000
     for start in range(0, len(chunk_ids), BATCH):
@@ -646,19 +657,25 @@ async def cluster(
         l4_b = [
             orig_to_db.get((4, int(level_labels[4][i])))
             for i in range(start, end)
-        ]
+        ] if 4 in level_labels else [None] * (end - start)
+        l5_b = [
+            orig_to_db.get((5, int(level_labels[5][i])))
+            for i in range(start, end)
+        ] if 5 in level_labels else [None] * (end - start)
         await db.execute(
             """
             UPDATE speech_chunk_projections AS p
                SET cluster_id_l1 = v.l1,
                    cluster_id_l2 = v.l2,
                    cluster_id_l3 = v.l3,
-                   cluster_id_l4 = v.l4
-              FROM UNNEST($1::uuid[], $2::bigint[], $3::bigint[], $4::bigint[], $5::bigint[])
-                   AS v(id, l1, l2, l3, l4)
-             WHERE p.chunk_id = v.id AND p.run_id = $6::uuid
+                   cluster_id_l4 = v.l4,
+                   cluster_id_l5 = v.l5
+              FROM UNNEST($1::uuid[], $2::bigint[], $3::bigint[], $4::bigint[],
+                          $5::bigint[], $6::bigint[])
+                   AS v(id, l1, l2, l3, l4, l5)
+             WHERE p.chunk_id = v.id AND p.run_id = $7::uuid
             """,
-            ids_b, l1_b, l2_b, l3_b, l4_b, run_id,
+            ids_b, l1_b, l2_b, l3_b, l4_b, l5_b, run_id,
             timeout=600.0,
         )
         log.info("cluster: stamped projections %d–%d", start, end)

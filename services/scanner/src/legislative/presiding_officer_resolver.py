@@ -215,6 +215,23 @@ SPEAKER_ROSTER: dict[str, list[SpeakerTerm]] = {
     "ON": [
         SpeakerTerm("Donna Skelly",     "Donna",    "Skelly",   date(2025, 4, 15), None),
     ],
+    # Northwest Territories: covers the 13th Assembly (1995) through
+    # current 20th Assembly. NT runs consensus government — Speakers
+    # are independents (no party). The Hansard backfill covers 2002+
+    # but the roster goes a bit earlier in case archived transcripts
+    # surface. Year-only dates from Wikipedia "Speaker of the
+    # Northwest Territories Legislative Assembly"; transitions land at
+    # Assembly boundaries except Krutko → Delorey mid-15th Assembly.
+    "NT": [
+        SpeakerTerm("Samuel Gargan",       "Samuel",     "Gargan",   date(1995,  1,  1), date(2000,  1,  1)),  # 13th
+        SpeakerTerm("Tony Whitford",       "Tony",       "Whitford", date(2000,  1,  1), date(2003,  1,  1)),  # 14th
+        SpeakerTerm("David Krutko",        "David",      "Krutko",   date(2003,  1,  1), date(2004,  1,  1)),  # 15th
+        SpeakerTerm("Paul Delorey",        "Paul",       "Delorey",  date(2004,  1,  1), date(2011,  1,  1)),  # 15th-16th
+        SpeakerTerm("Jackie Jacobson",     "Jackie",     "Jacobson", date(2011,  1,  1), date(2015,  1,  1)),  # 17th
+        SpeakerTerm("Jackson Lafferty",    "Jackson",    "Lafferty", date(2015,  1,  1), date(2019,  1,  1)),  # 18th
+        SpeakerTerm("Frederick Blake Jr.", "Frederick",  "Blake",    date(2019,  1,  1), date(2023, 12,  7)),  # 19th
+        SpeakerTerm("Shane Thompson",      "Shane",      "Thompson", date(2023, 12,  7), None),                # 20th
+    ],
 }
 
 

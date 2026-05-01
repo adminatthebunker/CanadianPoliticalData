@@ -63,10 +63,11 @@ function computeRootRangesByLevel(clusters: ClusterRow[]): RootRangeByLevel {
 // grows past LOD_SPHERE_MAX_PX and L2 enters the visible band. Same
 // pattern cascades to L3 and L4.
 const LEVEL_RADIUS_BANDS: Record<number, [number, number]> = {
-  1: [4.5, 11.0],
-  2: [1.8, 4.0],
-  3: [0.9, 1.6],
-  4: [0.35, 0.75],
+  1: [5.5, 11.0],
+  2: [2.4, 4.5],
+  3: [1.1, 2.0],
+  4: [0.55, 0.9],
+  5: [0.25, 0.45],
 };
 
 // Per-level cap on simultaneously-rendered clusters. Even with LOD
@@ -76,10 +77,11 @@ const LEVEL_RADIUS_BANDS: Record<number, [number, number]> = {
 // reads as visual noise. Top-N by member_count keeps the default scene
 // legible; the long tail surfaces only as you zoom into its region.
 const LEVEL_RENDER_CAP: Record<number, number> = {
-  1: 15,
-  2: 60,
-  3: 140,
-  4: 320,
+  1: 30,
+  2: 80,
+  3: 160,
+  4: 360,
+  5: 800,
 };
 
 function clusterRadius(
@@ -171,6 +173,7 @@ const LEVEL_PADDING_MULT: Record<number, number> = {
   2: 0.8,
   3: 0.4,
   4: 0.2,
+  5: 0.1,
 };
 const RELAX_ITERATIONS = 40;
 
@@ -423,11 +426,15 @@ function EdgesLayer({ edges, hoveredId }: EdgesLayerProps) {
         const incidentToHover =
           hoveredId != null && (src.id === hoveredId || dst.id === hoveredId);
         const someoneHovered = hoveredId != null;
-        const baseAlpha = 0.18 + 0.45 * similarity;
+        // Higher floor than the original (0.18) so threads stay
+        // legible against the dark stage even at low similarity —
+        // sparse-edge scenes were pushing baseAlpha below 0.32 and
+        // the user reported the connections looked "missing".
+        const baseAlpha = 0.32 + 0.40 * similarity;
         const opacity = incidentToHover
-          ? 0.85
+          ? 0.92
           : someoneHovered
-          ? baseAlpha * 0.25
+          ? baseAlpha * 0.3
           : baseAlpha;
         return (
           <Line
@@ -459,6 +466,7 @@ function PointsLayer({ points, baseRadius }: PointsLayerProps) {
   // we only set per-instance position via the matrix.
   const meshRef = useRef<THREE.InstancedMesh>(null);
   const dummy = useMemo(() => new THREE.Object3D(), []);
+  const [hoverIdx, setHoverIdx] = useState<number | null>(null);
   useEffect(() => {
     if (!meshRef.current) return;
     points.forEach((p, i) => {
@@ -468,8 +476,31 @@ function PointsLayer({ points, baseRadius }: PointsLayerProps) {
     });
     meshRef.current.instanceMatrix.needsUpdate = true;
   }, [points, dummy]);
+  // Reset hover when the point set changes — instance indices shift.
+  useEffect(() => { setHoverIdx(null); }, [points]);
+  const hovered = hoverIdx != null ? points[hoverIdx] : null;
   return (
-    <instancedMesh ref={meshRef} args={[undefined, undefined, points.length]}>
+    <>
+    <instancedMesh
+      ref={meshRef}
+      args={[undefined, undefined, points.length]}
+      onPointerMove={(e) => {
+        e.stopPropagation();
+        if (e.instanceId != null && e.instanceId !== hoverIdx) {
+          setHoverIdx(e.instanceId);
+        }
+      }}
+      onPointerOut={() => setHoverIdx(null)}
+      onClick={(e) => {
+        e.stopPropagation();
+        if (e.instanceId == null) return;
+        const p = points[e.instanceId];
+        if (!p) return;
+        // Open the speech detail page at the specific chunk anchor.
+        // Same /speeches/<id>#chunk-<id> shape used by ClusterDrawer.
+        window.location.assign(`/speeches/${p.speech_id}#chunk-${p.chunk_id}`);
+      }}
+    >
       <sphereGeometry args={[baseRadius * 0.16, 10, 8]} />
       <meshStandardMaterial
         color="#7dd3fc"
@@ -479,6 +510,24 @@ function PointsLayer({ points, baseRadius }: PointsLayerProps) {
         opacity={0.7}
       />
     </instancedMesh>
+    {hovered && (
+      <Html
+        position={[spread(hovered.x), spread(hovered.y) + baseRadius * 0.5, spread(hovered.z)]}
+        center
+        zIndexRange={[200, 100]}
+        style={{ pointerEvents: "none" }}
+      >
+        <div className="semantic-map__chunk-tooltip">
+          {hovered.snippet}
+          <div className="semantic-map__chunk-tooltip-meta">
+            {hovered.spoken_at ? new Date(hovered.spoken_at).toLocaleDateString() : ""}
+            {hovered.party_at_time ? ` · ${hovered.party_at_time}` : ""}
+            {hovered.province_territory ? ` · ${hovered.province_territory}` : ""}
+          </div>
+        </div>
+      </Html>
+    )}
+    </>
   );
 }
 
@@ -1055,7 +1104,15 @@ export default function ClusterCloud3D({
   // screen (not the global topology, which would be 4400 nodes).
   const edges = useMemo(() => {
     const visibleClusters = clusters.filter((c) => lod.rendered.has(c.id));
-    const k = visibleClusters.length <= 12 ? 4 : visibleClusters.length <= 30 ? 3 : 2;
+    // K-NN density. With the previous (4, 3, 2) tiering, focused
+    // scenes with ~30-60 children fell into k=2 — meaning each
+    // cluster connected to only two neighbours, leaving the L2 and
+    // L3 web visibly sparse. Bumping floor to k=4 (and topping out
+    // at 7 in sparse scenes) gives every cluster enough threads to
+    // suggest follow-on exploration without turning dense scenes
+    // into hairballs.
+    const n = visibleClusters.length;
+    const k = n <= 8 ? 7 : n <= 20 ? 6 : n <= 50 ? 5 : 4;
     return computeClusterEdges(visibleClusters, k);
   }, [clusters, lod.rendered]);
 

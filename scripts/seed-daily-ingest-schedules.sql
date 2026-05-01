@@ -17,7 +17,8 @@
 -- Slot map (UTC):
 --   08:00 chunk + embed (02:00 Mountain, post-ingest, cross-jurisdictional)
 --   11:00 federal  | 12:00 NS (existing) | 14:00 BC | 15:00 AB | 16:00 QC
---   17:00 MB       | 18:00 ON           | 19:00 NB | 20:00 NL | 21:00 NT/NU
+--   17:00 MB       | 18:00 ON           | 19:00 NB | 20:00 NL
+--   21:00 NT bills + Hansard chain | 21:15 NU bills (Hansard pending)
 
 BEGIN;
 
@@ -37,7 +38,10 @@ INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) V
  '0 11 * * *', true, 'daily-ingest-rollout'),
 ('Federal Hansard daily ingest',
  'ingest-federal-hansard', '{}'::jsonb,
- '15 11 * * *', true, 'daily-ingest-rollout');
+ '15 11 * * *', true, 'daily-ingest-rollout'),
+('Federal votes extraction',
+ 'extract-federal-votes', '{}'::jsonb,
+ '30 11 * * *', true, 'daily-ingest-rollout');
 
 -- ─── BC (14:00 UTC) ─────────────────────────────────────────────────
 INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) VALUES
@@ -171,12 +175,23 @@ INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) V
  '45 20 * * *', true, 'daily-ingest-rollout');
 
 -- ─── NT + NU (21:00 UTC) ────────────────────────────────────────────
--- Consensus-government legislatures: bills only (no sponsors, no Hansard
--- ingester until research-handoff per CLAUDE.md rule #5).
+-- Consensus-government legislatures. NT Hansard live since 2026-04-29
+-- (ntlegislativeassembly.ca slug-FK pattern). NU Hansard still gated on
+-- research-handoff (multilingual EN+Inuktitut+Inuinnaqtun+FR). NT bills
+-- and Hansard chain serially; NT presiding-officer resolver follows.
 INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) VALUES
 ('NT bills daily ingest',
  'ingest-nt-bills', '{}'::jsonb,
  '0 21 * * *', true, 'daily-ingest-rollout'),
+('NT Hansard daily ingest',
+ 'ingest-nt-hansard', '{"limit_sittings": 5}'::jsonb,
+ '30 21 * * *', true, 'daily-ingest-rollout'),
+('NT presiding speaker resolver',
+ 'resolve-presiding-speakers', '{"province": "NT"}'::jsonb,
+ '45 21 * * *', true, 'daily-ingest-rollout'),
+('NT votes extraction',
+ 'extract-nt-votes', '{}'::jsonb,
+ '50 21 * * *', true, 'daily-ingest-rollout'),
 ('NU bills daily ingest',
  'ingest-nu-bills', '{}'::jsonb,
  '15 21 * * *', true, 'daily-ingest-rollout');

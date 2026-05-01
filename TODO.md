@@ -2,7 +2,7 @@
 
 Actionable checkbox view of [`docs/timeline.md`](./docs/timeline.md). When this file disagrees with the timeline or with a plan doc under [`docs/plans/`](./docs/plans/), **the plan docs win** — update this file rather than the other way round.
 
-- **Last synced with `docs/timeline.md`:** 2026-04-29
+- **Last synced with `docs/timeline.md`:** 2026-04-30
 - **Why this exists:** the timeline is prose-shaped; this is the version you tick off. One source of priority ordering (timeline), one place to mark progress (here).
 - **How to update:** check items as they ship, move them to *Recently shipped*, and re-sync the date above. If a horizon shifts, edit `docs/timeline.md` first, then mirror here.
 
@@ -22,9 +22,9 @@ Partially built — finish, do not start new things on top.
 
 Priority one until remaining Hansard pipelines are live and votes are modelled. Every provincial Hansard build is gated on the **research-handoff rule** (CLAUDE.md convention #5) — pause and ask the user for their endpoint research before probing.
 
-### Remaining Hansard pipelines (5 left; ON shipped 2026-04-24)
+### Remaining Hansard pipelines (4 left; NT shipped 2026-04-29)
 
-- [ ] **NT Hansard** — consensus-government schema (no party whip). Research-handoff gated. → [`docs/research/northwest-territories.md`](./docs/research/northwest-territories.md)
+- [x] **NT Hansard** — consensus-government schema. Drupal HTML scrape with direct `nt_mla_slug` FK attribution (cleanest of any sub-national pipeline). 19 current + 117 former MLAs, 13th-20th Assembly Speaker roster. → [`docs/runbooks/handoff-2026-04-29-nt-hansard.md`](./docs/runbooks/handoff-2026-04-29-nt-hansard.md)
 - [ ] **NU Hansard** — consensus-government, multilingual (EN + Inuktitut + Inuinnaqtun + FR). Research-handoff gated. → [`docs/research/nunavut.md`](./docs/research/nunavut.md)
 - [ ] **SK Hansard** — PDF-only; needs dedicated `pdfplumber` parser investment (same tooling unlocks AB Hansard historical). Research-handoff gated. → [`docs/research/saskatchewan.md`](./docs/research/saskatchewan.md)
 - [ ] **PE Hansard** — sits behind WAF/CAPTCHA. Research-handoff gated; may require Playwright/Camoufox track (see *Later*). → [`docs/research/prince-edward-island.md`](./docs/research/prince-edward-island.md)
@@ -32,7 +32,13 @@ Priority one until remaining Hansard pipelines are live and votes are modelled. 
 
 ### Votes & committees
 
-- [ ] **Apply migration `0018_votes.sql`.** Drafted, intentionally unapplied. Hold until real NT/NU consensus-gov't data exists so the `vote_type` discriminator (`division | voice | acclamation | consensus`) gets exercised on every shape. → [`docs/plans/semantic-layer.md`](./docs/plans/semantic-layer.md) § 0018
+- [x] **Apply migration `0018_votes.sql`.** Applied 2026-04-30. NT consensus-government data validates the schema without revisions. NT votes extractor live (`extract-nt-votes`), 31 consensus votes across 2013-2026 NT corpus. → [`docs/runbooks/handoff-2026-04-30-votes-layer.md`](./docs/runbooks/handoff-2026-04-30-votes-layer.md)
+- [x] **Federal votes extraction (openparliament.ca structured JSON).** Live 2026-04-30. `services/scanner/src/legislative/federal_votes.py` extracts ~928 44-1 divisions × ~340 MPs = ~300K vote_positions with 100% politician_id FK match (via openparliament_slug). Daily 11:30 UTC schedule slot. → [`docs/runbooks/handoff-2026-04-30-federal-votes.md`](./docs/runbooks/handoff-2026-04-30-federal-votes.md)
+- [x] **Federal votes — historical sessions** (39-1 through 43-2) shipped 2026-04-30. 4,481 total votes / 1.45M positions / 18.5 years (2006-05 → 2024-12) / 99.98% pol-FK / 335 MB storage. → [`docs/runbooks/handoff-2026-04-30-federal-votes.md`](./docs/runbooks/handoff-2026-04-30-federal-votes.md)
+- [ ] **Federal historical bills ingestion** — would lift bill-linkage on votes from 10.2% (44-1 only) to ~50% corpus-wide via trivial UPDATE pass. Separate workstream.
+- [x] **Provincial votes extraction (BC/AB/MB/QC/ON/NS/NB/NL)** shipped 2026-04-30. 8 self-contained per-province extractor modules; 7,303 provincial votes added (QC 2,961 div+acclamation rich; NS 2,550 consensus; ON 835; AB 624; BC 249; MB 47; NL 2; NB 0 — needs regex relaxation). → [`docs/runbooks/handoff-2026-04-30-provincial-votes.md`](./docs/runbooks/handoff-2026-04-30-provincial-votes.md)
+- [ ] **Provincial votes — extractor v2 tuning** — AB/NS show ~100% pass rate (regex misses defeats); NB returned 0 (bilingual structure needs relaxed pattern). Small follow-up.
+- [ ] **Provincial votes daily-ingest schedules** — 8 schedule entries (one per province at `:50` after each Hansard chain). Mechanical; defer until needed.
 - [ ] **Committee transcripts.** Same speech pipeline, `speech_type='committee'`. Deferred until votes land. → [`docs/plans/semantic-layer.md`](./docs/plans/semantic-layer.md) § phase 4
 
 ### Historical-roster backfills (AB/MB pattern → ON/BC/QC)
@@ -137,8 +143,11 @@ Parked behind the priorities above — not abandoned.
 
 For context. Move items here from above as they land; trim aggressively after a couple of cycles.
 
-### Cycle 2026-04-26 → 2026-04-29
+### Cycle 2026-04-26 → 2026-04-30
 
+- [x] **Federal votes extractor live** — openparliament.ca structured-JSON pipeline, ~928 44-1 divisions × ~340 MPs ≈ 300K `vote_positions` with 100% politician-FK resolution via openparliament_slug exact match (cleanest votes pipeline in the project). Federal chain extended: 11:00 bills → 11:15 Hansard → 11:30 votes. → [`docs/runbooks/handoff-2026-04-30-federal-votes.md`](./docs/runbooks/handoff-2026-04-30-federal-votes.md) (2026-04-30).
+- [x] **Migration 0018 votes applied + NT votes extractor live** — schema validated against NT consensus-government data without revisions; 31 consensus votes across 2013-2026 corpus; daily 21:50 UTC schedule slot. Federal openparliament.ca + provincial regex extractions now unblocked. → [`docs/runbooks/handoff-2026-04-30-votes-layer.md`](./docs/runbooks/handoff-2026-04-30-votes-layer.md) (2026-04-30).
+- [x] **NT Hansard pipeline live** — Drupal HTML scrape of ntlegislativeassembly.ca; per-turn `<a href="/meet-members/mla/{slug}">` direct slug-FK attribution (cleanest pattern of any sub-national pipeline); 19 current + 117 former MLAs ingested; 13th-20th Assembly Speaker roster seeded. Migration 0041 + `nt_mlas.py` + `nt_hansard.py` + `nt_hansard_parse.py`. Daily 21:30 UTC schedule slot. → [`docs/runbooks/handoff-2026-04-29-nt-hansard.md`](./docs/runbooks/handoff-2026-04-29-nt-hansard.md) (2026-04-29).
 - [x] **BC pre-P35 historical roster + dated resolver + extended Speaker roster** — `bc_former_mlas.py` Wikipedia per-parliament wikitable parser (+160 MLAs / +359 `politician_terms` rows for P29-P34); `resolve-bc-speakers-dated` (single CTE with inline surname extraction); `SPEAKER_ROSTER["BC"]` extended P38 → P29 (+13 historical Speakers). BC corpus attribution 67.6% → 91.9% (+136K speeches; +20K Speaker-tagged rows; +186K chunks). → [`docs/runbooks/handoff-2026-04-29-bc-pre-p35-roster.md`](./docs/runbooks/handoff-2026-04-29-bc-pre-p35-roster.md) (2026-04-29).
 - [x] **TEI + embed resilience layer** — device-aware TEI healthcheck (single-token /embed with `--max-time 1`, fails on CPU fallback), `restart: on-failure:5`, scanner-side preflight CPU-fallback check, exponential-backoff per batch (5 attempts 1s→16s), abort-on-5-consecutive-batch-failures guard. Closes the GPU-regression gap. (2026-04-28)
 - [x] **`chunk-and-embed-speeches` daily schedule** — single combined Click command + `scanner_schedules` row at 08:00 UTC (= 02:00 Mountain), atomic chunk → embed ordering in one process. First scheduled run 2026-04-29 cleared 1,157 chunks in 13s. (2026-04-29)

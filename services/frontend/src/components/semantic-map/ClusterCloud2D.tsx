@@ -226,7 +226,11 @@ export default function ClusterCloud2D({
   }, [clusters]);
   const someoneHovered = hoveredId != null;
   const edges = useMemo(() => {
-    const k = clusters.length <= 12 ? 4 : clusters.length <= 30 ? 3 : 2;
+    // Same K tiering as the 3D renderer — floor at k=4 so the
+    // sibling-graph stays connected even for dense focused-mode
+    // scenes (53+ L2 children of a UMAP-knot L1).
+    const n = clusters.length;
+    const k = n <= 8 ? 7 : n <= 20 ? 6 : n <= 50 ? 5 : 4;
     return computeClusterEdges2D(clusters, k);
   }, [clusters]);
 

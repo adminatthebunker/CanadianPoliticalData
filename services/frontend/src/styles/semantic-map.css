@@ -430,6 +430,27 @@
   white-space: nowrap;
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
 }
+/* Hover tooltip on individual chunk points (5th-level zoom). Wider
+   than the cluster tooltip because it shows a 240-char snippet. */
+.semantic-map__chunk-tooltip {
+  background: rgba(15, 23, 42, 0.96);
+  border: 1px solid rgba(148, 163, 184, 0.45);
+  color: #f1f5f9;
+  font-size: .78rem;
+  line-height: 1.35;
+  padding: .55rem .7rem;
+  border-radius: 8px;
+  pointer-events: none;
+  width: max-content;
+  max-width: 380px;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.55);
+}
+.semantic-map__chunk-tooltip-meta {
+  margin-top: .35rem;
+  color: rgba(148, 163, 184, 0.85);
+  font-size: .7rem;
+  font-variant-numeric: tabular-nums;
+}
 /* 3D cluster label rendered as an HTML overlay (drei <Html>) so it
    always sits above the WebGL scene regardless of depth. */
 .semantic-map__cluster-label {

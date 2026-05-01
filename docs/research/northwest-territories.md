@@ -4,7 +4,7 @@
 
 **Legislature:** Legislative Assembly of the Northwest Territories | **Website:** https://www.ntlegislativeassembly.ca | **Seats:** 19 | **Next election:** 2027-10
 
-**Status snapshot (2026-04-19):** ✅ **Bills live** for 20th Assembly, 1st Session (20 bills / 82 events / **0 sponsors — by design, NT is consensus government**). Hansard deferred (evaluate opennwt.ca mirror first). Votes blocked on schema design for consensus-government model.
+**Status snapshot (2026-04-29):** ✅ **Bills live** for 20th Assembly, 1st Session (20 bills / 82 events / **0 sponsors — by design, NT is consensus government**). ✅ **Hansard live** via ntlegislativeassembly.ca Drupal HTML — clean Drupal Views markup with `<a href="/meet-members/mla/{slug}">` per-turn anchor for direct slug-FK speaker attribution. Modern transcripts hit 100% attribution (17 MLA-FK + 14 presiding-officer-role on the smoke sitting). Roster ingester landed: 19 current MLAs stamped + 117 former MLAs inserted (`nt_mla_slug` column, migration 0041). Speaker roster covers 13th-20th Assembly via `presiding_officer_resolver`. **OpenNWT mirror returned 403** — official site only. Votes still blocked on schema design for consensus-government model (migration 0018 unblocked once consensus-government data validates the discriminator).
 
 ---
 
@@ -62,12 +62,14 @@ The same goes for "voting records" in the partisan sense: there are no party-lin
 ## Status
 
 - [x] Research complete
-- [x] Schema (no new migration — no sponsor FK)
+- [x] Schema — bills layer (no migration); Hansard layer (migration 0041 added `nt_mla_slug`)
 - [x] Ingestion prototyped
-- [x] Production ingestion live (2026-04-16) — 20th Assembly, 1st Session, 20 bills
-- [ ] Historical backfill (assemblies 16–19 visible in nav; URL routing not mapped)
-- [ ] Hansard (deferred — evaluate opennwt.ca mirror)
-- [ ] Votes (consensus-government model — different schema needed)
+- [x] Production ingestion live — bills (2026-04-16) 20th Assembly, 1st Session, 20 bills
+- [x] **Hansard production ingestion live (2026-04-29)** — Drupal HTML scrape of ntlegislativeassembly.ca; daily 21:30 UTC schedule; OpenNWT mirror evaluated (403 → unusable)
+- [x] **MLA roster ingester live (2026-04-29)** — 19 current + 117 former MLAs, slugs stamped; migration 0041 + `services/scanner/src/legislative/nt_mlas.py`
+- [x] **Tier 1 presiding-officer (Speaker) roster** — 13th–20th Assembly, seeded via shared `presiding_officer_resolver.SPEAKER_ROSTER["NT"]`
+- [ ] Historical backfill — bills (assemblies 16–19 visible in nav; URL routing not mapped — separate from Hansard backfill which IS complete)
+- [x] **Votes layer live (2026-04-30)** — migration 0018_votes.sql applied; `services/scanner/src/legislative/nt_votes.py` extractor; 31 consensus votes across 2013-2026 corpus. All `vote_type='consensus'`, NULL ayes/nays (NT doesn't publish per-member positions), empty `vote_positions` (schema-anticipated shape). Daily 21:50 UTC schedule slot. → [`docs/runbooks/handoff-2026-04-30-votes-layer.md`](../runbooks/handoff-2026-04-30-votes-layer.md)
 
 ## Research-handoff items (Hansard)
 

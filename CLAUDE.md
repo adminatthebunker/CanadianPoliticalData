@@ -67,6 +67,7 @@ Every upstream legislature that ships a stable integer or slug ID for its member
 - Quebec: `qc_assnat_id` (int)
 - Alberta: `ab_assembly_mid` (zero-padded text)
 - Manitoba: `mb_assembly_slug`
+- Northwest Territories: `nt_mla_slug` (kebab-case; same slug across `/meet-members/mla/` and `/former-members/` URL paths)
 
 When adding a new jurisdiction, **find and persist its canonical member ID first**. It replaces name-fuzz with exact FK joins and makes sponsor / speaker resolution trivial. Sub-national legislatures with sparse structured rosters drag the global FK ratio on `bill_sponsors` down — closing the gap means adding ID columns for the remaining legislatures, not rewriting the resolver.
 
@@ -384,7 +385,7 @@ For current row counts, ingestion coverage, or what's shipped: query the DB or r
 - `legislative_sessions` — jurisdiction + parliament + session.
 - `bills` / `bill_events` / `bill_sponsors` — discriminated by `level` + `province_territory`. FK to `politicians` via the per-jurisdiction ID column when available.
 - `speeches` / `speech_chunks` / `speech_references` — Hansard text, chunked and embedded with Qwen3-Embedding-0.6B vectors in `speech_chunks.embedding` (`vector(1024)`, HNSW index `idx_chunks_embedding`).
-- `votes` / `vote_positions` — **not yet in the DB.** `0018_votes.sql` is on disk and intentionally unapplied pending real NT/NU consensus-gov't data.
+- `votes` / `vote_positions` — **live across federal + 8 provinces + NT** (migration 0018 applied 2026-04-30). One extractor module per jurisdiction in `services/scanner/src/legislative/{prov}_votes.py`: federal via openparliament.ca structured JSON (100% pol-FK, populated tallies + 1.45M vote_positions); NT/AB/MB/ON/NS/NL/NB via Hansard-text regex (consensus-shape, no vote_positions); BC/QC via Hansard-text regex (mixed division + consensus, with QC's `Pour:N/Contre:N` numerical tallies). 11,784 total votes / 335 MB. Committee transcripts still pending.
 - `jurisdiction_sources` — coverage + blockers (one row per jurisdiction). Feeds the public coverage dashboard. Refreshed by `refresh-coverage-stats` scanner command. **Check this before assuming a data source is live.**
 - `correction_submissions` — corrections inbox (web + email sources).
 - `scanner_jobs` / `scanner_schedules` — admin queue + cron (see Admin panel section).
