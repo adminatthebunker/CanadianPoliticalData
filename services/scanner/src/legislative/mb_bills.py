@@ -475,3 +475,50 @@ async def ingest(
 
     log.info("mb_bills: %s", stats)
     return stats
+
+
+async def ingest_all_sessions(db: Database) -> dict[str, int]:
+    """Walk every (parliament, session) row in legislative_sessions for MB
+    and ingest bills for each.
+
+    Mirrors the federal_bills.py / on_bills.py --all-sessions pattern.
+    Idempotent on source_id; sessions whose index page returns no
+    parseable bill rows are logged and skipped (not an error). Sponsor
+    FK resolution is best-effort — bills with sponsors absent from the
+    politicians table land with politician_id NULL.
+    """
+    rows = await db.fetch(
+        """
+        SELECT parliament_number, session_number
+          FROM legislative_sessions
+         WHERE level='provincial' AND province_territory='MB'
+         ORDER BY parliament_number, session_number
+        """
+    )
+    targets = [(r["parliament_number"], r["session_number"]) for r in rows]
+    if not targets:
+        log.warning("mb_bills.ingest_all_sessions: no MB sessions in DB")
+        return {"sessions_touched": 0, "bills": 0, "sponsors": 0,
+                "sponsors_linked": 0}
+
+    log.info(
+        "mb_bills.ingest_all_sessions: walking %d MB sessions", len(targets),
+    )
+    aggregate = {"sessions_touched": 0, "bills": 0, "sponsors": 0,
+                 "sponsors_linked": 0}
+    for parl, sess in targets:
+        try:
+            sub = await ingest(db, parliament=parl, session=sess)
+        except Exception as exc:
+            log.warning(
+                "mb_bills.ingest_all_sessions: P%d-S%d failed: %s",
+                parl, sess, exc,
+            )
+            continue
+        if sub.get("bills", 0) > 0:
+            aggregate["sessions_touched"] += 1
+        aggregate["bills"] += sub.get("bills", 0)
+        aggregate["sponsors"] += sub.get("sponsors", 0)
+        aggregate["sponsors_linked"] += sub.get("sponsors_linked", 0)
+    log.info("mb_bills.ingest_all_sessions: %s", aggregate)
+    return aggregate

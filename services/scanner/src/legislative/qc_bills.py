@@ -577,3 +577,150 @@ async def fetch_qc_bill_sponsors(
 
     log.info("fetch_qc_bill_sponsors: %s", stats)
     return stats
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Phase 5 — historical bills via assnat.qc.ca session index pages
+# ─────────────────────────────────────────────────────────────────────
+#
+# The donneesquebec CSV (Phase 2) is intentionally current+previous
+# only (~613 rows). To reach pre-P42 sessions we scrape assnat.qc.ca's
+# historical session index page directly. Each session has ONE
+# index page at:
+#     /en/travaux-parlementaires/projets-loi/projets-loi-{P}-{S}.html
+# which lists every bill as a link to its detail page. We extract bill
+# numbers, upsert minimal stub rows; titles + sponsors come on a later
+# pass via fetch-qc-bill-sponsors which already hits each detail page.
+
+INDEX_HTML_URL = (
+    "https://www.assnat.qc.ca/en/travaux-parlementaires/projets-loi/"
+    "projets-loi-{parl}-{session}.html"
+)
+
+
+async def discover_qc_bills_html(
+    db: Database, *, parliament: int, session: int,
+) -> dict[str, int]:
+    """Scrape one assnat.qc.ca session-index HTML page; upsert stubs.
+
+    Idempotent on source_id `assnat-qc:{parl}-{session}:bill-{number}` —
+    stubs that get updated by the existing CSV pipeline later (when a
+    historical bill carries forward into the current view) UPSERT
+    cleanly because both phases produce the same source_id shape.
+    """
+    stats = {"bills": 0}
+    url = INDEX_HTML_URL.format(parl=parliament, session=session)
+
+    async with httpx.AsyncClient(headers=HEADERS, follow_redirects=True) as client:
+        try:
+            r = await client.get(url, timeout=REQUEST_TIMEOUT)
+            r.raise_for_status()
+            html = r.text
+        except httpx.HTTPError as exc:
+            log.warning("discover_qc_bills_html: %s failed: %s", url, exc)
+            return stats
+
+    # The existing _BILL_URL_FROM_RSS_RE matches the exact URL shape
+    # used in the historical session index pages. Reuse it.
+    seen: set[str] = set()
+    for m in _BILL_URL_FROM_RSS_RE.finditer(html):
+        bill_number = m.group("number")
+        parl_in = int(m.group("parl"))
+        sess_in = int(m.group("session"))
+        if parl_in != parliament or sess_in != session:
+            continue
+        if bill_number in seen:
+            continue
+        seen.add(bill_number)
+
+    if not seen:
+        log.info(
+            "discover_qc_bills_html: P%d-S%d index returned 0 bills",
+            parliament, session,
+        )
+        return stats
+
+    session_id = await _upsert_qc_session(
+        db, parliament=parliament, session=session,
+        start_date=None, end_date=None,
+    )
+
+    for bill_number in seen:
+        source_id = f"{SOURCE_SYSTEM}:{parliament}-{session}:bill-{bill_number}"
+        detail_url = BILL_DETAIL_URL.format(
+            number=bill_number, parl=parliament, session=session,
+        )
+        await db.execute(
+            """
+            INSERT INTO bills (
+                session_id, level, province_territory, bill_number,
+                title, source_id, source_system, source_url, raw,
+                last_fetched_at
+            )
+            VALUES ($1, 'provincial', 'QC', $2, $3, $4, $5, $6, '{}'::jsonb, now())
+            ON CONFLICT (source_id) DO UPDATE SET
+                source_url      = EXCLUDED.source_url,
+                last_fetched_at = now(),
+                updated_at      = now()
+            """,
+            session_id, bill_number,
+            f"Projet de loi n° {bill_number}",
+            source_id, SOURCE_SYSTEM, detail_url,
+        )
+        stats["bills"] += 1
+
+    log.info(
+        "discover_qc_bills_html: P%d-S%d → %d bills",
+        parliament, session, stats["bills"],
+    )
+    return stats
+
+
+async def discover_qc_bills_html_all_sessions(
+    db: Database,
+) -> dict[str, int]:
+    """Walk every QC (parliament, session) row in legislative_sessions
+    and discover bills via the assnat.qc.ca historical index page.
+
+    Mirrors federal_bills.py / on_bills.py / mb_bills.py --all-sessions
+    pattern. Idempotent. Sessions with no listed bills are logged and
+    skipped (not an error). Title placeholder is `Projet de loi n° N`;
+    real titles come on the per-bill detail-page pass.
+    """
+    rows = await db.fetch(
+        """
+        SELECT parliament_number, session_number
+          FROM legislative_sessions
+         WHERE level='provincial' AND province_territory='QC'
+         ORDER BY parliament_number, session_number
+        """
+    )
+    targets = [(r["parliament_number"], r["session_number"]) for r in rows]
+    if not targets:
+        log.warning("discover_qc_bills_html_all_sessions: no QC sessions in DB")
+        return {"sessions_touched": 0, "bills": 0}
+
+    log.info(
+        "discover_qc_bills_html_all_sessions: walking %d QC sessions",
+        len(targets),
+    )
+    aggregate = {"sessions_touched": 0, "bills": 0}
+    for parl, sess in targets:
+        try:
+            sub = await discover_qc_bills_html(
+                db, parliament=parl, session=sess,
+            )
+        except Exception as exc:
+            log.warning(
+                "discover_qc_bills_html_all_sessions: P%d-S%d failed: %s",
+                parl, sess, exc,
+            )
+            continue
+        if sub.get("bills", 0) > 0:
+            aggregate["sessions_touched"] += 1
+        aggregate["bills"] += sub.get("bills", 0)
+    log.info(
+        "discover_qc_bills_html_all_sessions: total sessions=%d bills=%d",
+        aggregate["sessions_touched"], aggregate["bills"],
+    )
+    return aggregate

@@ -1312,6 +1312,54 @@ def cmd_ingest_qc_bills(ctx: click.Context, all_sessions) -> None:
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 
 
+@cli.command("discover-qc-bills-html")
+@click.option("--parliament", type=int, default=None,
+              help="Legislature number. Required unless --all-sessions.")
+@click.option("--session", type=int, default=None,
+              help="Session number within the legislature.")
+@click.option("--all-sessions", is_flag=True,
+              help="Walk every QC session in legislative_sessions.")
+@click.pass_context
+def cmd_discover_qc_bills_html(
+    ctx: click.Context, parliament, session, all_sessions: bool,
+) -> None:
+    """Discover historical QC bills via assnat.qc.ca session index pages.
+
+    Complements ingest-qc-bills (donneesquebec CSV, current+previous
+    only) by reaching pre-current sessions. One HTTP GET per session
+    index page; minimal stub rows (title placeholder, no sponsor).
+    Run fetch-qc-bill-sponsors afterward to enrich the new stubs.
+
+    Idempotent on source_id.
+    """
+    from .legislative.qc_bills import (
+        discover_qc_bills_html, discover_qc_bills_html_all_sessions,
+    )
+
+    async def _wrap(db: Database) -> None:
+        if all_sessions:
+            stats = await discover_qc_bills_html_all_sessions(db)
+            console.print(
+                f"[green]discover-qc-bills-html[/green] (all sessions): "
+                f"sessions={stats['sessions_touched']} bills={stats['bills']}"
+            )
+            return
+        if parliament is None or session is None:
+            console.print(
+                "[red]error[/red]: --parliament and --session are required "
+                "unless --all-sessions is set"
+            )
+            return
+        stats = await discover_qc_bills_html(
+            db, parliament=parliament, session=session,
+        )
+        console.print(
+            f"[green]discover-qc-bills-html[/green] P{parliament}-S{session}: "
+            f"bills={stats['bills']}"
+        )
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
 @cli.command("ingest-qc-bills-rss")
 @click.pass_context
 def cmd_ingest_qc_bills_rss(ctx: click.Context) -> None:
@@ -1720,8 +1768,13 @@ def cmd_parse_mb_bill_events(ctx: click.Context, parliament, session) -> None:
               help="Legislature number. Default: latest in legislative_sessions.")
 @click.option("--session", type=int, default=None,
               help="Session number within the legislature. Default: latest.")
+@click.option("--all-sessions", is_flag=True,
+              help="Walk every MB session in legislative_sessions. "
+                   "Overrides --parliament/--session.")
 @click.pass_context
-def cmd_ingest_mb_bills(ctx: click.Context, parliament, session) -> None:
+def cmd_ingest_mb_bills(
+    ctx: click.Context, parliament, session, all_sessions: bool,
+) -> None:
     """Ingest Manitoba bills roster from web2.gov.mb.ca.
 
     One HTTP GET per session returns Government Bills + Private Members'
@@ -1732,12 +1785,24 @@ def cmd_ingest_mb_bills(ctx: click.Context, parliament, session) -> None:
 
     When --parliament/--session are omitted, resolves the current session
     from legislative_sessions. On a fresh DB, pass them explicitly once
-    (e.g. --parliament 43 --session 3).
+    (e.g. --parliament 43 --session 3). With --all-sessions, walks every
+    (parliament, session) pair already in legislative_sessions for MB
+    (idempotent on source_id).
     """
     from .legislative.current_session import current_session
+    from .legislative.mb_bills import ingest_all_sessions as _ingest_all
 
     async def _wrap(db: Database) -> None:
         nonlocal parliament, session
+        if all_sessions:
+            stats = await _ingest_all(db)
+            console.print(
+                f"[green]ingest-mb-bills[/green] (all sessions): "
+                f"sessions={stats['sessions_touched']} "
+                f"bills={stats['bills']} sponsors={stats['sponsors']} "
+                f"sponsors_linked={stats['sponsors_linked']}"
+            )
+            return
         if parliament is None or session is None:
             parliament, session = await current_session(
                 db, level="provincial", province_territory="MB",
