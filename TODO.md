@@ -2,7 +2,7 @@
 
 Actionable checkbox view of [`docs/timeline.md`](./docs/timeline.md). When this file disagrees with the timeline or with a plan doc under [`docs/plans/`](./docs/plans/), **the plan docs win** — update this file rather than the other way round.
 
-- **Last synced with `docs/timeline.md`:** 2026-04-30
+- **Last synced with `docs/timeline.md`:** 2026-05-03
 - **Why this exists:** the timeline is prose-shaped; this is the version you tick off. One source of priority ordering (timeline), one place to mark progress (here).
 - **How to update:** check items as they ship, move them to *Recently shipped*, and re-sync the date above. If a horizon shifts, edit `docs/timeline.md` first, then mirror here.
 
@@ -35,11 +35,17 @@ Priority one until remaining Hansard pipelines are live and votes are modelled. 
 - [x] **Apply migration `0018_votes.sql`.** Applied 2026-04-30. NT consensus-government data validates the schema without revisions. NT votes extractor live (`extract-nt-votes`), 31 consensus votes across 2013-2026 NT corpus. → [`docs/runbooks/handoff-2026-04-30-votes-layer.md`](./docs/runbooks/handoff-2026-04-30-votes-layer.md)
 - [x] **Federal votes extraction (openparliament.ca structured JSON).** Live 2026-04-30. `services/scanner/src/legislative/federal_votes.py` extracts ~928 44-1 divisions × ~340 MPs = ~300K vote_positions with 100% politician_id FK match (via openparliament_slug). Daily 11:30 UTC schedule slot. → [`docs/runbooks/handoff-2026-04-30-federal-votes.md`](./docs/runbooks/handoff-2026-04-30-federal-votes.md)
 - [x] **Federal votes — historical sessions** (39-1 through 43-2) shipped 2026-04-30. 4,481 total votes / 1.45M positions / 18.5 years (2006-05 → 2024-12) / 99.98% pol-FK / 335 MB storage. → [`docs/runbooks/handoff-2026-04-30-federal-votes.md`](./docs/runbooks/handoff-2026-04-30-federal-votes.md)
-- [ ] **Federal historical bills ingestion** — would lift bill-linkage on votes from 10.2% (44-1 only) to ~50% corpus-wide via trivial UPDATE pass. Separate workstream.
+- [x] **Federal historical bills ingestion** — shipped 2026-04-30 via `ingest-federal-bills --all-sessions`. 412 → 5,542 bills across P37-P44 (openparliament.ca coverage floor at P37-S1 / 2001). Sponsor FK rate 86.5% (4,794/5,542) via openparliament_slug. Lifted federal vote→bill linkage to natural ceiling.
+- [x] **Federal vote→bill re-link** shipped 2026-05-01 via `relink-federal-votes` (pure-SQL UPDATE pass, no API calls). 10.2% → **54.7%** linkage; 1,993 newly linked, 0 unmatched. Remaining 45% are non-bill divisions (supply, procedural).
+- [x] **Provincial historical bills backfills (ON / MB / QC)** shipped 2026-05-01 / 2026-05-02 via `--all-sessions` walker pattern: ON 111 → 3,412 (P36-P44, ola.org HTML), MB 81 → 1,971 (31 sessions, gov.mb.ca HTML), QC 497 → 1,192 (P39-P43, assnat.qc.ca HTML — new historical discoverer added because CSV is current+previous-only by design). All three flipped to `bills_status=live`.
+- [x] **`bills_status` auto-derivation** shipped 2026-04-30 in `coverage_stats.py` — completes the trio (hansard / votes / bills) of count-driven status flips. 500-row threshold for 'live'. Preserves 'blocked' editorial flag.
 - [x] **Provincial votes extraction (BC/AB/MB/QC/ON/NS/NB/NL)** shipped 2026-04-30. 8 self-contained per-province extractor modules; 7,303 provincial votes added (QC 2,961 div+acclamation rich; NS 2,550 consensus; ON 835; AB 624; BC 249; MB 47; NL 2; NB 0 — needs regex relaxation). → [`docs/runbooks/handoff-2026-04-30-provincial-votes.md`](./docs/runbooks/handoff-2026-04-30-provincial-votes.md)
 - [ ] **Provincial votes — extractor v2 tuning** — AB/NS show ~100% pass rate (regex misses defeats); NB returned 0 (bilingual structure needs relaxed pattern). Small follow-up.
 - [ ] **Provincial votes daily-ingest schedules** — 8 schedule entries (one per province at `:50` after each Hansard chain). Mechanical; defer until needed.
-- [ ] **Committee transcripts.** Same speech pipeline, `speech_type='committee'`. Deferred until votes land. → [`docs/plans/semantic-layer.md`](./docs/plans/semantic-layer.md) § phase 4
+- [ ] **QC introduced_date completion (35% → ~100%)** — ON parser-side patch shipped 2026-05-01 (P42-P44, 786/786 = 100%); QC partial via RSS-window roll-up (173/1,192). Remaining: extract `<h3>Introduction</h3>` "Sitting held on {date}" from per-bill detail page during `fetch-qc-bill-sponsors`.
+- [ ] **ON pre-P42 `introduced_date`** — 0/2,626 bills, ola.org's older /status markup uses different HTML structure than P42-P44; needs separate parsing rules.
+- [ ] **Federal `bill_events` from LEGISinfo XML** — 5,542 federal bills × 0 events; openparliament.ca doesn't expose stage timeline. Different source feed (LEGISinfo). Structurally important.
+- [ ] **Committee transcripts.** Same speech pipeline, `speech_type='committee'`. Phase 4 of semantic-layer.md is now unblocked (votes shipped). Per-jurisdiction parser, research-handoff gated. → [`docs/plans/semantic-layer.md`](./docs/plans/semantic-layer.md) § phase 4
 
 ### Historical-roster backfills (AB/MB pattern → ON/BC/QC)
 

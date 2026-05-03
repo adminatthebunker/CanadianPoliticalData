@@ -1,6 +1,6 @@
 # Timeline / direction
 
-Where the project is going, in priority order. Last reviewed 2026-04-30.
+Where the project is going, in priority order. Last reviewed 2026-05-03.
 
 This is the **what we're building next** doc. For the **why**, read [`goals.md`](./goals.md). For the **how**, read the per-feature plan under [`plans/`](./plans/) linked from each item below. When this file disagrees with the plan docs, the plan docs win — keep this one short and reorder it as priorities shift.
 
@@ -29,7 +29,8 @@ These are partially built and the goal is to finish them, not to start something
 The product is only as definitive as the data behind it. Database expansion stays priority one until the remaining Hansard pipelines are live and votes are modelled.
 
 - **Remaining Hansard pipelines: NU → SK → PE/YT.** Four jurisdictions left (NT shipped 2026-04-29). NU needs consensus-government + multilingual handling (EN + Inuktitut + Inuinnaqtun + FR); SK is PDF-only and needs dedicated parser investment; PE/YT sit behind WAFs/CAPTCHAs. Each is gated on the **research-handoff rule** (see CLAUDE.md convention #5) — user research pass first, code second. Status table: [`research/overview.md`](./research/overview.md).
-- **Votes table — ✅ done across both shapes.** Migration 0018 applied 2026-04-30; NT consensus-government data validated the schema without revisions (31 NT consensus votes); federal openparliament.ca structured-JSON extraction live the same day with 100% politician-FK resolution via openparliament_slug. Federal historical-session backfill (39-1 → 43-2) and provincial regex extensions (BC/AB/MB/QC/ON/NS/NB/NL) are mechanical extensions still pending.
+- **Votes table — ✅ done across both shapes.** Migration 0018 applied 2026-04-30; NT consensus-government data validated the schema without revisions (31 NT consensus votes); federal openparliament.ca structured-JSON extraction live the same day with 100% politician-FK resolution via openparliament_slug. Federal historical-session backfill (39-1 → 43-2) shipped 2026-04-30 (4,481 votes / 1.45M positions), provincial regex extensions live across BC/AB/MB/QC/ON/NS/NB/NL (7,303 votes). Federal vote→bill linkage lifted from 10.2% → 54.7% on 2026-05-01 via pure-SQL re-link pass after federal-bills historical backfill.
+- **Provincial historical bills — ✅ complete across all active provinces.** `--all-sessions` walker pattern propagated from federal to ON (111 → 3,412), MB (81 → 1,971), and QC (497 → 1,192) over 2026-05-01 / 2026-05-02. QC required a new HTML discoverer (`discover_qc_bills_html`) targeting assnat.qc.ca historical session pages because the donneesquebec CSV is deliberately current+previous only. Every actively-ingestible province now has `bills_status=live`; remaining gaps are NT/NU (consensus-government, naturally smaller) and PE/SK/YT (research- or WAF-gated).
 - **Committee transcripts.** Same speech pipeline as Hansard, `speech_type='committee'`. Deferred until votes land so the table stays coherent. Plan: [`plans/semantic-layer.md`](./plans/semantic-layer.md) § phase 4.
 - **Historical-roster backfills — ✅ done across AB / MB / ON / QC / BC.** AB (+901, 2026-04-22), MB (+764, 2026-04-23), ON (2026-04-26), QC (~2K via assnat alphabet-walk, 2026-04-27), BC pre-P35 (+160 via Wikipedia + extended Speaker roster P29-P37, 2026-04-29). BC corpus 67.6% → 91.9% attributed. Remaining 8% residual (Committee-Chair / Chairman / Deputy-Speaker rotating roles) needs per-sitting committee-membership data — different workstream, not date-windowed-only.
 - **Corrections inbox — SMTP poller + admin review queue.** Web flag-button shipped; `correction_submissions` table exists (migration 0020); SMTP ingest and admin UI not built yet. Small but blocks the public correction policy.
@@ -89,9 +90,17 @@ Not horizon-bound. These need attention every cycle regardless of what else is i
 
 ---
 
-## Recently shipped (last two cycles, 2026-04-23 → 2026-04-29)
+## Recently shipped (last two cycles, 2026-04-26 → 2026-05-03)
 
 For context on what just landed, so this doc reads against a known baseline.
+
+### Cycle 2026-05-01 → 2026-05-03
+
+- **Provincial historical bills — workstream complete.** `--all-sessions` walker pattern propagated to ON (2026-05-01: 111 → 3,412 across P36-P44), then MB + QC (2026-05-02: 81 → 1,971 across 31 MB sessions; 497 → 1,192 across 8 QC sessions via new `discover_qc_bills_html` against assnat.qc.ca historical session pages). All three provinces flipped `bills_status='live'`. QC joins federal/AB/BC/NS/ON with all three legislative columns at live. Commits `8d39fb7` (ON), `11be12d` (MB+QC).
+- **Federal vote→bill linkage 10.2% → 54.7%** (2026-05-01) via new `relink-federal-votes` Click subcommand — pure-SQL UPDATE pass against `votes.raw->'openparliament_vote'->>'bill_url'`. 1,993 newly linked, 0 unmatched. Avoided re-fetching 1.45M ballots. Commit `3a90893`.
+- **ON / QC bills `introduced_date`** (2026-05-01) — ON parser-side patch derives from /status sub-page first_reading events, hits 100% on P42-P44 (786/786). QC partial via RSS-window roll-up. Older parliaments need separate work — documented gap. Commit `3a90893`.
+- **`bills_status` auto-derivation** (2026-04-30) — `coverage_stats.py` now flips all three legislative status columns (hansard / votes / bills) from row counts. 500-row threshold for 'live'. Five overstated jurisdictions honestly downgraded; federal first to flip all-three-live, NS from stale 'partial' to 'live'. Commit `bdc791f`.
+- **Federal historical bills backfill** (2026-04-30) — `ingest-federal-bills --all-sessions` walks every federal session in `legislative_sessions`. 412 → **5,542** bills across P37-S1 → P44-S1 (openparliament.ca coverage floor at 2001). Sponsor FK rate 86.5%. Same commit as auto-derive (`bdc791f`).
 
 ### Cycle 2026-04-26 → 2026-04-30
 
