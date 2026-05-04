@@ -74,7 +74,10 @@
 
 .dashboard__grid {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  /* minmax(0, 1fr): without it the implicit min-content track size lets
+   * non-shrinkable children (the fixed-size pie, long party names) push
+   * the column wider than its share, overflowing the dashboard. */
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 1rem;
   padding: 0 1rem 1rem;
   border-top: 1px solid var(--border);
@@ -89,6 +92,11 @@
   display: flex;
   flex-direction: column;
   gap: .65rem;
+  /* See `.dashboard__grid` — same min-width: 0 escape on the grid item
+   * itself so its inner flex content (pie + truncating legend) can
+   * shrink. Repeated below alongside the grid declaration to be
+   * explicit, not by accident. */
+  min-width: 0;
 }
 
 .dashboard__tile-title {

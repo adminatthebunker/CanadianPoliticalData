@@ -39,6 +39,7 @@ export interface SpeechSearchItem {
     speaker_role: string | null;
     source_url: string | null;
     source_anchor: string | null;
+    source_system: string | null;
     session: SpeechSearchSession | null;
   };
 }
@@ -48,9 +49,12 @@ export interface TimelineSearchResponse {
   items: SpeechSearchItem[];
   page: number;
   limit: number;
-  total: number;
-  totalCapped: boolean;
-  pages: number;
+  /** null when the API was asked to skip the count (frontend stages it
+   *  off via /search/speeches/count to avoid blocking results on the
+   *  threshold-COUNT seq scan). Filled in once the count fetch lands. */
+  total: number | null;
+  /** Same nullability as `total` — derived once the count is known. */
+  pages: number | null;
 }
 
 /** A chunk inside a PoliticianGroup — identical to SpeechSearchItem but
@@ -129,6 +133,10 @@ export interface SpeechSearchFilter {
   session_number?: number;
   /** Speech-type multi-select (Question Period, statement, committee, …). */
   speech_types?: SpeechType[];
+  /** Anchor-chunk search: rank corpus by cosine similarity to this chunk's
+   *  embedding instead of a text query. Mutually exclusive with `q` —
+   *  text wins server-side when both are set. */
+  anchor_chunk_id?: string;
   page?: number;
   limit?: number;
   group_by?: "timeline" | "politician";
@@ -172,7 +180,10 @@ export function buildSpeechSearchQuery(f: SpeechSearchFilter): string {
   if (f.from) p.set("from", f.from);
   if (f.to) p.set("to", f.to);
   if (f.exclude_presiding) p.set("exclude_presiding", "true");
-  if (f.min_similarity != null && f.min_similarity > 0) {
+  // 0 is meaningful — explicit "all matches" override of the API's
+  // 0.5 default. Send it through so the server doesn't silently
+  // re-apply the floor.
+  if (f.min_similarity != null) {
     p.set("min_similarity", String(f.min_similarity));
   }
   if (f.parliament_number != null && f.session_number != null) {
@@ -182,6 +193,7 @@ export function buildSpeechSearchQuery(f: SpeechSearchFilter): string {
   if (f.speech_types && f.speech_types.length > 0) {
     for (const t of f.speech_types) p.append("speech_type", t);
   }
+  if (f.anchor_chunk_id) p.set("anchor_chunk_id", f.anchor_chunk_id);
   p.set("page", String(f.page ?? 1));
   p.set("limit", String(f.limit ?? 20));
   if (f.group_by && f.group_by !== "timeline") p.set("group_by", f.group_by);
@@ -190,27 +202,127 @@ export function buildSpeechSearchQuery(f: SpeechSearchFilter): string {
   return p.toString();
 }
 
+/** Build the URL query string for /search/speeches/count. Mirrors the
+ *  filter shape of /speeches but drops every param the count endpoint
+ *  doesn't read (page, limit, group_by, per_group_limit, sort) — keeping
+ *  these out gives the LRU a stable cache key per logical search rather
+ *  than one per page-of-results. */
+export function buildSpeechCountQuery(f: SpeechSearchFilter): string {
+  const p = new URLSearchParams();
+  if (f.q) p.set("q", f.q);
+  if (f.lang && f.lang !== "any") p.set("lang", f.lang);
+  if (f.level) p.set("level", f.level);
+  if (f.province_territory) p.set("province_territory", f.province_territory);
+  for (const id of effectivePoliticianIds(f)) p.append("politician_id", id);
+  if (f.party) p.set("party", f.party);
+  if (f.from) p.set("from", f.from);
+  if (f.to) p.set("to", f.to);
+  if (f.exclude_presiding) p.set("exclude_presiding", "true");
+  if (f.min_similarity != null) p.set("min_similarity", String(f.min_similarity));
+  if (f.parliament_number != null && f.session_number != null) {
+    p.set("parliament_number", String(f.parliament_number));
+    p.set("session_number", String(f.session_number));
+  }
+  if (f.speech_types && f.speech_types.length > 0) {
+    for (const t of f.speech_types) p.append("speech_type", t);
+  }
+  if (f.anchor_chunk_id) p.set("anchor_chunk_id", f.anchor_chunk_id);
+  return p.toString();
+}
+
+// In-tab LRU so back/forward and re-pagination return instantly without
+// re-hitting the API. `qs` from buildSpeechSearchQuery is already a
+// canonical filter signature, so we key on it directly. Module-scoped:
+// survives component unmount/remount, dies on page reload.
+const RESULT_CACHE_MAX = 30;
+const RESULT_CACHE_TTL_MS = 60_000;
+const resultCache = new Map<string, { data: SpeechSearchResponse; expiresAt: number }>();
+
+function getCachedResult(qs: string): SpeechSearchResponse | null {
+  const hit = resultCache.get(qs);
+  if (!hit) return null;
+  if (hit.expiresAt <= Date.now()) {
+    resultCache.delete(qs);
+    return null;
+  }
+  resultCache.delete(qs);
+  resultCache.set(qs, hit);
+  return hit.data;
+}
+
+function setCachedResult(qs: string, data: SpeechSearchResponse): void {
+  if (resultCache.size >= RESULT_CACHE_MAX) {
+    const oldest = resultCache.keys().next().value;
+    if (oldest !== undefined) resultCache.delete(oldest);
+  }
+  resultCache.set(qs, { data, expiresAt: Date.now() + RESULT_CACHE_TTL_MS });
+}
+
+// Rolling latency samples for "typically ~Xs" hint shown beside the
+// loader. Only records actual network fetches — cache hits are excluded
+// so the estimate reflects the real wait the user is about to experience.
+const LATENCY_SAMPLE_MAX = 10;
+const LATENCY_MIN_SAMPLES = 3;
+const recentLatenciesMs: number[] = [];
+
+function recordLatency(ms: number): void {
+  recentLatenciesMs.push(ms);
+  if (recentLatenciesMs.length > LATENCY_SAMPLE_MAX) recentLatenciesMs.shift();
+}
+
+/** Median of recent successful fetch durations, or null if too few samples. */
+export function getRecentSearchLatencyMs(): number | null {
+  if (recentLatenciesMs.length < LATENCY_MIN_SAMPLES) return null;
+  const sorted = [...recentLatenciesMs].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid] : Math.round((sorted[mid - 1] + sorted[mid]) / 2);
+}
+
 // `enabled=false` keeps the hook inert until the caller decides — useful on
 // /search where we want the empty landing state until the user types.
-export function useSpeechSearch(filter: SpeechSearchFilter, enabled = true): AsyncState<SpeechSearchResponse> {
-  const [state, setState] = useState<AsyncState<SpeechSearchResponse>>({
-    data: null,
-    error: null,
-    loading: enabled,
-  });
-
+// `epoch` is an opt-in cache-busting nonce: bumping it (e.g. via an
+// "Update Search" button) drops the cached entry for the current `qs`
+// and re-runs the request. Untouched epochs preserve the LRU so back /
+// forward / re-pagination stay instant.
+export function useSpeechSearch(
+  filter: SpeechSearchFilter,
+  enabled = true,
+  epoch = 0,
+): AsyncState<SpeechSearchResponse> {
   const qs = buildSpeechSearchQuery(filter);
+  const [state, setState] = useState<AsyncState<SpeechSearchResponse>>(() => {
+    if (!enabled) return { data: null, error: null, loading: false };
+    const cached = getCachedResult(qs);
+    if (cached) return { data: cached, error: null, loading: false };
+    return { data: null, error: null, loading: true };
+  });
 
   useEffect(() => {
     if (!enabled) {
       setState({ data: null, error: null, loading: false });
       return;
     }
+    if (epoch > 0) {
+      resultCache.delete(qs);
+    }
+    const cached = getCachedResult(qs);
+    if (cached) {
+      setState({ data: cached, error: null, loading: false });
+      return;
+    }
     let cancelled = false;
     setState((s) => ({ ...s, loading: true, error: null }));
 
     const base = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "/api/v1";
-    fetch(`${base}/search/speeches?${qs}`, { headers: { Accept: "application/json" } })
+    const fetchStartedAt = performance.now();
+    // Skip the COUNT(*) query on the results call — under threshold
+    // search it's a 4.9M-row seq scan that blocks rendering. The
+    // companion useSpeechSearchCount hook fetches the total in
+    // parallel; the timeline view stays usable while that resolves.
+    // Grouped (politician) responses don't carry the same `total`
+    // field, so the param is harmless there too.
+    const resultsQs = qs + (qs.includes("include_count=") ? "" : "&include_count=false");
+    fetch(`${base}/search/speeches?${resultsQs}`, { headers: { Accept: "application/json" } })
       .then(async (res) => {
         if (cancelled) return;
         if (!res.ok) {
@@ -223,6 +335,8 @@ export function useSpeechSearch(filter: SpeechSearchFilter, enabled = true): Asy
           return;
         }
         const data = (await res.json()) as SpeechSearchResponse;
+        recordLatency(performance.now() - fetchStartedAt);
+        setCachedResult(qs, data);
         setState({ data, error: null, loading: false });
       })
       .catch((err: Error) => {
@@ -233,7 +347,7 @@ export function useSpeechSearch(filter: SpeechSearchFilter, enabled = true): Asy
     return () => {
       cancelled = true;
     };
-  }, [qs, enabled]);
+  }, [qs, enabled, epoch]);
 
   return state;
 }
@@ -312,6 +426,109 @@ export function useSpeechSearchMeta(): AsyncState<SpeechSearchMeta> {
       cancelled = true;
     };
   }, []);
+
+  return state;
+}
+
+// ──────────────────────────────────────────────────────────────────
+// useSpeechSearchCount — staged sibling of useSpeechSearch.
+//
+// Why split: the COUNT(*) query under min_similarity has to evaluate
+// cosine distance for every chunk that survives structural filters
+// (HNSW solves "give me K nearest", not "how many are within distance
+// X"). On a q-only search against ~5M chunks that's ~15s. The page
+// query is HNSW-bounded and returns in <300ms. Splitting them lets
+// results paint immediately while the count resolves on its own.
+// ──────────────────────────────────────────────────────────────────
+
+export interface SpeechSearchCount {
+  total: number;
+}
+
+const countCache = new Map<string, { total: number; expiresAt: number }>();
+const COUNT_CACHE_MAX = 30;
+const COUNT_CACHE_TTL_MS = 60_000;
+
+function getCachedCount(qs: string): number | null {
+  const hit = countCache.get(qs);
+  if (!hit) return null;
+  if (hit.expiresAt <= Date.now()) {
+    countCache.delete(qs);
+    return null;
+  }
+  countCache.delete(qs);
+  countCache.set(qs, hit);
+  return hit.total;
+}
+
+function setCachedCount(qs: string, total: number): void {
+  if (countCache.size >= COUNT_CACHE_MAX) {
+    const oldest = countCache.keys().next().value;
+    if (oldest !== undefined) countCache.delete(oldest);
+  }
+  countCache.set(qs, { total, expiresAt: Date.now() + COUNT_CACHE_TTL_MS });
+}
+
+export function useSpeechSearchCount(
+  filter: SpeechSearchFilter,
+  enabled = true,
+  epoch = 0,
+): AsyncState<SpeechSearchCount> {
+  const qs = buildSpeechCountQuery(filter);
+  const [state, setState] = useState<AsyncState<SpeechSearchCount>>(() => {
+    if (!enabled) return { data: null, error: null, loading: false };
+    const cached = getCachedCount(qs);
+    if (cached != null) return { data: { total: cached }, error: null, loading: false };
+    return { data: null, error: null, loading: true };
+  });
+
+  useEffect(() => {
+    if (!enabled) {
+      setState({ data: null, error: null, loading: false });
+      return;
+    }
+    if (epoch > 0) {
+      countCache.delete(qs);
+    }
+    const cached = getCachedCount(qs);
+    if (cached != null) {
+      setState({ data: { total: cached }, error: null, loading: false });
+      return;
+    }
+    let cancelled = false;
+    // Clear stale data on filter change so consumers can show "Counting…"
+    // rather than the previous filter's total. Without this, swapping a
+    // text query for an anchor (or vice versa) leaves the old count
+    // rendered for the duration of the new fetch — which on threshold
+    // counts at q-only scale can be several seconds.
+    setState({ data: null, loading: true, error: null });
+
+    const base = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "/api/v1";
+    fetch(`${base}/search/speeches/count?${qs}`, { headers: { Accept: "application/json" } })
+      .then(async (res) => {
+        if (cancelled) return;
+        if (!res.ok) {
+          const body = await res.text().catch(() => "");
+          setState({
+            data: null,
+            error: new Error(`${res.status} ${res.statusText}${body ? `: ${body}` : ""}`),
+            loading: false,
+          });
+          return;
+        }
+        const data = (await res.json()) as SpeechSearchCount;
+        setCachedCount(qs, data.total);
+        setState({ data, error: null, loading: false });
+      })
+      .catch((err: Error) => {
+        if (cancelled) return;
+        setState({ data: null, error: err, loading: false });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [qs, enabled, epoch]);
 
   return state;
 }

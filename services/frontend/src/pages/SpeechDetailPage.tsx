@@ -1,8 +1,15 @@
-import { useEffect, useMemo, useRef } from "react";
-import { Link, useLocation, useParams } from "react-router-dom";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Link, useLocation, useParams, useSearchParams } from "react-router-dom";
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
-import { useSpeech, type SpeechChunkSummary } from "../hooks/useSpeech";
+import { useRelatedSpeeches, useSpeech, useSpeechContext } from "../hooks/useSpeech";
+import { ExchangeSpeechRow } from "../components/ExchangeSpeechRow";
+import { RelatedSpeechesPanel } from "../components/RelatedSpeechesPanel";
+import { isProcedural } from "../lib/speechHelpers";
+import { tokenizeQuery } from "../lib/textHighlight";
 import "../styles/speech-detail.css";
+
+const DEFAULT_WINDOW = 5;
+const STEP = 5;
 
 function formatDate(iso: string | null): string | null {
   if (!iso) return null;
@@ -17,61 +24,99 @@ function formatDate(iso: string | null): string | null {
   }
 }
 
-// Split the full speech text into chunk-anchored segments. The parent
-// speech has a contiguous `text` field; `speech_chunks.char_start/end`
-// are offsets into it. If offsets are stale (e.g. text was re-cleaned
-// post-chunking), fall back to a single chunk rendered as-is.
-interface Segment {
-  chunk: SpeechChunkSummary | null;
-  text: string;
-}
-
-function segmentsFromChunks(fullText: string, chunks: SpeechChunkSummary[]): Segment[] {
-  if (chunks.length === 0) return [{ chunk: null, text: fullText }];
-  const ordered = [...chunks].sort((a, b) => a.chunk_index - b.chunk_index);
-  const out: Segment[] = [];
-  let cursor = 0;
-  for (const c of ordered) {
-    if (c.char_start < cursor || c.char_end > fullText.length || c.char_end < c.char_start) {
-      return [{ chunk: null, text: fullText }];
-    }
-    if (c.char_start > cursor) {
-      out.push({ chunk: null, text: fullText.slice(cursor, c.char_start) });
-    }
-    out.push({ chunk: c, text: fullText.slice(c.char_start, c.char_end) });
-    cursor = c.char_end;
-  }
-  if (cursor < fullText.length) {
-    out.push({ chunk: null, text: fullText.slice(cursor) });
-  }
-  return out;
-}
-
 export default function SpeechDetailPage() {
   const { id } = useParams<{ id: string }>();
   const speechId = id ?? "";
   const { hash } = useLocation();
+  const [searchParams] = useSearchParams();
   const highlightChunkId = hash.startsWith("#chunk-") ? hash.slice("#chunk-".length) : null;
-  const highlightRef = useRef<HTMLSpanElement | null>(null);
 
-  const { data, loading, error, notFound } = useSpeech(speechId);
-
-  useDocumentTitle(data?.speech ? `${data.speech.speaker_name_raw} — speech` : null);
-
-  // Scroll the highlighted chunk into view once data arrives.
-  useEffect(() => {
-    if (!data || !highlightChunkId) return;
-    const el = highlightRef.current;
-    if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
-  }, [data, highlightChunkId]);
-
-  const segments = useMemo(
-    () => (data ? segmentsFromChunks(data.speech.text, data.chunks) : []),
-    [data],
+  // Cross-row query highlight when the user came from /search?q=...
+  const queryTerms = useMemo(
+    () => tokenizeQuery(searchParams.get("q") ?? ""),
+    [searchParams],
   );
 
-  if (loading) return <div className="speech-detail speech-detail--state">Loading speech…</div>;
-  if (notFound) {
+  // Reset window state when navigating between speeches.
+  const [before, setBefore] = useState(DEFAULT_WINDOW);
+  const [after, setAfter] = useState(DEFAULT_WINDOW);
+  const [all, setAll] = useState(false);
+  const [hideProcedural, setHideProcedural] = useState(false);
+  useEffect(() => {
+    setBefore(DEFAULT_WINDOW);
+    setAfter(DEFAULT_WINDOW);
+    setAll(false);
+  }, [speechId]);
+
+  const ctxOpts = useMemo(() => ({ before, after, all }), [before, after, all]);
+
+  const focalState = useSpeech(speechId);
+  const contextState = useSpeechContext(speechId, ctxOpts);
+  const relatedState = useRelatedSpeeches(speechId, highlightChunkId, 5);
+
+  const focalRef = useRef<HTMLElement | null>(null);
+  const relatedRef = useRef<HTMLElement | null>(null);
+  const [pulseRelated, setPulseRelated] = useState(false);
+
+  const jumpToRelated = () => {
+    relatedRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    setPulseRelated(true);
+    window.setTimeout(() => setPulseRelated(false), 1400);
+  };
+
+  useDocumentTitle(
+    focalState.data?.speech ? `${focalState.data.speech.speaker_name_raw} — speech` : null,
+  );
+
+  // Scroll focal speech (or its highlighted chunk) into view once both
+  // fetches resolve. Doing this only after surrounding rows mount avoids
+  // the focal row jumping after the initial scroll fires.
+  useEffect(() => {
+    if (!focalState.data || contextState.loading) return;
+    const target = highlightChunkId
+      ? document.getElementById(`chunk-${highlightChunkId}`)
+      : focalRef.current;
+    if (!target) return;
+    const id = requestAnimationFrame(() => {
+      target.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+    return () => cancelAnimationFrame(id);
+  }, [focalState.data, contextState.loading, highlightChunkId]);
+
+  // Keyboard nav: j/k step focus between exchange rows; ? toggles help.
+  const [showHelp, setShowHelp] = useState(false);
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      // Don't intercept while the user is typing in a control.
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key === "j" || e.key === "k") {
+        e.preventDefault();
+        const rows = Array.from(document.querySelectorAll<HTMLElement>(".exchange-row"));
+        if (rows.length === 0) return;
+        const mid = window.innerHeight / 2;
+        const idx = rows.findIndex((r) => {
+          const rect = r.getBoundingClientRect();
+          return rect.top + rect.height / 2 > mid;
+        });
+        const cur = idx === -1 ? rows.length - 1 : idx;
+        const next = e.key === "j" ? Math.min(rows.length - 1, cur + 1) : Math.max(0, cur - 1);
+        rows[next]?.scrollIntoView({ behavior: "smooth", block: "center" });
+      } else if (e.key === "?") {
+        setShowHelp((v) => !v);
+      } else if (e.key === "Escape") {
+        setShowHelp(false);
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  if (focalState.loading) {
+    return <div className="speech-detail speech-detail--state">Loading speech…</div>;
+  }
+  if (focalState.notFound) {
     return (
       <div className="speech-detail speech-detail--state">
         <Link to="/search" className="speech-detail__back">← Back to search</Link>
@@ -80,124 +125,163 @@ export default function SpeechDetailPage() {
       </div>
     );
   }
-  if (error) {
+  if (focalState.error) {
     return (
       <div className="speech-detail speech-detail--state">
         <Link to="/search" className="speech-detail__back">← Back to search</Link>
         <h1>Couldn't load speech</h1>
-        <p>{error.message}</p>
+        <p>{focalState.error.message}</p>
       </div>
     );
   }
-  if (!data) return null;
+  if (!focalState.data) return null;
 
-  const { speech } = data;
+  const { speech, chunks } = focalState.data;
   const date = formatDate(speech.spoken_at);
-  const hansardUrl = speech.source_anchor
-    ? `${speech.source_url}#${speech.source_anchor}`
-    : speech.source_url;
+  const ctx = contextState.data;
+
+  // Apply the procedural-mute filter to context arrays only — never hide the
+  // focal speech (the user clicked through to it on purpose).
+  const beforeRows = ctx?.before ?? [];
+  const afterRows = ctx?.after ?? [];
+  const filteredBefore = hideProcedural ? beforeRows.filter((s) => !isProcedural(s)) : beforeRows;
+  const filteredAfter = hideProcedural ? afterRows.filter((s) => !isProcedural(s)) : afterRows;
+  const hiddenCount =
+    (beforeRows.length - filteredBefore.length) + (afterRows.length - filteredAfter.length);
 
   return (
     <article className="speech-detail">
       <Link to="/search" className="speech-detail__back">← Back to search</Link>
 
       <header className="speech-detail__header">
-        <div className="speech-detail__speaker">
-          {speech.politician?.photo_url ? (
-            <img
-              src={speech.politician.photo_url}
-              alt=""
-              className="speech-detail__photo"
-              width={64}
-              height={64}
-            />
-          ) : (
-            <div
-              className="speech-detail__photo speech-detail__photo--placeholder"
-              aria-hidden="true"
-            >
-              {speech.speaker_name_raw.slice(0, 1)}
-            </div>
-          )}
-          <div className="speech-detail__speaker-meta">
-            {speech.politician ? (
-              <Link
-                to={`/politicians/${speech.politician.id}`}
-                className="speech-detail__speaker-name"
-              >
-                {speech.politician.name ?? speech.speaker_name_raw}
-              </Link>
-            ) : (
-              <span className="speech-detail__speaker-name speech-detail__speaker-name--unresolved">
-                {speech.speaker_name_raw}
-              </span>
-            )}
-            <span className="speech-detail__speaker-sub">
-              {speech.party_at_time ?? speech.politician?.party ?? "—"}
-              {speech.constituency_at_time ? ` · ${speech.constituency_at_time}` : null}
-            </span>
-          </div>
-        </div>
-
-        <dl className="speech-detail__meta">
+        <div className="speech-detail__meta-row">
           {date && (
-            <div>
-              <dt>Date</dt>
-              <dd>
-                <time dateTime={speech.spoken_at ?? ""}>{date}</time>
-              </dd>
-            </div>
+            <span className="speech-detail__meta-pill">
+              <time dateTime={speech.spoken_at ?? ""}>{date}</time>
+            </span>
           )}
           {speech.session && (
-            <div>
-              <dt>Session</dt>
-              <dd>
-                {speech.session.parliament_number}th Parliament, Session {speech.session.session_number}
-              </dd>
-            </div>
+            <span className="speech-detail__meta-pill">
+              {speech.session.parliament_number}th Parl., Sess. {speech.session.session_number}
+            </span>
           )}
-          <div>
-            <dt>Chamber</dt>
-            <dd>
-              {speech.level}
-              {speech.province_territory ? ` · ${speech.province_territory}` : ""}
-            </dd>
-          </div>
-          <div>
-            <dt>Language</dt>
-            <dd>{speech.language.toUpperCase()}</dd>
-          </div>
-        </dl>
-
-        <a
-          href={hansardUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="speech-detail__source"
-        >
-          View on source (Hansard) ↗
-        </a>
+          <span className="speech-detail__meta-pill">
+            {speech.level}
+            {speech.province_territory ? ` · ${speech.province_territory}` : ""}
+          </span>
+          <span className="speech-detail__meta-pill">{speech.language.toUpperCase()}</span>
+          <button
+            type="button"
+            className={
+              hideProcedural
+                ? "speech-detail__toggle speech-detail__toggle--on"
+                : "speech-detail__toggle"
+            }
+            onClick={() => setHideProcedural((v) => !v)}
+            title="Hide Speaker / Some hon. members / chair interruptions"
+          >
+            {hideProcedural ? `Procedural rows hidden${hiddenCount ? ` (${hiddenCount})` : ""}` : "Hide procedural"}
+          </button>
+          <button
+            type="button"
+            className="speech-detail__toggle"
+            onClick={() => setShowHelp((v) => !v)}
+            title="Keyboard shortcuts"
+            aria-label="Show keyboard shortcuts"
+          >
+            ?
+          </button>
+        </div>
       </header>
 
-      <div className="speech-detail__body">
-        {segments.map((seg, i) => {
-          const isHighlight = seg.chunk && seg.chunk.id === highlightChunkId;
-          return (
-            <span
-              key={i}
-              id={seg.chunk ? `chunk-${seg.chunk.id}` : undefined}
-              ref={isHighlight ? highlightRef : undefined}
-              className={
-                isHighlight
-                  ? "speech-detail__segment speech-detail__segment--highlight"
-                  : "speech-detail__segment"
-              }
+      {showHelp && (
+        <div className="speech-detail__help" role="dialog" aria-label="Keyboard shortcuts">
+          <div className="speech-detail__help-row"><kbd>j</kbd> / <kbd>k</kbd> next / previous speech</div>
+          <div className="speech-detail__help-row"><kbd>?</kbd> toggle this help</div>
+          <div className="speech-detail__help-row"><kbd>Esc</kbd> close</div>
+        </div>
+      )}
+
+      <section className="speech-detail__exchange" aria-label="Hansard exchange">
+        <div className="speech-detail__expand-bar speech-detail__expand-bar--top">
+          {ctx?.has_more_before && !all && (
+            <button
+              type="button"
+              className="speech-detail__expand-btn"
+              onClick={() => setBefore((n) => n + STEP)}
+              disabled={contextState.loading}
             >
-              {seg.text}
+              ↑ Show {STEP} earlier
+            </button>
+          )}
+          {ctx && !all && (ctx.has_more_before || ctx.has_more_after) && (
+            <button
+              type="button"
+              className="speech-detail__expand-btn speech-detail__expand-btn--strong"
+              onClick={() => setAll(true)}
+              disabled={contextState.loading}
+            >
+              Load full sitting
+            </button>
+          )}
+        </div>
+
+        {filteredBefore.map((s) => (
+          <ExchangeSpeechRow key={s.id} kind="context" speech={s} queryTerms={queryTerms} />
+        ))}
+
+        <ExchangeSpeechRow
+          ref={focalRef}
+          kind="focal"
+          speech={speech}
+          chunks={chunks}
+          highlightChunkId={highlightChunkId}
+          queryTerms={queryTerms}
+          similarCount={relatedState.data?.items.length ?? 0}
+          onJumpToSimilar={jumpToRelated}
+        />
+
+        {filteredAfter.map((s) => (
+          <ExchangeSpeechRow key={s.id} kind="context" speech={s} queryTerms={queryTerms} />
+        ))}
+
+        <div className="speech-detail__expand-bar speech-detail__expand-bar--bottom">
+          {ctx?.has_more_after && !all && (
+            <button
+              type="button"
+              className="speech-detail__expand-btn"
+              onClick={() => setAfter((n) => n + STEP)}
+              disabled={contextState.loading}
+            >
+              ↓ Show {STEP} later
+            </button>
+          )}
+          {all && (ctx?.has_more_before || ctx?.has_more_after) && (
+            <span className="speech-detail__expand-note">
+              Sitting truncated — view the full transcript on{" "}
+              <a href={speech.source_url} target="_blank" rel="noopener noreferrer">
+                Hansard ↗
+              </a>
             </span>
-          );
-        })}
-      </div>
+          )}
+        </div>
+
+        {contextState.loading && !ctx && (
+          <div className="speech-detail__context-loading">Loading exchange context…</div>
+        )}
+      </section>
+
+      <RelatedSpeechesPanel
+        ref={relatedRef}
+        items={relatedState.data?.items ?? []}
+        loading={relatedState.loading}
+        focal={{
+          speakerName: speech.politician?.name ?? speech.speaker_name_raw,
+          party: speech.party_at_time ?? speech.politician?.party ?? null,
+          photoUrl: speech.politician?.photo_url ?? null,
+        }}
+        pulse={pulseRelated}
+      />
     </article>
   );
 }

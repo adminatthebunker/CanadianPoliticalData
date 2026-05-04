@@ -1,6 +1,10 @@
-import { useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import type { SpeechSearchItem, SpeechSearchSocial } from "../hooks/useSpeechSearch";
+import { QuoteShareMenu } from "./QuoteShareMenu";
+import { ourcommonsVideoUrl } from "../lib/videoEmbedUrl";
+import { sanitizeHighlighted } from "../lib/textHighlight";
+
+export { sanitizeHighlighted };
 
 const PLATFORM_ICON: Record<string, string> = {
   twitter: "𝕏",
@@ -34,19 +38,6 @@ function platformIcon(p: string): string {
 
 function platformLabel(p: string): string {
   return PLATFORM_LABEL[p.toLowerCase()] ?? p;
-}
-
-// ts_headline emits only <b>...</b> wrappers, but the source text from
-// Postgres has never been HTML-escaped at ingest time. Allow <b> only,
-// escape everything else. Without this, a speech transcript containing
-// raw HTML would render in the DOM.
-export function sanitizeHighlighted(html: string): { __html: string } {
-  const BOLD_OPEN = "\u0000BOLD\u0000";
-  const BOLD_CLOSE = "\u0000/BOLD\u0000";
-  const s0 = html.replace(/<b>/gi, BOLD_OPEN).replace(/<\/b>/gi, BOLD_CLOSE);
-  const escaped = s0.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  const restored = escaped.split(BOLD_OPEN).join("<b>").split(BOLD_CLOSE).join("</b>");
-  return { __html: restored };
 }
 
 function formatDate(iso: string | null): string | null {
@@ -119,7 +110,18 @@ export function SpeechResultCard({ item, hideSpeaker = false }: SpeechResultCard
       ? `${item.speech.source_url}#${item.speech.source_anchor}`
       : item.speech.source_url
     : null;
-  const internalUrl = `/speeches/${item.speech_id}#chunk-${item.chunk_id}`;
+  const [searchParams] = useSearchParams();
+  const q = searchParams.get("q") ?? "";
+  const internalUrl =
+    `/speeches/${item.speech_id}` +
+    (q ? `?q=${encodeURIComponent(q)}` : "") +
+    `#chunk-${item.chunk_id}`;
+  const videoUrl = ourcommonsVideoUrl({
+    source_system: item.speech.source_system,
+    source_anchor: item.speech.source_anchor,
+    level: item.level,
+    language: item.language,
+  });
 
   return (
     <article className="speech-result">
@@ -204,6 +206,13 @@ export function SpeechResultCard({ item, hideSpeaker = false }: SpeechResultCard
         <Link to={internalUrl} className="speech-result__action">
           View speech →
         </Link>
+        <Link
+          to={`/search?anchor_chunk_id=${item.chunk_id}`}
+          className="speech-result__action speech-result__action--secondary"
+          title="Use this chunk as your search — show speeches across the corpus closest to it semantically"
+        >
+          Find similar →
+        </Link>
         {hansardUrl && (
           <a
             href={hansardUrl}
@@ -214,7 +223,14 @@ export function SpeechResultCard({ item, hideSpeaker = false }: SpeechResultCard
             Hansard ↗
           </a>
         )}
-        <QuoteShareButton item={item} internalUrl={internalUrl} />
+        <QuoteShareMenu
+          speakerName={pol?.name ?? item.speech.speaker_name_raw}
+          dateIso={item.spoken_at}
+          quoteText={item.text}
+          internalUrl={internalUrl}
+          videoUrl={videoUrl}
+          hansardUrl={hansardUrl}
+        />
         {item.similarity !== null && (
           <span className="speech-result__similarity" title="Cosine similarity to query">
             {(item.similarity * 100).toFixed(0)}% match
@@ -246,130 +262,3 @@ function SocialIcons({ socials, speakerName }: { socials: SpeechSearchSocial[]; 
   );
 }
 
-interface ShareTarget {
-  key: string;
-  label: string;
-  icon: string;
-  href: (url: string, text: string) => string;
-  newTab: boolean;
-}
-
-const SHARE_TARGETS: ShareTarget[] = [
-  { key: "x",        label: "X / Twitter", icon: "𝕏", newTab: true,
-    href: (u, x) => `https://twitter.com/intent/tweet?url=${encodeURIComponent(u)}&text=${encodeURIComponent(x)}` },
-  { key: "bluesky",  label: "Bluesky", icon: "🦋", newTab: true,
-    href: (u, x) => `https://bsky.app/intent/compose?text=${encodeURIComponent(`${x} ${u}`)}` },
-  { key: "facebook", label: "Facebook", icon: "f", newTab: true,
-    href: (u) => `https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(u)}` },
-  { key: "linkedin", label: "LinkedIn", icon: "in", newTab: true,
-    href: (u) => `https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent(u)}` },
-  { key: "reddit",   label: "Reddit", icon: "r/", newTab: true,
-    href: (u, x) => `https://www.reddit.com/submit?url=${encodeURIComponent(u)}&title=${encodeURIComponent(x)}` },
-  { key: "whatsapp", label: "WhatsApp", icon: "💬", newTab: true,
-    href: (u, x) => `https://api.whatsapp.com/send?text=${encodeURIComponent(`${x} ${u}`)}` },
-  { key: "email",    label: "Email", icon: "✉", newTab: false,
-    href: (u, x) => `mailto:?subject=${encodeURIComponent("Quote from Canadian Political Data")}&body=${encodeURIComponent(`${x}\n\n${u}`)}` },
-];
-
-function buildShareText(item: SpeechSearchItem): string {
-  const speaker = item.politician?.name ?? item.speech.speaker_name_raw;
-  const date = item.spoken_at ? new Date(item.spoken_at).toLocaleDateString("en-CA", { year: "numeric", month: "short", day: "numeric" }) : "";
-  // Cap at 220 chars to leave room for attribution + URL inside Twitter's 280 budget.
-  const quote = item.text.length > 220 ? `${item.text.slice(0, 217)}…` : item.text;
-  const attribution = date ? `— ${speaker}, ${date}` : `— ${speaker}`;
-  return `“${quote}” ${attribution}`;
-}
-
-function QuoteShareButton({ item, internalUrl }: { item: SpeechSearchItem; internalUrl: string }) {
-  const [open, setOpen] = useState(false);
-  const [copied, setCopied] = useState<"link" | "quote" | null>(null);
-  const ref = useRef<HTMLDivElement>(null);
-
-  const absoluteUrl = typeof window !== "undefined"
-    ? new URL(internalUrl, window.location.origin).toString()
-    : internalUrl;
-  const shareText = buildShareText(item);
-
-  useEffect(() => {
-    if (!open) return;
-    const onDoc = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setOpen(false); };
-    document.addEventListener("mousedown", onDoc);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDoc);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
-
-  const handleButton = async () => {
-    if (typeof navigator !== "undefined" && navigator.share) {
-      try {
-        await navigator.share({ url: absoluteUrl, text: shareText, title: "Canadian Political Data" });
-        return;
-      } catch { /* user cancelled — fall through to dropdown */ }
-    }
-    setOpen((o) => !o);
-  };
-
-  const copy = async (what: "link" | "quote") => {
-    try {
-      await navigator.clipboard.writeText(what === "link" ? absoluteUrl : `${shareText}\n${absoluteUrl}`);
-      setCopied(what);
-      setTimeout(() => setCopied(null), 1600);
-    } catch { /* noop */ }
-  };
-
-  return (
-    <div className="speech-result__share" ref={ref}>
-      <button
-        type="button"
-        className="speech-result__action speech-result__action--share"
-        onClick={handleButton}
-        aria-haspopup="menu"
-        aria-expanded={open}
-      >
-        <span aria-hidden="true">↗</span> Share
-      </button>
-      {open && (
-        <div className="speech-result__share-menu" role="menu">
-          <div className="speech-result__share-head">Share this quote</div>
-          {SHARE_TARGETS.map((t) => (
-            <a
-              key={t.key}
-              role="menuitem"
-              className="speech-result__share-item"
-              href={t.href(absoluteUrl, shareText)}
-              target={t.newTab ? "_blank" : undefined}
-              rel={t.newTab ? "noopener noreferrer" : undefined}
-              onClick={() => setOpen(false)}
-            >
-              <span className="speech-result__share-icon" aria-hidden="true">{t.icon}</span>
-              <span>{t.label}</span>
-            </a>
-          ))}
-          <button
-            type="button"
-            role="menuitem"
-            className="speech-result__share-item speech-result__share-item--copy"
-            onClick={() => copy("quote")}
-          >
-            <span className="speech-result__share-icon" aria-hidden="true">📋</span>
-            <span>{copied === "quote" ? "Copied quote!" : "Copy quote + link"}</span>
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            className="speech-result__share-item speech-result__share-item--copy"
-            onClick={() => copy("link")}
-          >
-            <span className="speech-result__share-icon" aria-hidden="true">🔗</span>
-            <span>{copied === "link" ? "Copied!" : "Copy link"}</span>
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}

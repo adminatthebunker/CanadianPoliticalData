@@ -27,6 +27,21 @@
   line-height: 1.5;
 }
 
+/* Inline "How it works ↗" link inside the subtitle. Mirrors the same
+ * affordance on /semantic-map so the cross-doc-site link reads
+ * consistently across both surfaces. */
+.hansard-search__how-link {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  white-space: nowrap;
+}
+.hansard-search__how-link:hover,
+.hansard-search__how-link:focus-visible {
+  text-decoration-thickness: 2px;
+  outline: none;
+}
+
 .hansard-search__banner {
   margin: 0;
   padding: .65rem .9rem;
@@ -58,6 +73,62 @@
 
 .hansard-search__search-row .cpd-save-search {
   margin: 0;
+}
+
+/* "Update search" button — solid accent so it reads as the primary
+ * action on the row (the search input has its own affordance, the save
+ * button is green/secondary). Lives next to the input on desktop and
+ * wraps below it on narrow viewports because of the row's flex-wrap. */
+.hansard-search__update-btn {
+  padding: .55rem 1rem;
+  background: var(--accent, #4a9eff);
+  color: #f4f8ff;
+  border: 1px solid var(--accent, #4a9eff);
+  border-radius: 6px;
+  font: inherit;
+  font-size: .9rem;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.15);
+  transition: background-color .15s, border-color .15s, opacity .15s;
+}
+
+.hansard-search__update-btn:hover:not(:disabled),
+.hansard-search__update-btn:focus-visible {
+  background: #6cb1ff;
+  border-color: #6cb1ff;
+  outline: none;
+}
+
+.hansard-search__update-btn:disabled {
+  opacity: .55;
+  cursor: not-allowed;
+}
+
+/* Dirty state — staged filter changes the user hasn't committed yet.
+ * A subtle pulsing ring + slightly brighter fill draws the eye to the
+ * primary action without being noisy enough to distract during typing. */
+.hansard-search__update-btn--dirty {
+  background: #ff5d8f;
+  border-color: #ff5d8f;
+  box-shadow: 0 0 0 3px rgba(255, 93, 143, .25);
+  animation: hansard-search-dirty-pulse 1.6s ease-in-out infinite;
+}
+
+.hansard-search__update-btn--dirty:hover:not(:disabled),
+.hansard-search__update-btn--dirty:focus-visible {
+  background: #ff7aa3;
+  border-color: #ff7aa3;
+}
+
+@keyframes hansard-search-dirty-pulse {
+  0%, 100% { box-shadow: 0 0 0 3px rgba(255, 93, 143, .25); }
+  50%      { box-shadow: 0 0 0 6px rgba(255, 93, 143, .12); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hansard-search__update-btn--dirty { animation: none; }
 }
 
 .hansard-search__form {
@@ -179,6 +250,20 @@
 .cpd-filter-chip__remove:hover {
   color: #ff7a7a;
   background: rgba(255, 122, 122, .08);
+}
+
+/* Preset chip variant — rendered for filters in `alwaysShow` (e.g.
+ * min_similarity). The dashed border distinguishes it from user-applied
+ * chips and signals "always present, click to adjust" instead of
+ * "active filter, click × to remove". The × button is suppressed by
+ * the component for these chips. */
+.cpd-filter-chip-wrap--preset {
+  border-style: dashed;
+  background: rgba(74, 158, 255, .05);
+}
+
+.cpd-filter-chip-wrap--preset .cpd-filter-chip__type {
+  color: var(--accent, #4a9eff);
 }
 
 /* +Filter button (and its menu anchor wrapper). */
@@ -344,6 +429,36 @@
   filter: brightness(1.1);
 }
 
+/* ── Range-slider picker (min similarity, etc.) ──────────────── */
+
+.cpd-filter-popover__slider-row {
+  display: flex;
+  flex-direction: column;
+  gap: .35rem;
+}
+
+.cpd-filter-popover__slider-value {
+  font-size: .85rem;
+  color: var(--ink);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.cpd-filter-popover__slider {
+  width: 100%;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.cpd-filter-popover__slider-scale {
+  display: flex;
+  justify-content: space-between;
+  font-size: .68rem;
+  color: var(--ink-muted);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: .02em;
+}
+
 /* ── +Filter dropdown menu ───────────────────────────────────── */
 
 .cpd-filter-menu__list {
@@ -417,6 +532,18 @@
   margin: 0 0 0 auto;
   font-size: .85rem;
   color: var(--ink-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: .25rem;
+  flex-wrap: wrap;
+}
+
+/* When the summary line is hosting an inline maple-leaf loader,
+ * collapse the loader's own padding so the row stays compact and the
+ * vertical rhythm matches the plain "N matches · ranked by similarity"
+ * variant. */
+.hansard-search__summary-inline .maple-loader {
+  padding: 0;
 }
 
 .hansard-search__list {
@@ -657,84 +784,10 @@
   font-variant-numeric: tabular-nums;
 }
 
-.speech-result__share {
-  position: relative;
-  display: inline-flex;
-}
-
-.speech-result__action--share {
-  background: none;
-  border: none;
-  padding: 0;
-  cursor: pointer;
-  font: inherit;
-  color: var(--ink-muted);
-  font-weight: 500;
-}
-
-.speech-result__action--share:hover {
-  color: var(--accent);
-  text-decoration: underline;
-}
-
-.speech-result__share-menu {
-  position: absolute;
-  top: calc(100% + .35rem);
-  right: 0;
-  z-index: 40;
-  min-width: 12rem;
-  padding: .35rem;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
-  display: flex;
-  flex-direction: column;
-  gap: .05rem;
-}
-
-.speech-result__share-head {
-  padding: .35rem .55rem .5rem;
-  font-size: .72rem;
-  font-weight: 600;
-  color: var(--ink-muted);
-  letter-spacing: .04em;
-  text-transform: uppercase;
-  border-bottom: 1px solid var(--border);
-  margin-bottom: .25rem;
-}
-
-.speech-result__share-item {
-  display: flex;
-  align-items: center;
-  gap: .6rem;
-  padding: .45rem .55rem;
-  background: none;
-  border: none;
-  border-radius: 6px;
-  color: var(--ink);
-  font: inherit;
-  font-size: .85rem;
-  text-align: left;
-  text-decoration: none;
-  cursor: pointer;
-  transition: background-color .1s;
-}
-
-.speech-result__share-item:hover {
-  background: var(--panel-2);
-  text-decoration: none;
-}
-
-.speech-result__share-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 1.25rem;
-  height: 1.25rem;
-  font-weight: 700;
-  color: var(--ink-muted);
-}
+/* The quote-share popover styles previously lived here; they've been
+ * extracted to styles/quote-share.css and renamed to .quote-share__*
+ * so the search results card and the speech-detail exchange rows can
+ * share one component (QuoteShareMenu). */
 
 /* ── Narrow screens ───────────────────────────────────────────── */
 
@@ -2237,4 +2290,308 @@
   .politician-group__pager {
     flex-wrap: wrap;
   }
+}
+
+/* ── Search Map view ──────────────────────────────────────────── */
+
+.search-map {
+  margin-top: 1.25rem;
+}
+
+.search-map--empty {
+  text-align: center;
+  padding: 2.5rem 1rem;
+  color: var(--ink-muted);
+  background: var(--panel);
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+}
+
+.search-map__back-btn {
+  margin-top: 1rem;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: .35rem .9rem;
+  font: inherit;
+  font-size: .85rem;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.search-map__breadcrumb {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .25rem .35rem;
+  margin-bottom: .85rem;
+  font-size: .85rem;
+  color: var(--ink-muted);
+}
+
+.search-map__crumb-row {
+  display: inline-flex;
+  align-items: center;
+  gap: .35rem;
+}
+
+.search-map__crumb-arrow {
+  color: var(--ink-muted);
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.search-map__crumb {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: .2rem .65rem;
+  font: inherit;
+  font-size: .8rem;
+  color: var(--ink-muted);
+  cursor: pointer;
+  transition: border-color .15s, color .15s;
+}
+
+.search-map__crumb:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.search-map__crumb--current {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+  color: var(--ink);
+  cursor: default;
+}
+
+.search-map__svg {
+  width: 100%;
+  height: auto;
+  max-height: 600px;
+  display: block;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--panel) 85%, transparent), color-mix(in srgb, var(--panel-2) 75%, transparent));
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.search-map__node {
+  cursor: pointer;
+}
+
+.search-map__node:hover circle:first-of-type,
+.search-map__node:focus circle:first-of-type {
+  filter: drop-shadow(0 0 8px var(--accent));
+}
+
+.search-map__node:focus { outline: none; }
+
+.search-map__hover {
+  margin-top: .65rem;
+  padding: .65rem .85rem;
+  min-height: 4.5rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: .9rem;
+}
+
+.search-map__hover-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: .35rem;
+  margin-bottom: .35rem;
+}
+
+.search-map__hover-name {
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.search-map__hover-sub {
+  color: var(--ink-muted);
+  font-size: .85rem;
+  font-weight: 400;
+}
+
+.search-map__hover-link {
+  margin-left: auto;
+  color: var(--accent);
+  text-decoration: none;
+  font-size: .85rem;
+  font-weight: 500;
+}
+
+.search-map__hover-link:hover { text-decoration: underline; }
+
+.search-map__hover-link--secondary {
+  margin-left: .85rem;
+  color: var(--ink-muted);
+}
+
+.search-map__hover-link--secondary:hover {
+  color: var(--accent);
+}
+
+.search-map__hover-snippet {
+  color: color-mix(in srgb, var(--ink) 88%, var(--ink-muted));
+  line-height: 1.5;
+  max-height: 14rem;
+  overflow-y: auto;
+  white-space: pre-wrap;
+}
+
+.search-map__hover-hint {
+  color: var(--ink-muted);
+  font-style: italic;
+}
+
+.search-map__legend {
+  margin: .5rem 0 0;
+  font-size: .75rem;
+  color: var(--ink-muted);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .25rem .5rem;
+}
+
+.search-map__legend-dot {
+  display: inline-block;
+  width: .65rem;
+  height: .65rem;
+  border-radius: 50%;
+  background: var(--accent);
+  margin-right: .35rem;
+}
+
+.search-map__legend-sep::before {
+  content: "·";
+  margin: 0 .35rem;
+  color: var(--ink-muted);
+}
+
+.search-map__legend-error {
+  color: var(--accent);
+}
+
+@media (max-width: 720px) {
+  .search-map__svg { max-height: 420px; }
+  .search-map__breadcrumb { font-size: .8rem; }
+}
+
+/* ── Anchor-chunk banner ──────────────────────────────────────── */
+
+.anchor-banner {
+  margin: 0 0 1.25rem;
+  padding: .85rem 1rem;
+  background: color-mix(in srgb, var(--accent) 8%, var(--panel));
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
+  border-left: 4px solid var(--accent);
+  border-radius: 8px;
+  color: var(--ink);
+}
+
+.anchor-banner--loading,
+.anchor-banner--error {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: .85rem;
+  color: var(--ink-muted);
+}
+
+.anchor-banner__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .35rem .55rem;
+  margin-bottom: .5rem;
+  font-size: .85rem;
+}
+
+.anchor-banner__label {
+  font-size: .7rem;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--ink-muted);
+  font-weight: 600;
+}
+
+.anchor-banner__speaker {
+  font-weight: 600;
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.anchor-banner__speaker:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.anchor-banner__speaker--unresolved {
+  color: var(--ink-muted);
+  font-style: italic;
+}
+
+.anchor-banner__party,
+.anchor-banner__date {
+  color: var(--ink-muted);
+  font-size: .8rem;
+}
+
+.anchor-banner__open {
+  margin-left: auto;
+  color: var(--accent);
+  text-decoration: none;
+  font-size: .85rem;
+  font-weight: 500;
+}
+
+.anchor-banner__open:hover { text-decoration: underline; }
+
+.anchor-banner__clear {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: .15rem .65rem;
+  font: inherit;
+  font-size: .78rem;
+  color: var(--ink-muted);
+  cursor: pointer;
+}
+
+.anchor-banner__clear:hover {
+  color: var(--ink);
+  border-color: var(--accent);
+}
+
+.anchor-banner__text {
+  margin: 0;
+  font-size: .92rem;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  color: color-mix(in srgb, var(--ink) 92%, var(--ink-muted));
+}
+
+.anchor-banner__expand {
+  display: inline;
+  margin-left: .35rem;
+  background: none;
+  border: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: .85rem;
+  cursor: pointer;
+  padding: 0;
+}
+
+.anchor-banner__expand:hover { text-decoration: underline; }
+
+.anchor-banner__hint {
+  margin: .65rem 0 0;
+  font-size: .75rem;
+  color: var(--ink-muted);
+  font-style: italic;
 }

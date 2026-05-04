@@ -74,6 +74,12 @@ export const baseFilterSchema = z.object({
     z.enum(SPEECH_TYPE_VALUES),
     z.array(z.enum(SPEECH_TYPE_VALUES)).max(SPEECH_TYPE_VALUES.length),
   ]).optional(),
+  // Anchor-chunk search: rank the corpus by cosine similarity to this
+  // chunk's embedding instead of a text query. Mutually exclusive with
+  // `q` — when both are present, `q` wins and the anchor is ignored.
+  // The anchor itself is excluded from results so it doesn't dominate
+  // its own ranking (it would always cosine-distance to 0).
+  anchor_chunk_id: z.string().regex(/^[0-9a-f-]{36}$/i).optional(),
 });
 
 export function effectivePoliticianIds(
@@ -111,6 +117,23 @@ const searchQuery = baseFilterSchema.extend({
   // about this topic the most" — matches user intuition and the Analysis
   // tab's TOP SPEAKERS list.
   sort: z.enum(["mentions", "best_match", "avg_match", "keyword_hits"]).default("mentions"),
+  // Allow callers to skip the (potentially slow) COUNT(*) query and
+  // fetch the total via the dedicated /speeches/count endpoint instead.
+  // When `include_count=false` the response shape is unchanged but
+  // `total` and `pages` are reported as null. Default true so existing
+  // bookmarks and integrations keep their previous behaviour. The
+  // /search frontend now opts out and stages the count off in parallel
+  // because the threshold path on COUNT can't use HNSW (it's a
+  // cardinality-of-neighbourhood question, not a top-K one) and on a
+  // q-only query against the full 4.9M-chunk corpus it costs ~15s.
+  //
+  // Manual coercion: z.coerce.boolean() treats the *string* "false" as
+  // truthy (Boolean("false") === true), which would silently ignore the
+  // opt-out. Coerce to literal-aware boolean here so URL params behave.
+  include_count: z
+    .union([z.boolean(), z.enum(["true", "false"])])
+    .default(true)
+    .transform((v) => (typeof v === "boolean" ? v : v === "true")),
 });
 
 // Single-politician deep-dive ("show all of X's quotes for query Q").
@@ -153,6 +176,7 @@ interface SpeechSearchRow {
   speech_speaker_role: string | null;
   speech_source_url: string | null;
   speech_source_anchor: string | null;
+  speech_source_system: string | null;
   parliament_number: number | null;
   session_number: number | null;
   // Per-politician aggregates repeated on every chunk row of a group —
@@ -164,7 +188,24 @@ interface SpeechSearchRow {
   keyword_hits?: number;
 }
 
+// Collapses duplicate TEI calls when the same query lands in a short window —
+// e.g. burst traffic, paginated repeats. Qwen3 is deterministic per input, so
+// a cached vector is semantically identical to re-embedding.
+const QUERY_CACHE_MAX = 500;
+const QUERY_CACHE_TTL_MS = 60_000;
+const queryCache = new Map<string, { vec: number[]; expiresAt: number }>();
+
 export async function encodeQuery(text: string): Promise<number[]> {
+  const cacheKey = text.trim().toLowerCase();
+  const now = Date.now();
+  const hit = queryCache.get(cacheKey);
+  if (hit && hit.expiresAt > now) {
+    queryCache.delete(cacheKey);
+    queryCache.set(cacheKey, hit);
+    return hit.vec;
+  }
+  if (hit) queryCache.delete(cacheKey);
+
   const wrapped = `${INSTRUCT_PREFIX}${text}`;
   const res = await fetch(`${config.teiUrl}/embed`, {
     method: "POST",
@@ -176,20 +217,94 @@ export async function encodeQuery(text: string): Promise<number[]> {
   }
   const data: unknown = await res.json();
   // TEI default: bare [[...floats...]]. OpenAI-compat: {data: [{embedding: [...]}]}.
+  let vec: number[] | null = null;
   if (Array.isArray(data) && Array.isArray((data as unknown[])[0])) {
-    const first = (data as number[][])[0];
-    if (first) return first;
-  }
-  if (data && typeof data === "object" && "data" in data) {
+    vec = (data as number[][])[0] ?? null;
+  } else if (data && typeof data === "object" && "data" in data) {
     const d = (data as { data: Array<{ embedding: number[] }> }).data;
-    if (d?.[0]?.embedding) return d[0].embedding;
+    vec = d?.[0]?.embedding ?? null;
   }
-  throw new Error("Unexpected TEI /embed response shape");
+  if (!vec) throw new Error("Unexpected TEI /embed response shape");
+
+  if (queryCache.size >= QUERY_CACHE_MAX) {
+    const oldest = queryCache.keys().next().value;
+    if (oldest !== undefined) queryCache.delete(oldest);
+  }
+  queryCache.set(cacheKey, { vec, expiresAt: now + QUERY_CACHE_TTL_MS });
+  return vec;
 }
 
 export function toPgVector(vec: number[]): string {
   // pgvector literal: '[0.1,0.2,...]'. join with "," no spaces for tightness.
   return `[${vec.join(",")}]`;
+}
+
+// Anchor-chunk embedding cache. Same LRU shape as queryCache above, but
+// keyed by chunk_id directly (chunks don't change after ingest, so a longer
+// TTL would be safe — kept at 5min to bound memory under churn).
+const ANCHOR_CACHE_MAX = 200;
+const ANCHOR_CACHE_TTL_MS = 5 * 60_000;
+const anchorCache = new Map<string, { vec: number[]; expiresAt: number }>();
+
+async function resolveAnchorVector(chunkId: string): Promise<number[] | null> {
+  const now = Date.now();
+  const hit = anchorCache.get(chunkId);
+  if (hit && hit.expiresAt > now) {
+    anchorCache.delete(chunkId);
+    anchorCache.set(chunkId, hit);
+    return hit.vec;
+  }
+  if (hit) anchorCache.delete(chunkId);
+
+  // pgvector returns embeddings as text in the wire protocol when cast.
+  // Round-trip through ::text → JSON-parse the bracketed literal.
+  const row = await queryOne<{ embedding: string }>(
+    `SELECT embedding::text AS embedding FROM speech_chunks WHERE id = $1 AND embedding IS NOT NULL`,
+    [chunkId],
+  );
+  if (!row) return null;
+  let vec: number[];
+  try {
+    vec = JSON.parse(row.embedding) as number[];
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(vec) || vec.length === 0) return null;
+
+  if (anchorCache.size >= ANCHOR_CACHE_MAX) {
+    const oldest = anchorCache.keys().next().value;
+    if (oldest !== undefined) anchorCache.delete(oldest);
+  }
+  anchorCache.set(chunkId, { vec, expiresAt: now + ANCHOR_CACHE_TTL_MS });
+  return vec;
+}
+
+export interface SearchVector {
+  vec: number[];
+  /** When set, callers should append `AND sc.id != $excludeChunkId` so the
+   *  anchor doesn't return itself as its own closest match. */
+  excludeChunkId: string | null;
+  source: "text" | "anchor";
+}
+
+/** Resolves the search vector for a request. Text query takes precedence
+ *  over anchor when both are present. Returns null when neither is set
+ *  (recent-mode browsing). Returns "missing_anchor" when the anchor id was
+ *  set but the chunk doesn't exist — callers should 404. */
+export async function resolveSearchVector(
+  filter: Pick<BaseFilter, "q" | "anchor_chunk_id">,
+): Promise<SearchVector | null | "missing_anchor"> {
+  const q = filter.q?.trim();
+  if (q) {
+    const vec = await encodeQuery(q);
+    return { vec, excludeChunkId: null, source: "text" };
+  }
+  if (filter.anchor_chunk_id) {
+    const vec = await resolveAnchorVector(filter.anchor_chunk_id);
+    if (!vec) return "missing_anchor";
+    return { vec, excludeChunkId: filter.anchor_chunk_id, source: "anchor" };
+  }
+  return null;
 }
 
 /** Build the WHERE clause + filter params shared by /speeches and /facets.
@@ -270,13 +385,29 @@ async function handleGroupedByPolitician(
   input: SearchInput,
 ) {
   const { q, page, limit, per_group_limit, sort } = input;
-  if (!q) {
-    return reply.badRequest("group_by=politician requires a semantic query (`q`)");
+  if (!q && !input.anchor_chunk_id) {
+    return reply.badRequest("group_by=politician requires a semantic query (`q`) or `anchor_chunk_id`");
   }
 
-  const { whereSql, filterParams } = buildFilterWhere(input);
-  const vec = await encodeQuery(q);
-  const vecLiteral = toPgVector(vec);
+  const { whereSql: baseWhereSql, filterParams } = buildFilterWhere(input);
+  const resolved = await resolveSearchVector(input);
+  if (resolved === "missing_anchor") return reply.notFound("anchor_not_found");
+  if (!resolved) {
+    // Defensive — guarded above, but keeps the type narrow for downstream.
+    return reply.badRequest("could not resolve search vector");
+  }
+  const vecLiteral = toPgVector(resolved.vec);
+
+  // Anchor mode: exclude the anchor itself + skip the kw_hit ts_query
+  // (no text to match). The keyword_hits sort silently degrades to "0
+  // for everyone, ranked by mentions / similarity" in that case — a
+  // reasonable behaviour given the tab still works on the other sorts.
+  let whereSql = baseWhereSql;
+  let extraExcludeParam: string | null = null;
+  if (resolved.excludeChunkId) {
+    extraExcludeParam = resolved.excludeChunkId;
+    // append below to unified `params` so $-numbering stays correct
+  }
 
   // Cap politicians per page at 20 regardless of user-supplied limit — the
   // UI renders one card per politician and larger pages get unusable.
@@ -299,26 +430,46 @@ async function handleGroupedByPolitician(
   );
   const MAX_DISTANCE = 1 - effectiveMinSimilarity;
 
-  const params: unknown[] = [
-    ...filterParams,
-    vecLiteral,          // $vIdx
-    q,                   // $qIdx (ts_headline + kw_hit tsquery)
-    CANDIDATE_POOL,      // $poolIdx
-    politicianLimit,     // $plIdx
-    politicianOffset,    // $poIdx
-    per_group_limit,     // $pglIdx
-    MAX_DISTANCE,        // $mdIdx
-    sort,                // $sortIdx
-  ];
-  const base = filterParams.length;
-  const vIdx = base + 1;
-  const qIdx = base + 2;
-  const poolIdx = base + 3;
-  const plIdx = base + 4;
-  const poIdx = base + 5;
-  const pglIdx = base + 6;
-  const mdIdx = base + 7;
-  const sortIdx = base + 8;
+  // Build params/index map dynamically — anchor mode skips the q text
+  // param entirely (kw_hit becomes a literal 0). The exclude-id (when in
+  // anchor mode) is appended to the *base* filter set so the WHERE clause
+  // built above is consistent with the count branch's numbering scheme.
+  const params: unknown[] = [...filterParams];
+  if (extraExcludeParam) {
+    params.push(extraExcludeParam);
+    whereSql = `${baseWhereSql} AND sc.id != $${params.length}::uuid`;
+  }
+  params.push(vecLiteral);
+  const vIdx = params.length;
+  let qIdx: number | null = null;
+  if (q && resolved.source === "text") {
+    params.push(q);
+    qIdx = params.length;
+  }
+  params.push(CANDIDATE_POOL);
+  const poolIdx = params.length;
+  params.push(politicianLimit);
+  const plIdx = params.length;
+  params.push(politicianOffset);
+  const poIdx = params.length;
+  params.push(per_group_limit);
+  const pglIdx = params.length;
+  params.push(MAX_DISTANCE);
+  const mdIdx = params.length;
+  params.push(sort);
+  const sortIdx = params.length;
+
+  const kwHitExpr = qIdx
+    ? `(sc.tsv @@ websearch_to_tsquery(COALESCE(sc.tsv_config, 'simple')::regconfig, $${qIdx}))::int`
+    : `0`;
+  const headlineSnippetExpr = qIdx
+    ? `ts_headline(
+             COALESCE(r.tsv_config, 'simple')::regconfig,
+             r.text,
+             websearch_to_tsquery(COALESCE(r.tsv_config, 'simple')::regconfig, $${qIdx}),
+             'MaxWords=35, MinWords=15, ShortWord=3, MaxFragments=2, FragmentDelimiter=" … ", HighlightAll=FALSE'
+           )`
+    : `NULL::text`;
 
   const sql = `
     WITH candidates AS (
@@ -326,7 +477,7 @@ async function handleGroupedByPolitician(
              sc.spoken_at, sc.language, sc.level, sc.province_territory,
              sc.party_at_time, sc.politician_id, sc.session_id, sc.tsv_config,
              (sc.embedding <=> $${vIdx}::vector)::float AS distance,
-             (sc.tsv @@ websearch_to_tsquery(COALESCE(sc.tsv_config, 'simple')::regconfig, $${qIdx}))::int AS kw_hit
+             ${kwHitExpr} AS kw_hit
         FROM speech_chunks sc
        WHERE ${whereSql}
        ORDER BY sc.embedding <=> $${vIdx}::vector
@@ -363,12 +514,7 @@ async function handleGroupedByPolitician(
         JOIN top_pols tp ON tp.politician_id = q.politician_id
     )
     SELECT r.chunk_id, r.speech_id, r.chunk_index, r.text,
-           ts_headline(
-             COALESCE(r.tsv_config, 'simple')::regconfig,
-             r.text,
-             websearch_to_tsquery(COALESCE(r.tsv_config, 'simple')::regconfig, $${qIdx}),
-             'MaxWords=35, MinWords=15, ShortWord=3, MaxFragments=2, FragmentDelimiter=" … ", HighlightAll=FALSE'
-           ) AS snippet_html,
+           ${headlineSnippetExpr} AS snippet_html,
            r.distance, r.spoken_at, r.language, r.level, r.province_territory,
            r.party_at_time, r.politician_id,
            r.best_dist, r.avg_dist, r.mention_count, r.keyword_hits,
@@ -383,6 +529,7 @@ async function handleGroupedByPolitician(
            s.speaker_role                AS speech_speaker_role,
            s.source_url                  AS speech_source_url,
            s.source_anchor               AS speech_source_anchor,
+           s.source_system               AS speech_source_system,
            ls.parliament_number,
            ls.session_number
       FROM ranked r
@@ -446,6 +593,7 @@ async function handleGroupedByPolitician(
       speaker_role: string | null;
       source_url: string | null;
       source_anchor: string | null;
+      source_system: string | null;
       session: { parliament_number: number; session_number: number } | null;
     };
   }
@@ -507,6 +655,7 @@ async function handleGroupedByPolitician(
         speaker_role: r.speech_speaker_role,
         source_url: r.speech_source_url,
         source_anchor: r.speech_source_anchor,
+        source_system: r.speech_source_system,
         session:
           r.parliament_number !== null && r.session_number !== null
             ? { parliament_number: r.parliament_number, session_number: r.session_number }
@@ -541,56 +690,91 @@ async function handleGroupedByPolitician(
  *  the public timeline keeps its existing wide-net behaviour. */
 async function runTimelineSearch(
   input: SearchInput,
-  options: { minSimilarity?: number } = {},
+  options: {
+    minSimilarity?: number;
+    includeCount?: boolean;
+    /** Optional Fastify reply — used to short-circuit with 404 when the
+     *  caller passed an `anchor_chunk_id` that doesn't resolve. Callers
+     *  that don't pass one get an empty result set instead. */
+    reply?: import("fastify").FastifyReply;
+  } = {},
 ) {
   const { q, page, limit } = input;
   const { minSimilarity } = options;
+  const includeCount = options.includeCount !== false;
   const offset = (page - 1) * limit;
 
-  const { whereSql, filterParams } = buildFilterWhere(input);
+  const { whereSql: baseWhereSql, filterParams } = buildFilterWhere(input);
 
-  // Encode the query once; both the threshold (when set) and the rank
-  // ORDER BY share the same vector literal.
-  let queryVecLiteral: string | null = null;
-  if (q) {
-    const vec = await encodeQuery(q);
-    queryVecLiteral = toPgVector(vec);
+  // Resolve the search vector — text query, anchor chunk, or recent-mode.
+  // Anchor mode appends `AND sc.id != $exclude` to filter out the anchor
+  // itself (it would always cosine-distance to 0 and dominate the ranking).
+  const resolved = await resolveSearchVector(input);
+  if (resolved === "missing_anchor") {
+    const reply = options.reply;
+    if (reply) return reply.notFound("anchor_not_found");
+    return { items: [], page: 1, limit, total: 0, pages: 0, mode: "recent" as const };
   }
+  let queryVecLiteral: string | null = null;
+  let excludeChunkId: string | null = null;
+  let vectorSource: "text" | "anchor" | null = null;
+  if (resolved) {
+    queryVecLiteral = toPgVector(resolved.vec);
+    excludeChunkId = resolved.excludeChunkId;
+    vectorSource = resolved.source;
+  }
+  const hasVector = queryVecLiteral !== null;
+
+  // Append the anchor-exclusion filter to the shared WHERE so both the
+  // count and the main SELECT pick it up.
+  let whereSql = baseWhereSql;
+  if (excludeChunkId) {
+    filterParams.push(excludeChunkId);
+    whereSql = `${baseWhereSql} AND sc.id != $${filterParams.length}::uuid`;
+  }
+
   const applyThreshold =
-    !!q && queryVecLiteral !== null && minSimilarity != null && minSimilarity > 0;
+    hasVector && minSimilarity != null && minSimilarity > 0;
   const maxDistance = applyThreshold ? 1 - (minSimilarity as number) : null;
 
-  // Cap the count at 1000 to avoid a full HNSW/filter scan just to
-  // compute "pages". UIs beyond page 50 (at limit=20) are unusable
-  // anyway; keyset pagination is a later concern.
-  const COUNT_CAP = 1000;
-  const countParams: (string | number | string[])[] = [...filterParams];
-  let countWhere = whereSql;
-  if (applyThreshold) {
-    countParams.push(queryVecLiteral as string);
-    const cvIdx = countParams.length;
-    countParams.push(maxDistance as number);
-    const cdIdx = countParams.length;
-    countWhere = `${whereSql} AND (sc.embedding <=> $${cvIdx}::vector) <= $${cdIdx}`;
+  // Exact count — no cap. The cheap path (no threshold) is just
+  // COUNT(*) over the structural filter set, which Postgres answers
+  // from indexes in <100ms even at corpus scale. The expensive path
+  // (threshold set) requires evaluating cosine distance for each row
+  // that passes the structural filters; cost scales with the filter
+  // set size and on a q-only query degrades to ~15s. Callers that need
+  // results-fast can set include_count=false and fetch the total from
+  // /search/speeches/count in parallel — the results query is HNSW-
+  // bounded (~50-200ms) regardless of threshold.
+  let total: number | null = null;
+  if (includeCount) {
+    // filterParams already carries the anchor-exclusion param (if any)
+    // appended above. The threshold branch adds the vector+distance
+    // pair on top so anchor mode can also threshold-count.
+    const countParams: (string | number | string[])[] = [...filterParams];
+    let countWhere = whereSql;
+    if (applyThreshold) {
+      countParams.push(queryVecLiteral as string);
+      const cvIdx = countParams.length;
+      countParams.push(maxDistance as number);
+      const cdIdx = countParams.length;
+      countWhere = `${whereSql} AND (sc.embedding <=> $${cvIdx}::vector) <= $${cdIdx}`;
+    }
+    const countRow = await queryOne<{ n: number }>(
+      `SELECT COUNT(*)::int AS n
+         FROM speech_chunks sc
+        WHERE ${countWhere}`,
+      countParams,
+    );
+    total = countRow?.n ?? 0;
   }
-  const countRow = await queryOne<{ n: number }>(
-    `SELECT COUNT(*)::int AS n FROM (
-       SELECT 1 FROM speech_chunks sc
-       WHERE ${countWhere}
-       LIMIT ${COUNT_CAP + 1}
-     ) x`,
-    countParams,
-  );
-  const totalRaw = countRow?.n ?? 0;
-  const totalCapped = totalRaw > COUNT_CAP;
-  const total = totalCapped ? COUNT_CAP : totalRaw;
 
   // Build the main SELECT.
   const params: (string | number | string[])[] = [...filterParams];
   let orderBy: string;
   let vectorParamIndex: number | null = null;
-  if (q && queryVecLiteral !== null) {
-    params.push(queryVecLiteral);
+  if (hasVector) {
+    params.push(queryVecLiteral as string);
     vectorParamIndex = params.length;
     // Single-key ORDER BY: adding a tiebreaker (sc.id) forces Postgres to
     // materialise the full filtered set to satisfy deterministic sort,
@@ -601,9 +785,11 @@ async function runTimelineSearch(
   }
 
   // ts_headline uses the per-row tsv_config so highlight tokenisation
-  // matches the index used at build time.
+  // matches the index used at build time. Only meaningful for text-mode
+  // searches — anchor-mode has no string to highlight, so we skip the
+  // expression entirely and leave snippet_html null.
   let headlineExpr = "NULL::text";
-  if (q) {
+  if (q && vectorSource === "text") {
     params.push(q);
     const qIdx = params.length;
     headlineExpr = `
@@ -649,6 +835,7 @@ async function runTimelineSearch(
       s.speaker_role                AS speech_speaker_role,
       s.source_url                  AS speech_source_url,
       s.source_anchor               AS speech_source_anchor,
+      s.source_system               AS speech_source_system,
       ls.parliament_number,
       ls.session_number
     FROM speech_chunks sc
@@ -701,6 +888,7 @@ async function runTimelineSearch(
       speaker_role: r.speech_speaker_role,
       source_url: r.speech_source_url,
       source_anchor: r.speech_source_anchor,
+      source_system: r.speech_source_system,
       session:
         r.parliament_number !== null && r.session_number !== null
           ? { parliament_number: r.parliament_number, session_number: r.session_number }
@@ -713,9 +901,8 @@ async function runTimelineSearch(
     page,
     limit,
     total,
-    totalCapped,
-    pages: Math.max(1, Math.ceil(total / limit)),
-    mode: (q ? "semantic" : "recent") as "semantic" | "recent",
+    pages: total != null ? Math.max(1, Math.ceil(total / limit)) : null,
+    mode: (hasVector ? "semantic" : "recent") as "semantic" | "recent",
   };
 }
 
@@ -729,16 +916,80 @@ export default async function searchRoutes(app: FastifyInstance) {
       return handleGroupedByPolitician(app, reply, parsed.data);
     }
 
-    if (!parsed.data.q && !hasAnyStructuralFilter(parsed.data)) {
-      return reply.badRequest("provide `q` or at least one filter (politician_ids, party, level, province, from, to, parliament+session, speech_type)");
+    if (
+      !parsed.data.q &&
+      !parsed.data.anchor_chunk_id &&
+      !hasAnyStructuralFilter(parsed.data)
+    ) {
+      return reply.badRequest("provide `q`, `anchor_chunk_id`, or at least one filter (politician_ids, party, level, province, from, to, parliament+session, speech_type)");
     }
 
-    // min_similarity is only meaningful alongside a semantic query;
-    // runTimelineSearch already gates on `!!q && minSimilarity > 0` so
-    // recency-mode browsing ignores it harmlessly.
+    // Default the cosine-similarity floor to 0.5 when not set. Below
+    // ~0.5 the corpus produces a long tail of weak associative matches
+    // ("environment" → every speech that mentions trees) that drown the
+    // ranking signal. The slider on /search lets the user explicitly
+    // disable the floor by sending min_similarity=0 — that path stays
+    // open for users who want the raw recall behaviour. min_similarity
+    // is only meaningful alongside a semantic query; runTimelineSearch
+    // already gates on `hasVector && minSimilarity > 0` so recency-mode
+    // browsing ignores it harmlessly. Anchor mode opts into the same
+    // 0.5 floor — the anchor chunk's neighbourhood beyond ~0.5 cosine
+    // becomes weak signal under Qwen3.
+    const effectiveMin = parsed.data.min_similarity ?? 0.5;
     return runTimelineSearch(parsed.data, {
-      minSimilarity: parsed.data.min_similarity,
+      minSimilarity: effectiveMin,
+      includeCount: parsed.data.include_count,
+      reply,
     });
+  });
+
+  // Count-only sibling of /speeches. Same filter shape, but runs only
+  // the COUNT query so the frontend can fire it in parallel with a
+  // /speeches?include_count=false call and let results render fast
+  // while the (potentially slow) total resolves separately. Threshold
+  // semantics mirror /speeches exactly so the count and the rendered
+  // page agree on what's included.
+  app.get("/speeches/count", async (req, reply) => {
+    const parsed = baseFilterSchema.safeParse(req.query);
+    if (!parsed.success) return reply.badRequest(parsed.error.message);
+
+    if (
+      !parsed.data.q &&
+      !parsed.data.anchor_chunk_id &&
+      !hasAnyStructuralFilter(parsed.data)
+    ) {
+      return reply.badRequest("provide `q`, `anchor_chunk_id`, or at least one filter (politician_ids, party, level, province, from, to, parliament+session, speech_type)");
+    }
+
+    const { whereSql: baseWhereSql, filterParams } = buildFilterWhere(parsed.data);
+    const effectiveMin = parsed.data.min_similarity ?? 0.5;
+
+    const resolved = await resolveSearchVector(parsed.data);
+    if (resolved === "missing_anchor") return reply.notFound("anchor_not_found");
+    const hasVector = resolved !== null;
+    const applyThreshold = hasVector && effectiveMin > 0;
+
+    let whereSql = baseWhereSql;
+    const countParams: (string | number | string[])[] = [...filterParams];
+    if (resolved && resolved.excludeChunkId) {
+      countParams.push(resolved.excludeChunkId);
+      whereSql = `${baseWhereSql} AND sc.id != $${countParams.length}::uuid`;
+    }
+    let countWhere = whereSql;
+    if (applyThreshold && resolved) {
+      countParams.push(toPgVector(resolved.vec));
+      const cvIdx = countParams.length;
+      countParams.push(1 - effectiveMin);
+      const cdIdx = countParams.length;
+      countWhere = `${whereSql} AND (sc.embedding <=> $${cvIdx}::vector) <= $${cdIdx}`;
+    }
+    const row = await queryOne<{ n: number }>(
+      `SELECT COUNT(*)::int AS n
+         FROM speech_chunks sc
+        WHERE ${countWhere}`,
+      countParams,
+    );
+    return { total: row?.n ?? 0 };
   });
 
   // Authenticated deep-dive: every quote one politician has on the query.
@@ -762,8 +1013,8 @@ export default async function searchRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const parsed = expandQuery.safeParse(req.query);
       if (!parsed.success) return reply.badRequest(parsed.error.message);
-      if (!parsed.data.q) {
-        return reply.badRequest("`q` is required for /politician-quotes");
+      if (!parsed.data.q && !parsed.data.anchor_chunk_id) {
+        return reply.badRequest("`q` or `anchor_chunk_id` is required for /politician-quotes");
       }
       // Force timeline mode + collapse to the single requested politician.
       // per_group_limit/sort/group_by don't apply here but SearchInput
@@ -776,6 +1027,10 @@ export default async function searchRoutes(app: FastifyInstance) {
         group_by: "timeline",
         per_group_limit: 5,
         sort: "mentions",
+        // /politician-quotes is the deep-dive expand surface — its
+        // count drives the "Show all N matching quotes" badge so we
+        // always want it.
+        include_count: true,
       };
       // 0.45 mirrors handleGroupedByPolitician's MIN_SIMILARITY so the
       // deep-dive count matches mention_count on the same card —
@@ -785,7 +1040,7 @@ export default async function searchRoutes(app: FastifyInstance) {
       // never loosen below the 0.45 floor.
       const clientMin = parsed.data.min_similarity ?? 0;
       const effectiveMin = Math.max(0.45, clientMin);
-      return runTimelineSearch(input, { minSimilarity: effectiveMin });
+      return runTimelineSearch(input, { minSimilarity: effectiveMin, reply });
     }
   );
 
@@ -794,27 +1049,58 @@ export default async function searchRoutes(app: FastifyInstance) {
     if (!parsed.success) return reply.badRequest(parsed.error.message);
     const { q } = parsed.data;
 
-    if (!q && !hasAnyStructuralFilter(parsed.data)) {
-      return reply.badRequest("provide `q` or at least one filter to aggregate");
+    if (
+      !q &&
+      !parsed.data.anchor_chunk_id &&
+      !hasAnyStructuralFilter(parsed.data)
+    ) {
+      return reply.badRequest("provide `q`, `anchor_chunk_id`, or at least one filter to aggregate");
     }
 
-    const { whereSql, filterParams } = buildFilterWhere(parsed.data);
+    const { whereSql: baseWhereSql, filterParams } = buildFilterWhere(parsed.data);
     const params: (string | number | string[])[] = [...filterParams];
 
-    // Top-N CTE: 200 semantic-ranked rows when q present, else recent.
+    const resolved = await resolveSearchVector(parsed.data);
+    if (resolved === "missing_anchor") return reply.notFound("anchor_not_found");
+    const hasVector = resolved !== null;
+
+    // Append anchor exclusion to the shared WHERE so the top-N CTE picks
+    // it up too.
+    let whereSql = baseWhereSql;
+    if (resolved && resolved.excludeChunkId) {
+      params.push(resolved.excludeChunkId);
+      whereSql = `${baseWhereSql} AND sc.id != $${params.length}::uuid`;
+    }
+
+    // Mirror the /speeches default — a 0.5 floor unless the caller
+    // explicitly opts out with min_similarity=0. Without this the
+    // analysis tiles would summarise the top-200 by raw distance,
+    // which can include chunks below the user's effective threshold
+    // and drift the dashboard "Analyzed top 200 of N" away from the
+    // timeline's filtered total.
+    const effectiveMin = parsed.data.min_similarity ?? 0.5;
+    const applyThreshold = hasVector && effectiveMin > 0;
+
+    // Top-N CTE: 200 semantic-ranked rows when a vector is available
+    // (text query OR anchor chunk), else most-recent fallback.
     const ANALYSIS_LIMIT = 200;
     let topCte: string;
     let vectorParamIndex: number | null = null;
-    if (q) {
-      const vec = await encodeQuery(q);
-      params.push(toPgVector(vec));
+    if (resolved) {
+      params.push(toPgVector(resolved.vec));
       vectorParamIndex = params.length;
+      let topWhere = whereSql;
+      if (applyThreshold) {
+        params.push(1 - effectiveMin);
+        const mdIdx = params.length;
+        topWhere = `${whereSql} AND (sc.embedding <=> $${vectorParamIndex}::vector) <= $${mdIdx}`;
+      }
       topCte = `
         SELECT sc.id, sc.politician_id, sc.party_at_time, sc.language,
                sc.spoken_at, sc.tsv, sc.tsv_config,
                sc.embedding <=> $${vectorParamIndex}::vector AS dist
           FROM speech_chunks sc
-         WHERE ${whereSql}
+         WHERE ${topWhere}
          ORDER BY sc.embedding <=> $${vectorParamIndex}::vector
          LIMIT ${ANALYSIS_LIMIT}`;
     } else {
@@ -1003,6 +1289,85 @@ export default async function searchRoutes(app: FastifyInstance) {
     // prorogation, never within a request burst.
     reply.header("Cache-Control", "public, max-age=3600");
     return { sessions: rows };
+  });
+
+  // Anchor-chunk lookup — the /search frontend's anchor banner uses this
+  // to render "currently anchored on <speaker>: <chunk text>" with a
+  // single round trip rather than two (chunk → speech_id → speech).
+  app.get("/chunks/:id", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!/^[0-9a-f-]{36}$/i.test(id)) return reply.badRequest("invalid id");
+    const row = await queryOne<{
+      chunk_id: string;
+      speech_id: string;
+      text: string;
+      char_start: number;
+      char_end: number;
+      language: string;
+      speaker_name_raw: string;
+      party_at_time: string | null;
+      spoken_at: string | null;
+      level: string;
+      province_territory: string | null;
+      source_url: string;
+      source_anchor: string | null;
+      source_system: string;
+      politician_id: string | null;
+      politician_name: string | null;
+      politician_slug: string | null;
+      politician_photo_url: string | null;
+      politician_photo_path: string | null;
+      politician_party: string | null;
+    }>(
+      `
+      SELECT sc.id           AS chunk_id,
+             sc.speech_id    AS speech_id,
+             sc.text,
+             sc.char_start, sc.char_end, sc.language,
+             s.speaker_name_raw, s.party_at_time, s.spoken_at,
+             s.level, s.province_territory, s.source_url, s.source_anchor, s.source_system,
+             s.politician_id,
+             p.name                AS politician_name,
+             p.openparliament_slug AS politician_slug,
+             p.photo_url           AS politician_photo_url,
+             p.photo_path          AS politician_photo_path,
+             p.party               AS politician_party
+        FROM speech_chunks sc
+        JOIN speeches s          ON s.id = sc.speech_id
+        LEFT JOIN politicians p  ON p.id = s.politician_id
+       WHERE sc.id = $1
+      `,
+      [id],
+    );
+    if (!row) return reply.notFound();
+    return {
+      chunk_id: row.chunk_id,
+      speech_id: row.speech_id,
+      text: row.text,
+      char_start: row.char_start,
+      char_end: row.char_end,
+      language: row.language,
+      speaker_name_raw: row.speaker_name_raw,
+      party_at_time: row.party_at_time,
+      spoken_at: row.spoken_at,
+      level: row.level,
+      province_territory: row.province_territory,
+      source_url: row.source_url,
+      source_anchor: row.source_anchor,
+      source_system: row.source_system,
+      politician: row.politician_id
+        ? {
+            id: row.politician_id,
+            name: row.politician_name,
+            slug: row.politician_slug,
+            photo_url: resolvePhotoUrl({
+              photo_path: row.politician_photo_path,
+              photo_url: row.politician_photo_url,
+            }),
+            party: row.politician_party,
+          }
+        : null,
+    };
   });
 
   app.get("/meta", async () => {

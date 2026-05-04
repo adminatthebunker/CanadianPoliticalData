@@ -1,16 +1,20 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useLocation, useSearchParams } from "react-router-dom";
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
 import {
+  buildSpeechSearchQuery,
   effectivePoliticianIds,
+  getRecentSearchLatencyMs,
   MAX_POLITICIAN_PINS,
   SPEECH_TYPE_VALUES,
   useSpeechSearch,
+  useSpeechSearchCount,
   useSpeechSearchMeta,
   type PoliticianSort,
   type SpeechSearchFilter,
   type SpeechType,
 } from "../hooks/useSpeechSearch";
+import { MapleLeafLoader } from "../components/MapleLeafLoader";
 import { SpeechFilters } from "../components/SpeechFilters";
 import { SpeechResultCard } from "../components/SpeechResultCard";
 import { SearchDashboard } from "../components/SearchDashboard";
@@ -20,18 +24,21 @@ import { PoliticianResultGroup } from "../components/PoliticianResultGroup";
 import { PoliticianQuickNav } from "../components/PoliticianQuickNav";
 import { PoliticianPinChips } from "../components/PoliticianPinChips";
 import { AIContradictionAnalysis } from "../components/AIContradictionAnalysis";
+import { AnchorChunkBanner } from "../components/AnchorChunkBanner";
+import { SearchMapView } from "../components/SearchMapView";
 import { AIFullReportButton } from "../components/AIFullReportButton";
 import { useAIAnalyzeMeta } from "../hooks/useAIAnalyzeMeta";
 import { useReportsMeta } from "../hooks/useReportsMeta";
 import { useUserAuth } from "../hooks/useUserAuth";
 import "../styles/hansard-search.css";
 
-type ViewMode = "timeline" | "politician" | "analysis";
+type ViewMode = "timeline" | "politician" | "analysis" | "map";
 
 function readView(params: URLSearchParams): ViewMode {
   const v = params.get("view");
   if (v === "politician") return "politician";
   if (v === "analysis") return "analysis";
+  if (v === "map") return "map";
   return "timeline";
 }
 
@@ -52,11 +59,20 @@ function readSort(params: URLSearchParams): PoliticianSort {
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function parseMinSimilarity(raw: string | null): number | undefined {
-  if (!raw) return undefined;
+  if (raw == null) return undefined;
   const n = Number(raw);
-  if (!Number.isFinite(n) || n <= 0 || n > 1) return undefined;
+  // 0 is meaningful — explicit "all matches" override of the server's
+  // 0.5 default. Without accepting 0 here the URL-roundtrip would
+  // silently re-apply the default on the next page-load.
+  if (!Number.isFinite(n) || n < 0 || n > 1) return undefined;
   return n;
 }
+
+// Server-side default applied by /speeches and /facets when
+// min_similarity is omitted. Mirrored on the frontend so the slider
+// and chip can render the implicit value without forcing every URL to
+// carry it. Keep this in sync with the API constant.
+const DEFAULT_MIN_SIMILARITY = 0.5;
 
 function parsePositiveInt(raw: string | null): number | undefined {
   if (!raw) return undefined;
@@ -97,8 +113,11 @@ function readFilter(params: URLSearchParams): SpeechSearchFilter {
   const parliament = parsePositiveInt(params.get("parliament"));
   const session = parsePositiveInt(params.get("session"));
   const havePair = parliament != null && session != null;
+  const rawAnchor = params.get("anchor_chunk_id");
+  const anchor_chunk_id = rawAnchor && UUID_RE.test(rawAnchor) ? rawAnchor : undefined;
   return {
     q: params.get("q") ?? "",
+    anchor_chunk_id,
     lang: (lang === "en" || lang === "fr" || lang === "any" ? lang : "any") as SpeechSearchFilter["lang"],
     level: (level === "federal" || level === "provincial" || level === "municipal"
       ? level
@@ -131,7 +150,11 @@ function writeFilter(f: SpeechSearchFilter, view: ViewMode): URLSearchParams {
   if (f.from) p.set("from", f.from);
   if (f.to) p.set("to", f.to);
   if (f.exclude_presiding) p.set("exclude_presiding", "true");
-  if (f.min_similarity != null && f.min_similarity > 0) {
+  // Emit min_similarity whenever the caller explicitly set it AND the
+  // value differs from the implicit server default. This keeps the URL
+  // clean for default searches while preserving explicit overrides
+  // (including "all matches" → 0).
+  if (f.min_similarity != null && f.min_similarity !== DEFAULT_MIN_SIMILARITY) {
     p.set("min_similarity", String(f.min_similarity));
   }
   if (f.parliament_number != null && f.session_number != null) {
@@ -141,6 +164,7 @@ function writeFilter(f: SpeechSearchFilter, view: ViewMode): URLSearchParams {
   if (f.speech_types && f.speech_types.length > 0) {
     for (const t of f.speech_types) p.append("speech_type", t);
   }
+  if (f.anchor_chunk_id) p.set("anchor_chunk_id", f.anchor_chunk_id);
   if (f.politician_ids && f.politician_ids.length > 0) {
     for (const id of f.politician_ids) p.append("politician_id", id);
   } else if (f.politician_id) {
@@ -149,6 +173,7 @@ function writeFilter(f: SpeechSearchFilter, view: ViewMode): URLSearchParams {
   if (f.page && f.page > 1) p.set("page", String(f.page));
   if (view === "politician") p.set("view", "politician");
   if (view === "analysis") p.set("view", "analysis");
+  if (view === "map") p.set("view", "map");
   if (view === "politician" && f.sort && f.sort !== "mentions") p.set("sort", f.sort);
   return p;
 }
@@ -172,47 +197,77 @@ export default function HansardSearchPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const location = useLocation();
   const view = useMemo(() => readView(searchParams), [searchParams]);
-  const filter = useMemo(() => readFilter(searchParams), [searchParams]);
+  // What's been searched: derived from the URL. The network query, the
+  // result rendering, and SaveSearch all hang off this.
+  const appliedFilter = useMemo(() => readFilter(searchParams), [searchParams]);
 
-  // Local, immediate text value so typing feels instant; the URL +
-  // upstream query only update after a debounce.
-  const [qDraft, setQDraft] = useState(filter.q ?? "");
-  const debounceTimer = useRef<number | null>(null);
+  // What the user is currently editing. All filter inputs (text box,
+  // chips, pickers, pin chips) write here; the URL only updates when the
+  // user clicks "Search". Initialised from the URL so deep-linked /
+  // reloaded searches arrive with their inputs pre-populated.
+  const [draftFilter, setDraftFilter] = useState<SpeechSearchFilter>(appliedFilter);
 
-  // Keep the draft synced when the URL changes externally (back button etc.)
+  // Bumped by the "Search" button to force a cache-busting refetch even
+  // when the canonical filter signature is unchanged. The module-level
+  // LRU in useSpeechSearch keys on `qs`, so without this a re-search
+  // with no filter delta would just re-read the cache.
+  const [refreshEpoch, setRefreshEpoch] = useState(0);
+
+  // External URL changes (back/forward, our own commits) re-seed the
+  // draft. Our own commits already match what we're about to write, so
+  // this is a no-op in that case; for back/forward it correctly snaps
+  // the draft to the URL the user just navigated to.
+  const appliedSig = searchParams.toString();
   useEffect(() => {
-    setQDraft(filter.q ?? "");
-  }, [filter.q]);
+    setDraftFilter(appliedFilter);
+    // appliedSig changes whenever any URL param does — finer-grained than
+    // depending on appliedFilter (object identity flips every render).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [appliedSig]);
 
-  const applyPatch = (patch: Partial<SpeechSearchFilter>) => {
-    const next = { ...filter, ...patch };
+  // Stage a partial update to the draft without touching the URL. Used
+  // by every filter input that should *not* fire a new search until the
+  // user explicitly commits.
+  const stagePatch = (patch: Partial<SpeechSearchFilter>) => {
+    setDraftFilter((prev) => ({ ...prev, ...patch }));
+  };
+
+  // Commit a partial update to the URL immediately. Used by post-search
+  // operations (pagination, view tab, politician sort) where the user's
+  // intent is "act on the current search now". Folds the patch into the
+  // existing draft so any pending staged edits travel along with it.
+  const commitPatch = (patch: Partial<SpeechSearchFilter>, viewOverride?: ViewMode) => {
+    const next = { ...draftFilter, ...patch };
+    setDraftFilter(next);
+    setSearchParams(writeFilter(next, viewOverride ?? view), { replace: false });
+  };
+
+  // Commit the entire draft as the new searched-state. Resets to page 1
+  // since the result set changes. Always bumps the refresh epoch so a
+  // press of "Search" with unchanged filters still re-runs the query
+  // (useful after new data has been ingested).
+  const commitDraft = () => {
+    const next = { ...draftFilter, page: 1 };
+    setDraftFilter(next);
     setSearchParams(writeFilter(next, view), { replace: false });
+    setRefreshEpoch((n) => n + 1);
   };
 
   const setView = (next: ViewMode) => {
     if (next === view) return;
     // Reset to page 1 on view change so users don't land on a p>1 that
     // happens to be empty in the other view.
-    const nextFilter = { ...filter, page: 1 };
-    const params = writeFilter(nextFilter, next);
-    setSearchParams(params, { replace: false });
-  };
-
-  const onQChange = (next: string) => {
-    setQDraft(next);
-    if (debounceTimer.current) window.clearTimeout(debounceTimer.current);
-    debounceTimer.current = window.setTimeout(() => {
-      applyPatch({ q: next, page: 1 });
-    }, 300);
+    commitPatch({ page: 1 }, next);
   };
 
   const onQSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (debounceTimer.current) window.clearTimeout(debounceTimer.current);
-    applyPatch({ q: qDraft, page: 1 });
+    commitDraft();
   };
 
-  const pinnedIds = effectivePoliticianIds(filter);
+  // Display-side IDs reflect the *draft* so the user sees pin edits in
+  // the chip row immediately. Cap and dedupe still apply.
+  const pinnedIds = effectivePoliticianIds(draftFilter);
   const pinnedSet = useMemo(() => new Set(pinnedIds), [pinnedIds.join(",")]);
   const pinCapReached = pinnedIds.length >= MAX_POLITICIAN_PINS;
 
@@ -222,7 +277,7 @@ export default function HansardSearchPage() {
       : pinnedIds.length < MAX_POLITICIAN_PINS
         ? [...pinnedIds, id]
         : pinnedIds;
-    applyPatch({
+    stagePatch({
       politician_ids: next.length > 0 ? next : undefined,
       politician_id: undefined,
       page: 1,
@@ -230,28 +285,52 @@ export default function HansardSearchPage() {
   };
 
   const clearPins = () => {
-    applyPatch({ politician_ids: undefined, politician_id: undefined, page: 1 });
+    stagePatch({ politician_ids: undefined, politician_id: undefined, page: 1 });
   };
 
+  // Search-enabled / dirty signals are computed off the *applied* filter
+  // so the network call only runs once the user has clicked Search.
+  const appliedPinnedIds = effectivePoliticianIds(appliedFilter);
   const hasAnyFilter = Boolean(
-    filter.level ||
-      filter.province_territory ||
-      filter.party ||
-      filter.from ||
-      filter.to ||
-      pinnedIds.length > 0 ||
-      (filter.parliament_number != null && filter.session_number != null) ||
-      (filter.speech_types && filter.speech_types.length > 0),
+    appliedFilter.level ||
+      appliedFilter.province_territory ||
+      appliedFilter.party ||
+      appliedFilter.from ||
+      appliedFilter.to ||
+      appliedPinnedIds.length > 0 ||
+      (appliedFilter.parliament_number != null && appliedFilter.session_number != null) ||
+      (appliedFilter.speech_types && appliedFilter.speech_types.length > 0),
   );
-  const hasQuery = Boolean(filter.q && filter.q.trim());
-  // Grouped mode is semantic-only (the API 400s on a q-less grouped call).
+  const hasQuery = Boolean(appliedFilter.q && appliedFilter.q.trim());
+  const hasAnchor = Boolean(appliedFilter.anchor_chunk_id);
+  // Grouped mode is semantic-only (the API 400s on a q-less grouped call) —
+  // anchor mode satisfies that since it provides a vector via the chunk.
   // Timeline still allows filter-only searches.
-  const enabled = view === "politician" ? hasQuery : (hasQuery || hasAnyFilter);
+  const enabled =
+    view === "politician"
+      ? (hasQuery || hasAnchor)
+      : (hasQuery || hasAnchor || hasAnyFilter);
+  // Compare canonical query strings to detect "user has staged changes
+  // not yet searched". Cheaper and more robust than a deep object diff,
+  // and naturally ignores ordering of repeated params.
+  const isDirty = useMemo(
+    () => buildSpeechSearchQuery(draftFilter) !== buildSpeechSearchQuery(appliedFilter),
+    [draftFilter, appliedFilter],
+  );
   // Pins filter all three views so the results visibly narrow. To keep
   // "I can add more pins" possible even when the grid has collapsed to
   // just the pinned cards, the chip row hosts a typeahead picker
   // (PoliticianPinChips → PoliticianPinPicker).
-  const { data, loading, error } = useSpeechSearch(filter, enabled);
+  const { data, loading, error } = useSpeechSearch(appliedFilter, enabled, refreshEpoch);
+  // Stage the count off in parallel — only meaningful for timeline /
+  // analysis (grouped reports `total_politicians` instead) so we gate
+  // by view to avoid a useless second request on the politician tab.
+  const countEnabled = enabled && view !== "politician";
+  const { data: countData, loading: countLoading } = useSpeechSearchCount(
+    appliedFilter,
+    countEnabled,
+    refreshEpoch,
+  );
   const meta = useSpeechSearchMeta();
   // Single meta fetch for the whole page (cached module-level), so
   // rendering 20 grouped cards doesn't produce 20 /contradictions/meta
@@ -265,30 +344,66 @@ export default function HansardSearchPage() {
   // posture and render no auth UI in that case.
   const { user, disabled: authDisabled } = useUserAuth();
 
-  const page = filter.page ?? 1;
+  const page = appliedFilter.page ?? 1;
   const timeline = data && data.mode !== "grouped" ? data : null;
   const grouped = data && data.mode === "grouped" ? data : null;
-  const pages = timeline?.pages ?? 1;
-  const total = timeline?.total ?? 0;
+  // Count is now staged: prefer the dedicated /speeches/count response
+  // when it has landed, fall back to whatever shipped with the results
+  // (always null with the new include_count=false path), and treat
+  // "still pending" as null so the UI can render a "Counting…" cue.
+  const total: number | null =
+    countData?.total ?? timeline?.total ?? null;
+  const limit = timeline?.limit ?? 20;
+  const pages: number | null =
+    total != null ? Math.max(1, Math.ceil(total / limit)) : null;
   const dashboardTotal =
-    timeline?.total ?? (grouped ? grouped.total_politicians : undefined);
+    total ?? (grouped ? grouped.total_politicians : undefined);
 
   // Compact match-count line shown inline with the view tabs. View-aware
   // because timeline counts chunks whereas grouped counts politicians;
-  // analysis defers to SearchDashboard's own header.
-  const summaryText: string | null = (() => {
-    if (!enabled || loading || error) return null;
-    if (view === "timeline" && timeline) {
-      if (timeline.items.length === 0) return null;
-      const count = timeline.totalCapped
-        ? "1,000+ matches"
-        : `${total.toLocaleString()} ${total === 1 ? "match" : "matches"}`;
-      const order = timeline.mode === "semantic" ? "ranked by similarity" : "most recent first";
-      return `${count} · ${order}`;
+  // analysis surfaces the same chunk total as timeline so the user can
+  // see at a glance how their filters narrow the corpus regardless of
+  // which tab they're on.
+  //
+  // Returns a ReactNode (not a plain string) so the count-pending state
+  // can swap in <MapleLeafLoader>: same spinning-leaf + Canadian pun
+  // + bnkops.ca attribution that the main "Searching…" loader uses.
+  const summaryNode: React.ReactNode = (() => {
+    if (!enabled) return null;
+    if (loading && !data) return "Searching…";
+    if (error) return null;
+    if (view === "timeline" || view === "analysis") {
+      if (!timeline) return null;
+      if (timeline.items.length === 0 && view === "timeline" && total === 0) {
+        return "No matches";
+      }
+      const order =
+        view === "analysis"
+          ? null
+          : timeline.mode === "semantic"
+            ? "ranked by similarity"
+            : "most recent first";
+      // Page rows are in but the COUNT may still be running — render
+      // the maple-leaf loader (sm) inline so the wait gets the same
+      // pun rotation + attribution treatment the main search loader
+      // uses. Once total lands the loader is replaced with the count.
+      if (total == null && countLoading) {
+        return (
+          <>
+            <MapleLeafLoader size="sm" label="Counting matches" />
+            {order ? ` · ${order}` : null}
+          </>
+        );
+      }
+      const countFragment =
+        total != null
+          ? `${total.toLocaleString()} ${total === 1 ? "match" : "matches"}`
+          : "Many matches";
+      return order ? `${countFragment} · ${order}` : countFragment;
     }
     if (view === "politician" && grouped) {
       const n = grouped.groups.length;
-      if (n === 0) return null;
+      if (n === 0) return "No politicians matched";
       return `${n} ${n === 1 ? "politician" : "politicians"}`;
     }
     return null;
@@ -304,6 +419,15 @@ export default function HansardSearchPage() {
         <p className="hansard-search__subtitle">
           Search Canadian parliamentary speeches by meaning, not just exact words. Try{" "}
           <em>"rising cost of groceries"</em> — you'll find speeches that say "food prices" too.
+          {" "}
+          <a
+            className="hansard-search__how-link"
+            href="https://docs.canadianpoliticaldata.org/searching/how-it-works/"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            How it works ↗
+          </a>
         </p>
         {meta.data && meta.data.coverage < 0.99 && (
           <p className="hansard-search__banner" role="status">
@@ -315,6 +439,13 @@ export default function HansardSearchPage() {
         )}
       </header>
 
+      {appliedFilter.anchor_chunk_id && (
+        <AnchorChunkBanner
+          chunkId={appliedFilter.anchor_chunk_id}
+          onClear={() => commitPatch({ anchor_chunk_id: undefined, page: 1 })}
+        />
+      )}
+
       <div className="hansard-search__search-row">
         <form className="hansard-search__form" onSubmit={onQSubmit} role="search">
           <label className="hansard-search__label" htmlFor="hansard-search-input">
@@ -324,13 +455,43 @@ export default function HansardSearchPage() {
             id="hansard-search-input"
             type="search"
             className="hansard-search__input"
-            placeholder='e.g. "carbon pricing policy"'
-            value={qDraft}
-            onChange={(e) => onQChange(e.target.value)}
+            placeholder={
+              appliedFilter.anchor_chunk_id
+                ? "Type to switch to text search…"
+                : 'e.g. "carbon pricing policy"'
+            }
+            value={draftFilter.q ?? ""}
+            onChange={(e) => {
+              const value = e.target.value;
+              // Typing a query while anchor mode is active swaps back to
+              // text mode — clear the anchor in the staged filter so the
+              // next commit drops it from the URL.
+              if (value && draftFilter.anchor_chunk_id) {
+                stagePatch({ q: value, anchor_chunk_id: undefined });
+              } else {
+                stagePatch({ q: value });
+              }
+            }}
             autoFocus
           />
         </form>
-        {enabled && <SaveSearchButton filter={filter} />}
+        <button
+          type="button"
+          className={
+            "hansard-search__update-btn" +
+            (isDirty ? " hansard-search__update-btn--dirty" : "")
+          }
+          onClick={commitDraft}
+          disabled={loading}
+          title={
+            isDirty
+              ? "Run the search with your staged filters"
+              : "Re-run the current search"
+          }
+        >
+          {loading ? "Searching…" : isDirty ? "Search" : "Update search"}
+        </button>
+        {enabled && <SaveSearchButton filter={appliedFilter} />}
       </div>
 
       <div className="hansard-search__filter-row">
@@ -340,7 +501,11 @@ export default function HansardSearchPage() {
           onRemove={togglePin}
           onClearAll={clearPins}
         />
-        <SpeechFilters value={filter} onChange={applyPatch} />
+        <SpeechFilters
+          value={draftFilter}
+          onChange={stagePatch}
+          alwaysShow={["min_similarity"]}
+        />
       </div>
 
       <div className="hansard-search__tab-row">
@@ -387,11 +552,24 @@ export default function HansardSearchPage() {
           >
             Analysis
           </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={view === "map"}
+            className={
+              "hansard-search__view-tab" +
+              (view === "map" ? " hansard-search__view-tab--active" : "")
+            }
+            onClick={() => setView("map")}
+            title="Explore results as a clickable mind-graph in semantic space"
+          >
+            Map
+          </button>
         </div>
 
-        {summaryText && (
+        {summaryNode && (
           <p className="hansard-search__summary-inline" aria-live="polite">
-            {summaryText}
+            {summaryNode}
           </p>
         )}
 
@@ -402,7 +580,7 @@ export default function HansardSearchPage() {
             aria-label="Sort politicians by"
           >
             {POLITICIAN_SORTS.map((s) => {
-              const active = (filter.sort ?? "mentions") === s;
+              const active = (appliedFilter.sort ?? "mentions") === s;
               return (
                 <button
                   key={s}
@@ -413,7 +591,7 @@ export default function HansardSearchPage() {
                     "politician-sort-chips__chip" +
                     (active ? " politician-sort-chips__chip--active" : "")
                   }
-                  onClick={() => applyPatch({ sort: s, page: 1 })}
+                  onClick={() => commitPatch({ sort: s, page: 1 })}
                 >
                   {SORT_LABELS[s]}
                 </button>
@@ -425,29 +603,48 @@ export default function HansardSearchPage() {
 
       {view === "analysis" && (
         <SearchDashboard
-          filter={filter}
+          filter={appliedFilter}
           enabled={enabled}
           totalMatches={dashboardTotal}
           defaultOpen
         />
       )}
 
-      <div className="hansard-search__results">
-        {!enabled && view !== "analysis" && (
+      {view === "map" && (
+        <SearchMapView
+          query={appliedFilter.q ?? ""}
+          searchItems={timeline?.items ?? []}
+          searchLoading={loading}
+          anchorChunkId={appliedFilter.anchor_chunk_id ?? null}
+        />
+      )}
+
+      <div className="hansard-search__results" hidden={view === "map"}>
+        {!enabled && view !== "analysis" && view !== "map" && (
           <p className="hansard-search__hint">
             {view === "politician"
-              ? "Type a search query above to group results by politician."
-              : "Type a phrase above or set a filter to start searching."}
+              ? "Type a search query above and press Search to group results by politician."
+              : "Type a phrase or set a filter above, then press Search."}
           </p>
         )}
 
         {view === "analysis" && !enabled && (
           <p className="hansard-search__hint">
-            Type a search query above to see analysis charts.
+            Type a search query above and press Search to see analysis charts.
           </p>
         )}
 
-        {enabled && loading && !data && <p className="hansard-search__hint">Searching…</p>}
+        {enabled && loading && !data && (
+          <MapleLeafLoader
+            label="Searching…"
+            hint={(() => {
+              const ms = getRecentSearchLatencyMs();
+              if (ms == null) return null;
+              const s = ms / 1000;
+              return s < 1 ? `typically ~${ms}ms` : `typically ~${s.toFixed(1)}s`;
+            })()}
+          />
+        )}
 
         {error && (
           <p className="hansard-search__error" role="alert">
@@ -456,7 +653,11 @@ export default function HansardSearchPage() {
         )}
 
         {enabled && view === "timeline" && timeline && timeline.items.length === 0 && !loading && (
-          <p className="hansard-search__hint">No speeches match these filters.</p>
+          <p className="hansard-search__hint">
+            {page > 1
+              ? "No more results — try going back a page."
+              : "No speeches match these filters."}
+          </p>
         )}
 
         {enabled && view === "politician" && grouped && grouped.groups.length === 0 && !loading && (
@@ -483,23 +684,32 @@ export default function HansardSearchPage() {
               ))}
             </ol>
 
-            {pages > 1 && (
+            {/* Render the pager whenever there's a page-2 to reach. With
+             * staged counting, `pages` may still be null while the count
+             * is in flight; in that case we hide the upper bound but
+             * keep Next enabled until the API actually returns a short
+             * page. The `timeline.items.length >= limit` heuristic
+             * means "there's likely a next page" without needing total. */}
+            {(pages != null ? pages > 1 : timeline.items.length >= limit || page > 1) && (
               <nav className="hansard-search__pager" aria-label="Pagination">
                 <button
                   type="button"
                   disabled={page <= 1}
-                  onClick={() => applyPatch({ page: Math.max(1, page - 1) })}
+                  onClick={() => commitPatch({ page: Math.max(1, page - 1) })}
                 >
                   ← Previous
                 </button>
                 <span className="hansard-search__pager-label">
-                  Page {page} of {pages}
-                  {timeline.totalCapped ? "+" : ""}
+                  {pages != null ? `Page ${page} of ${pages}` : `Page ${page}`}
                 </span>
                 <button
                   type="button"
-                  disabled={page >= pages}
-                  onClick={() => applyPatch({ page: page + 1 })}
+                  disabled={
+                    pages != null
+                      ? page >= pages
+                      : timeline.items.length < limit
+                  }
+                  onClick={() => commitPatch({ page: page + 1 })}
                 >
                   Next →
                 </button>
@@ -512,7 +722,7 @@ export default function HansardSearchPage() {
           <>
             <PoliticianQuickNav
               groups={grouped.groups}
-              sort={filter.sort ?? "mentions"}
+              sort={appliedFilter.sort ?? "mentions"}
               pinnedIds={pinnedSet}
               onTogglePin={togglePin}
               pinCapReached={pinCapReached}
@@ -545,7 +755,7 @@ export default function HansardSearchPage() {
             <div className="hansard-search__summary">
               {grouped.total_politicians} {grouped.total_politicians === 1 ? "politician" : "politicians"}
               {" · "}
-              {SORT_DESCRIPTORS[filter.sort ?? "mentions"]}
+              {SORT_DESCRIPTORS[appliedFilter.sort ?? "mentions"]}
               {" · oldest quote first within each card"}
             </div>
 
@@ -557,32 +767,32 @@ export default function HansardSearchPage() {
                 // when the parent filter shifts underneath it.
                 const cardKey = [
                   g.politician.id,
-                  filter.q ?? "",
-                  filter.lang ?? "",
-                  filter.level ?? "",
-                  filter.province_territory ?? "",
-                  filter.party ?? "",
-                  filter.from ?? "",
-                  filter.to ?? "",
-                  filter.exclude_presiding ? "1" : "0",
+                  appliedFilter.q ?? "",
+                  appliedFilter.lang ?? "",
+                  appliedFilter.level ?? "",
+                  appliedFilter.province_territory ?? "",
+                  appliedFilter.party ?? "",
+                  appliedFilter.from ?? "",
+                  appliedFilter.to ?? "",
+                  appliedFilter.exclude_presiding ? "1" : "0",
                 ].join("|");
                 return (
                 <li key={cardKey} className="hansard-search__group-item">
                   <PoliticianResultGroup
                     group={g}
-                    parentFilter={filter}
+                    parentFilter={appliedFilter}
                     footer={
                       <AIContradictionAnalysis
                         politicianId={g.politician.id}
                         politicianName={g.politician.name ?? "this politician"}
-                        query={filter.q ?? ""}
+                        query={appliedFilter.q ?? ""}
                         chunks={g.chunks}
                         meta={aiMeta}
                         reportsMeta={reportsMeta}
                         actionSlot={
                           <AIFullReportButton
                             politicianId={g.politician.id}
-                            query={filter.q ?? ""}
+                            query={appliedFilter.q ?? ""}
                             meta={reportsMeta}
                           />
                         }
@@ -598,7 +808,7 @@ export default function HansardSearchPage() {
               <button
                 type="button"
                 disabled={page <= 1}
-                onClick={() => applyPatch({ page: Math.max(1, page - 1) })}
+                onClick={() => commitPatch({ page: Math.max(1, page - 1) })}
               >
                 ← Previous
               </button>
@@ -606,7 +816,7 @@ export default function HansardSearchPage() {
               <button
                 type="button"
                 disabled={grouped.groups.length < grouped.limit}
-                onClick={() => applyPatch({ page: page + 1 })}
+                onClick={() => commitPatch({ page: page + 1 })}
               >
                 Next →
               </button>

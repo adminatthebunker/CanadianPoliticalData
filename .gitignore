@@ -83,3 +83,8 @@ sovpro
 # fresh checkout.
 mkdocs/site/*
 !mkdocs/site/index.html
+
+# Internal-facing docs/ (agent + operator notes, runbooks, plans). Public
+# docs live under mkdocs/docs/ — do NOT match those. Leading slash anchors
+# this rule to the repo root.
+/docs/

@@ -387,4 +387,51 @@ export default async function projectionRoutes(app: FastifyInstance) {
       points,
     };
   });
+
+  // Look up projection coords for a small set of chunks. Used by the
+  // /search Map tab to position satellites at their actual UMAP positions
+  // rather than synthetic radial layout. Capped at 64 IDs per request to
+  // keep the URL short and the in-clause cheap.
+  app.get("/coords", async (req, reply) => {
+    const schema = z.object({
+      ids: z
+        .string()
+        .min(1)
+        .transform((s) =>
+          s
+            .split(",")
+            .map((t) => t.trim())
+            .filter((t) => /^[0-9a-f-]{36}$/i.test(t)),
+        )
+        .refine((arr) => arr.length > 0 && arr.length <= 64, {
+          message: "ids must be 1–64 valid UUIDs",
+        }),
+    });
+    const parsed = schema.safeParse(req.query);
+    if (!parsed.success) return reply.badRequest(parsed.error.message);
+
+    const run = await getCurrentRun();
+    if (!run) return { run_id: null, items: [] };
+
+    const ids = parsed.data.ids;
+    const items = await query<{
+      chunk_id: string;
+      x: number;
+      y: number;
+      z: number;
+      x2: number;
+      y2: number;
+      cluster_id_l3: number | null;
+    }>(
+      `
+      SELECT p.chunk_id::text AS chunk_id, p.x, p.y, p.z, p.x2, p.y2, p.cluster_id_l3
+        FROM speech_chunk_projections p
+       WHERE p.run_id = $1::uuid
+         AND p.chunk_id = ANY ($2::uuid[])
+      `,
+      [run.id, ids],
+    );
+
+    return { run_id: run.id, items };
+  });
 }

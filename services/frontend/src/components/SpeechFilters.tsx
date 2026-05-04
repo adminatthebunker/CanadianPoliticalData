@@ -72,12 +72,18 @@ const SPEECH_TYPE_LABELS: Record<SpeechType, string> = {
   group: "Group / chant",
 };
 
-const MIN_SIMILARITY_OPTIONS: Array<{ value: number; label: string }> = [
-  { value: 0.5, label: "≥ 50% (looser)" },
-  { value: 0.6, label: "≥ 60%" },
-  { value: 0.7, label: "≥ 70%" },
-  { value: 0.8, label: "≥ 80% (strictest)" },
-];
+// Slider domain. 0 is the explicit "all matches" override of the
+// server's 0.5 default. 0.95 is a deliberate upper bound — values
+// above that filter out every real match in practice. Step 0.05 keeps
+// URLs compact (one decimal of meaningful precision) and matches user
+// intuition ("70%, 75%, 80%").
+const MIN_SIMILARITY_MIN = 0;
+const MIN_SIMILARITY_MAX = 0.95;
+const MIN_SIMILARITY_STEP = 0.05;
+// Mirror of the API's effective default for /speeches and /facets.
+// Kept here so the slider/chip render the implicit value when the URL
+// omits min_similarity. Update both sides if this changes.
+const DEFAULT_MIN_SIMILARITY = 0.5;
 
 const LEVEL_OPTIONS: Array<{ value: SpeechSearchFilter["level"]; label: string }> = [
   { value: "federal", label: "Federal" },
@@ -102,7 +108,11 @@ function isActive(t: FilterType, v: SpeechSearchFilter): boolean {
     case "party":          return !!v.party;
     case "date":           return !!v.from || !!v.to;
     case "hide_chair":     return v.exclude_presiding === true;
-    case "min_similarity": return v.min_similarity != null && v.min_similarity > 0;
+    // Show the chip whenever the user has explicitly chosen a value
+    // different from the server-side default (0.5). The undefined
+    // case means "use default" → no chip; an explicit 0 means
+    // "user chose all matches" → chip visible.
+    case "min_similarity": return v.min_similarity != null && v.min_similarity !== DEFAULT_MIN_SIMILARITY;
     case "session":        return v.parliament_number != null && v.session_number != null;
     case "speech_type":    return !!v.speech_types && v.speech_types.length > 0;
   }
@@ -129,7 +139,15 @@ function chipLabel(t: FilterType, v: SpeechSearchFilter): string {
       return "Date range";
     }
     case "hide_chair":     return "Hide chair speech";
-    case "min_similarity": return `≥ ${Math.round((v.min_similarity ?? 0) * 100)}% match`;
+    case "min_similarity": {
+      // Render the *effective* value (default = DEFAULT_MIN_SIMILARITY)
+      // when undefined so an always-shown preset chip reads as
+      // "≥ 50% match" out of the box rather than "≥ 0% match".
+      const eff = v.min_similarity ?? DEFAULT_MIN_SIMILARITY;
+      return eff === 0
+        ? "All matches"
+        : `≥ ${Math.round(eff * 100)}% match`;
+    }
     case "session":
       return v.parliament_number != null && v.session_number != null
         ? `${v.parliament_number}-${v.session_number}`
@@ -162,6 +180,11 @@ export interface SpeechFiltersProps {
   onChange: (patch: Partial<SpeechSearchFilter>) => void;
   /** Hide filter types that don't make sense in a particular context. */
   hide?: FilterType[];
+  /** Render these filter types as permanent preset chips even when at
+   *  default. The chip stays anchored in the row, the +Filter menu won't
+   *  list them, and the × remove button is suppressed (clicking the chip
+   *  opens the picker; reset means choosing the default value). */
+  alwaysShow?: FilterType[];
 }
 
 type OpenState =
@@ -169,9 +192,15 @@ type OpenState =
   | { kind: "picker"; type: FilterType }
   | null;
 
-export function SpeechFilters({ value, onChange, hide = [] }: SpeechFiltersProps) {
+export function SpeechFilters({
+  value,
+  onChange,
+  hide = [],
+  alwaysShow = [],
+}: SpeechFiltersProps) {
   const [open, setOpen] = useState<OpenState>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const alwaysShowSet = useMemo(() => new Set(alwaysShow), [alwaysShow.join(",")]);
 
   // Click-outside / escape-key dismiss. Same pattern as PoliticianPinChips.
   useEffect(() => {
@@ -196,13 +225,20 @@ export function SpeechFilters({ value, onChange, hide = [] }: SpeechFiltersProps
     () => ALL_FILTERS.filter((t) => !hide.includes(t)),
     [hide],
   );
+  // Always-shown presets render in the chip row regardless of whether
+  // the user has changed them from default. Keep them at the leading
+  // edge of activeTypes so they stay anchored in a stable position.
   const activeTypes = useMemo(
-    () => visible.filter((t) => isActive(t, value)),
-    [visible, value],
+    () => {
+      const presets = visible.filter((t) => alwaysShowSet.has(t));
+      const rest = visible.filter((t) => !alwaysShowSet.has(t) && isActive(t, value));
+      return [...presets, ...rest];
+    },
+    [visible, value, alwaysShowSet],
   );
   const inactiveTypes = useMemo(
-    () => visible.filter((t) => !isActive(t, value)),
-    [visible, value],
+    () => visible.filter((t) => !alwaysShowSet.has(t) && !isActive(t, value)),
+    [visible, value, alwaysShowSet],
   );
 
   const applyAndClose = (patch: Partial<SpeechSearchFilter>) => {
@@ -223,11 +259,16 @@ export function SpeechFilters({ value, onChange, hide = [] }: SpeechFiltersProps
 
   return (
     <div className="cpd-filter-bar" role="group" aria-label="Search filters" ref={rootRef}>
-      {activeTypes.map((t) => (
-        <span key={t} className="cpd-filter-chip-wrap">
+      {activeTypes.map((t) => {
+        const preset = alwaysShowSet.has(t);
+        return (
+        <span
+          key={t}
+          className={`cpd-filter-chip-wrap${preset ? " cpd-filter-chip-wrap--preset" : ""}`}
+        >
           <button
             type="button"
-            className={`cpd-filter-chip${popoverType === t ? " cpd-filter-chip--editing" : ""}`}
+            className={`cpd-filter-chip${popoverType === t ? " cpd-filter-chip--editing" : ""}${preset ? " cpd-filter-chip--preset" : ""}`}
             onClick={() => setOpen({ kind: "picker", type: t })}
             aria-haspopup="dialog"
             aria-expanded={popoverType === t}
@@ -236,21 +277,24 @@ export function SpeechFilters({ value, onChange, hide = [] }: SpeechFiltersProps
             <span className="cpd-filter-chip__type">{FILTER_LABELS[t]}:</span>
             <span className="cpd-filter-chip__value">{chipLabel(t, value)}</span>
           </button>
-          <button
-            type="button"
-            className="cpd-filter-chip__remove"
-            onClick={() => applyAndClose(clearPatch(t))}
-            aria-label={`Remove ${FILTER_LABELS[t]} filter`}
-          >
-            ×
-          </button>
+          {!preset && (
+            <button
+              type="button"
+              className="cpd-filter-chip__remove"
+              onClick={() => applyAndClose(clearPatch(t))}
+              aria-label={`Remove ${FILTER_LABELS[t]} filter`}
+            >
+              ×
+            </button>
+          )}
           {popoverType === t && (
             <FilterPopover>
               {renderPicker(t, value, onChange, () => setOpen(null))}
             </FilterPopover>
           )}
         </span>
-      ))}
+        );
+      })}
 
       <span className="cpd-filter-menu-wrap">
         <button
@@ -523,33 +567,70 @@ function HideChairPicker({ value, apply }: PickerProps) {
 }
 
 function MinSimilarityPicker({ value, apply }: PickerProps) {
+  // Slider state is local-only while the user drags so we don't fire a
+  // URL/network update per pixel. Apply on commit (mouse-up / touch-end /
+  // keyboard release) — same shape `DateRangePicker` uses for its inputs.
+  // Undefined → use the server default (DEFAULT_MIN_SIMILARITY) so the
+  // slider's resting position matches what the API is actually doing.
+  const effective = value.min_similarity ?? DEFAULT_MIN_SIMILARITY;
+  const [draft, setDraft] = useState<number>(effective);
+  // Re-sync if the parent filter changes externally while the picker is
+  // open (back button, chip-cleared elsewhere).
+  useEffect(() => {
+    setDraft(value.min_similarity ?? DEFAULT_MIN_SIMILARITY);
+  }, [value.min_similarity]);
+
+  const commit = (n: number) => {
+    // Default value → omit from URL (server applies the same default).
+    // Any other value, including explicit 0 ("all matches"), is sent
+    // through. The URL convention is mirrored in HansardSearchPage's
+    // writeFilter and useSpeechSearch's buildSpeechSearchQuery.
+    apply({ min_similarity: n === DEFAULT_MIN_SIMILARITY ? undefined : n });
+  };
+
+  const pct = Math.round(draft * 100);
+  const label =
+    draft <= 0
+      ? "All matches"
+      : draft < DEFAULT_MIN_SIMILARITY
+        ? `≥ ${pct}% — looser`
+        : draft >= 0.85
+          ? `≥ ${pct}% — strictest`
+          : `≥ ${pct}%`;
+
   return (
     <>
       <PickerHeader title="Minimum similarity" />
       <p className="cpd-filter-popover__help">
         Drops weaker semantic matches. Only takes effect when a search term is set.
       </p>
-      <div className="cpd-filter-popover__radio-list">
-        <label className="cpd-filter-popover__radio">
-          <input
-            type="radio"
-            name="cpd-minsim"
-            checked={!value.min_similarity}
-            onChange={() => apply({ min_similarity: undefined })}
-          />
-          <span>All matches</span>
-        </label>
-        {MIN_SIMILARITY_OPTIONS.map((o) => (
-          <label key={o.value} className="cpd-filter-popover__radio">
-            <input
-              type="radio"
-              name="cpd-minsim"
-              checked={value.min_similarity === o.value}
-              onChange={() => apply({ min_similarity: o.value })}
-            />
-            <span>{o.label}</span>
-          </label>
-        ))}
+      <div className="cpd-filter-popover__slider-row">
+        <span
+          className="cpd-filter-popover__slider-value"
+          aria-live="polite"
+        >
+          {label}
+        </span>
+        <input
+          type="range"
+          className="cpd-filter-popover__slider"
+          min={MIN_SIMILARITY_MIN}
+          max={MIN_SIMILARITY_MAX}
+          step={MIN_SIMILARITY_STEP}
+          value={draft}
+          aria-label="Minimum similarity threshold"
+          aria-valuetext={label}
+          onChange={(e) => setDraft(Number(e.target.value))}
+          onMouseUp={(e) => commit(Number((e.target as HTMLInputElement).value))}
+          onTouchEnd={(e) => commit(Number((e.target as HTMLInputElement).value))}
+          onKeyUp={(e) => commit(Number((e.target as HTMLInputElement).value))}
+          autoFocus
+        />
+        <div className="cpd-filter-popover__slider-scale" aria-hidden="true">
+          <span>any</span>
+          <span>50%</span>
+          <span>95%</span>
+        </div>
       </div>
     </>
   );

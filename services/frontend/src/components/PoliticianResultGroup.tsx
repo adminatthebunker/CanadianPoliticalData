@@ -192,7 +192,11 @@ export function PoliticianResultGroup({ group, parentFilter, footer }: Politicia
 
   function goNext() {
     if (loading) return;
-    if (!pageData || page >= pageData.pages) return;
+    // /politician-quotes always sends a real count (include_count=true
+    // server-side) so pageData.pages is non-null in practice; the
+    // nullable type comes from the shared TimelineSearchResponse which
+    // accommodates the staged-count timeline path.
+    if (!pageData || pageData.pages == null || page >= pageData.pages) return;
     fetchPage(page + 1);
   }
 
@@ -288,9 +292,7 @@ export function PoliticianResultGroup({ group, parentFilter, footer }: Politicia
   // the narrower set. Keyword is still client-side.
   const keywordActive = keyword.trim().length > 0;
   const filteringActive = simThreshold > 0 || keywordActive;
-  const totalLabel = pageData
-    ? (pageData.totalCapped ? `${pageData.total.toLocaleString()}+` : pageData.total.toLocaleString())
-    : null;
+  const totalLabel = pageData && pageData.total != null ? pageData.total.toLocaleString() : null;
 
   // Header stats are reactive to filters in expanded mode so the count
   // next to the politician's name matches what the user is actually
@@ -330,7 +332,10 @@ export function PoliticianResultGroup({ group, parentFilter, footer }: Politicia
       // headline. This is the fix for "expanded view says 1,000+ but
       // the politician hasn't actually said 1,000 things about the
       // query": the server threshold makes `total` the honest number.
-      headerCountText = `${pageData.total.toLocaleString()}${pageData.totalCapped ? "+" : ""} ${pageData.total === 1 ? "quote" : "quotes"}`;
+      headerCountText =
+        pageData.total != null
+          ? `${pageData.total.toLocaleString()} ${pageData.total === 1 ? "quote" : "quotes"}`
+          : "";
       headerCountSuffix = "";
       // If a similarity floor is active, recompute avg/best from the
       // currently visible chunks (still representative — they're all
@@ -538,7 +543,7 @@ export function PoliticianResultGroup({ group, parentFilter, footer }: Politicia
             </ol>
           )}
 
-          {pageData && pageData.pages > 1 && (
+          {pageData && pageData.pages != null && pageData.pages > 1 && (
             <nav className="politician-group__pager" aria-label="Quote pagination">
               <button
                 type="button"
@@ -549,13 +554,13 @@ export function PoliticianResultGroup({ group, parentFilter, footer }: Politicia
                 ← Previous
               </button>
               <span className="politician-group__pager-label">
-                {loading ? "Loading…" : `Page ${page} of ${pageData.pages}${pageData.totalCapped ? "+" : ""}`}
+                {loading ? "Loading…" : `Page ${page} of ${pageData.pages}`}
               </span>
               <button
                 type="button"
                 className="politician-group__pager-btn"
                 onClick={goNext}
-                disabled={loading || page >= pageData.pages}
+                disabled={loading || page >= (pageData.pages ?? page)}
               >
                 Next →
               </button>

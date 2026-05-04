@@ -81,7 +81,7 @@ export function PoliticianSpeechesTab({ politicianId }: PoliticianSpeechesTabPro
       {data && data.items.length > 0 && (
         <>
           <div className="pol-speeches__summary">
-            {data.totalCapped ? "1,000+ speeches" : `${total.toLocaleString()} speech ${total === 1 ? "fragment" : "fragments"}`}
+            {`${total.toLocaleString()} speech ${total === 1 ? "fragment" : "fragments"}`}
             {data.mode === "semantic" ? ` matching "${q}"` : " · most recent first"}
           </div>
 
@@ -104,7 +104,6 @@ export function PoliticianSpeechesTab({ politicianId }: PoliticianSpeechesTabPro
               </button>
               <span className="pol-speeches__pager-label">
                 Page {page} of {pages}
-                {data.totalCapped ? "+" : ""}
               </span>
               <button
                 type="button"

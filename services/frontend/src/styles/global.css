@@ -514,6 +514,58 @@ button.active { background: var(--accent); border-color: var(--accent); }
   .mapview__leaf { animation: none; }
 }
 
+/* Reusable maple-leaf loader. Same `leaf-spin` keyframes as MapView's
+   centred overlay, but rendered inline with a label and optional hint
+   (e.g. "typically ~2s"). Used on /search; available everywhere via
+   <MapleLeafLoader />. */
+.maple-loader {
+  display: inline-flex;
+  align-items: center;
+  gap: .55rem;
+  padding: .35rem .25rem;
+  color: var(--text-muted, #475569);
+}
+.maple-loader__leaf {
+  display: inline-block;
+  line-height: 1;
+  animation: leaf-spin 1.4s cubic-bezier(.5,.1,.5,.9) infinite;
+  filter: drop-shadow(0 2px 4px rgba(220, 38, 38, 0.25));
+  transform-origin: 50% 55%;
+}
+.maple-loader--sm .maple-loader__leaf { font-size: 1rem; }
+.maple-loader--md .maple-loader__leaf { font-size: 1.5rem; }
+.maple-loader--lg .maple-loader__leaf { font-size: 2.25rem; }
+.maple-loader__label {
+  font-weight: 500;
+  letter-spacing: .01em;
+}
+.maple-loader__hint {
+  font-size: .8em;
+  opacity: .7;
+  font-variant-numeric: tabular-nums;
+}
+/* Subtle attribution that surfaces after a long-running load. Rendered
+   inline with the hint so it doesn't reflow the loader; the link is
+   underlined-on-hover only to keep it quiet. */
+.maple-loader__ad {
+  font-size: .75em;
+  opacity: .55;
+}
+.maple-loader__ad a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.maple-loader__ad a:hover,
+.maple-loader__ad a:focus-visible {
+  opacity: .9;
+  text-decoration-thickness: 2px;
+  outline: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .maple-loader__leaf { animation: none; }
+}
+
 .tier-legend {
   display: flex; flex-direction: column; gap: .75rem;
   padding: .85rem 1rem; background: var(--panel); border: 1px solid var(--border);
