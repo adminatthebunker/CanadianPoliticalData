@@ -12,7 +12,7 @@ Actionable checkbox view of [`docs/timeline.md`](./docs/timeline.md). When this 
 
 Partially built — finish, do not start new things on top.
 
-- [x] **`/api/v1/search` finalization.** Hybrid HNSW + BM25 is wired. Today's filter expansion (`min_similarity`, `parliament_number + session_number`, `speech_type`, the new `/search/sessions` endpoint, the frontend advanced-filters disclosure) widened the surface; pending: performance tuning + public contract freeze. → [`docs/plans/semantic-layer.md`](./docs/plans/semantic-layer.md), [`docs/plans/search-features-handoff.md`](./docs/plans/search-features-handoff.md)
+- [x] **`/api/v1/search` finalization.** Hybrid HNSW + BM25 is wired. Filter expansion (`min_similarity`, `parliament_number + session_number`, `speech_type`, `/search/sessions` endpoint, frontend advanced-filters) shipped 2026-04-26. Performance + UX lift shipped 2026-05-03 in commit `1df626f`: pg pool 10 → 30 (25/25 burst test green), query-embedding LRU (60s/500), result-cache LRU on the frontend, `anchor_chunk_id` re-centring with `AnchorChunkBanner` + `SearchMapView` (radial graph of top-K, click-to-recentre), `include_count` split off the hot path, `source_system` denorm. **Pending:** public contract freeze (zod schema lock + `docs/api.md` v1.0 sign-off). → [`docs/plans/semantic-layer.md`](./docs/plans/semantic-layer.md), [`docs/plans/search-features-handoff.md`](./docs/plans/search-features-handoff.md)
 - [x] **Premium reports — phase 1c follow-ups.** Phase 1b (LLM map-reduce, `/reports/<id>` viewer, refund flow) and phase 1c #1 (public-share + citation, migration 0036) are shipped. Remaining ranked queue: report-this-search button, re-run on new evidence, per-section flagging, compare two politicians. → [`docs/plans/premium-reports-followups.md`](./docs/plans/premium-reports-followups.md)
 - [x] **Stripe Tax — operator activation.** Code is shipped (`STRIPE_TAX_ENABLED` flag, default off). Remaining is dashboard-only: activate Stripe Tax, add Canadian tax registration (GST/HST + any provincial PST), classify each credit-pack Price with a tax code, run a test-mode dry-run, then flip `STRIPE_TAX_ENABLED=true` in production. → [`docs/operations.md`](./docs/operations.md) § Stripe Tax
 
@@ -145,9 +145,18 @@ Parked behind the priorities above — not abandoned.
 
 ---
 
-## Recently shipped (last two cycles, 2026-04-23 → 2026-04-29)
+## Recently shipped (last three cycles, 2026-04-23 → 2026-05-03)
 
 For context. Move items here from above as they land; trim aggressively after a couple of cycles.
+
+### Cycle 2026-05-01 → 2026-05-03
+
+- [x] **Search perf lift + speech-detail rebuild + graph-view exploration** — single bulk commit `1df626f` (2026-05-03). API: pg pool 10 → 30 (25/25 burst test green; was 13/25), query-embedding LRU (60s/500), result-cache LRU on the frontend, `anchor_chunk_id` re-centring, `include_count` split, `source_system` denorm. Frontend: `SpeechDetailPage` rebuild with `ExchangeSpeechRow` + `RelatedSpeechesPanel` (list + graph modes) + `QuoteShareMenu` + `MapleLeafLoader`; `SearchMapView` (radial graph of top-K, click-to-recentre via anchor-chunk) + `AnchorChunkBanner` on `/search`. Edge: nginx variable-based `proxy_pass` with Docker embedded DNS resolver (kills 30s 502s on container rebuild); `/docs/` root-anchored in `.gitignore`. Runbook trail: [`docs/runbooks/handoff-2026-04-27-semantic-explore-graph-redesign.md`](./docs/runbooks/handoff-2026-04-27-semantic-explore-graph-redesign.md), [`docs/runbooks/handoff-2026-05-02-search-efficiency-and-laptop-capacity.md`](./docs/runbooks/handoff-2026-05-02-search-efficiency-and-laptop-capacity.md).
+- [x] **Provincial historical bills — workstream complete.** `--all-sessions` walker pattern propagated to ON (2026-05-01: 111 → 3,412 across P36-P44, commit `8d39fb7`), then MB + QC (2026-05-02: 81 → 1,971 across 31 MB sessions; 497 → 1,192 across 8 QC sessions via new `discover_qc_bills_html` against assnat.qc.ca historical session pages, commit `11be12d`). All three flipped `bills_status='live'`.
+- [x] **Federal vote→bill linkage 10.2% → 54.7%** (2026-05-01) via new `relink-federal-votes` Click subcommand — pure-SQL UPDATE pass against `votes.raw->'openparliament_vote'->>'bill_url'`. 1,993 newly linked, 0 unmatched. Commit `3a90893`.
+- [x] **ON / QC bills `introduced_date`** (2026-05-01) — ON parser-side patch derives from /status sub-page first_reading events, hits 100% on P42-P44 (786/786). QC partial via RSS-window roll-up. Older parliaments need separate work — documented gap. Commit `3a90893`.
+- [x] **`bills_status` auto-derivation** (2026-04-30) — `coverage_stats.py` now flips all three legislative status columns (hansard / votes / bills) from row counts. 500-row threshold for 'live'. Commit `bdc791f`.
+- [x] **Federal historical bills backfill** (2026-04-30) — `ingest-federal-bills --all-sessions` walks every federal session in `legislative_sessions`. 412 → **5,542** bills across P37-S1 → P44-S1 (openparliament.ca coverage floor at 2001). Sponsor FK rate 86.5%. Same commit as auto-derive (`bdc791f`).
 
 ### Cycle 2026-04-26 → 2026-04-30
 
