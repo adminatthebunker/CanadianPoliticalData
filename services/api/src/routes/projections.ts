@@ -146,6 +146,12 @@ function buildChunkFilter(
       );
     }
   }
+  if (f.politician_active) {
+    const wantActive = f.politician_active === "active";
+    where.push(
+      `EXISTS (SELECT 1 FROM politicians p WHERE p.id = ch.politician_id AND p.is_active = ${wantActive})`,
+    );
+  }
 
   return { sql: where.length > 0 ? where.join(" AND ") : "TRUE", params };
 }

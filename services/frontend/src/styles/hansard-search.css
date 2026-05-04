@@ -1208,38 +1208,41 @@
   position: absolute;
   top: calc(100% + 4px);
   left: 0;
-  right: 0;
   z-index: 30;
+  /* Detach from input width so the dropdown can show full party + province
+     + speech-count meta without ellipsing or wrapping awkwardly. */
+  min-width: 360px;
+  max-width: min(480px, 92vw);
   margin: 0;
-  padding: .25rem 0;
+  padding: .35rem 0;
   list-style: none;
   background: var(--panel-2, #242a38);
   border: 1px solid #3a4658;
-  border-radius: 5px;
-  box-shadow: 0 6px 18px rgba(0, 0, 0, .35);
-  max-height: 280px;
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .42);
+  max-height: 460px;
   overflow-y: auto;
 }
 
 .cpd-pin-picker__note {
-  padding: .4rem .7rem;
+  padding: .55rem .85rem;
   color: var(--ink-muted);
-  font-size: .8rem;
+  font-size: .85rem;
 }
 
 .cpd-pin-picker__hit {
   width: 100%;
   display: flex;
   align-items: center;
-  gap: .55rem;
-  padding: .35rem .7rem;
+  gap: .7rem;
+  padding: .5rem .85rem;
   background: transparent;
   border: none;
   color: var(--ink);
   cursor: pointer;
   text-align: left;
   font: inherit;
-  font-size: .85rem;
+  font-size: .92rem;
 }
 
 .cpd-pin-picker__hit:hover,
@@ -1249,8 +1252,8 @@
 }
 
 .cpd-pin-picker__photo {
-  width: 22px;
-  height: 22px;
+  width: 36px;
+  height: 36px;
   border-radius: 50%;
   object-fit: cover;
   flex-shrink: 0;
@@ -1262,13 +1265,20 @@
   justify-content: center;
   background: #3a4658;
   color: var(--ink-muted);
-  font-size: .72rem;
+  font-size: .9rem;
   font-weight: 600;
 }
 
-.cpd-pin-picker__name {
+.cpd-pin-picker__body {
+  display: flex;
+  flex-direction: column;
   flex: 1;
   min-width: 0;
+  gap: .12rem;
+}
+
+.cpd-pin-picker__name {
+  font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1276,8 +1286,11 @@
 
 .cpd-pin-picker__meta {
   color: var(--ink-muted);
-  font-size: .72rem;
-  flex-shrink: 0;
+  font-size: .78rem;
+  /* Allow long party names (e.g. "New Democratic Party of Ontario · ON ·
+     8,687 speeches") to wrap to a second line rather than ellipsing. */
+  white-space: normal;
+  line-height: 1.25;
 }
 
 .politician-nav-grid__card {

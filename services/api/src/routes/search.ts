@@ -54,6 +54,12 @@ export const baseFilterSchema = z.object({
   from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   exclude_presiding: z.coerce.boolean().optional(),
+  // Restrict to speeches by politicians who are currently in office
+  // ("active") or no longer in office ("inactive"). Implemented as an
+  // EXISTS join to politicians.is_active so unresolved speeches
+  // (politician_id IS NULL) are excluded from both sides — an
+  // unresolved speaker is neither active nor inactive.
+  politician_active: z.enum(["active", "inactive"]).optional(),
   // Cosine-similarity floor (0..1). Applies only when `q` is present —
   // recency-mode browsing has no similarity to threshold against. Mirrors
   // the channel /politician-quotes already uses; the difference is the
@@ -332,6 +338,12 @@ function buildFilterWhere(f: BaseFilter): {
       `NOT EXISTS (SELECT 1 FROM speeches sx WHERE sx.id = sc.speech_id AND sx.speaker_role IS NOT NULL AND sx.speaker_role <> '')`,
     );
   }
+  if (f.politician_active) {
+    const wantActive = f.politician_active === "active";
+    where.push(
+      `EXISTS (SELECT 1 FROM politicians p WHERE p.id = sc.politician_id AND p.is_active = ${wantActive})`,
+    );
+  }
   // Restrict to a specific (parliament, session) — sc.session_id is
   // already denormalised, so this is a pre-filter against legislative_sessions.
   // Both numbers must be present together; one without the other is ambiguous.
@@ -367,7 +379,8 @@ function hasAnyStructuralFilter(f: BaseFilter): boolean {
     effectivePoliticianIds(f).length > 0 ||
     f.party || f.level || f.province_territory || f.from || f.to ||
     (f.parliament_number != null && f.session_number != null) ||
-    speechTypes
+    speechTypes ||
+    f.politician_active
   );
 }
 
@@ -921,7 +934,7 @@ export default async function searchRoutes(app: FastifyInstance) {
       !parsed.data.anchor_chunk_id &&
       !hasAnyStructuralFilter(parsed.data)
     ) {
-      return reply.badRequest("provide `q`, `anchor_chunk_id`, or at least one filter (politician_ids, party, level, province, from, to, parliament+session, speech_type)");
+      return reply.badRequest("provide `q`, `anchor_chunk_id`, or at least one filter (politician_ids, party, level, province, from, to, parliament+session, speech_type, politician_active)");
     }
 
     // Default the cosine-similarity floor to 0.5 when not set. Below
@@ -958,7 +971,7 @@ export default async function searchRoutes(app: FastifyInstance) {
       !parsed.data.anchor_chunk_id &&
       !hasAnyStructuralFilter(parsed.data)
     ) {
-      return reply.badRequest("provide `q`, `anchor_chunk_id`, or at least one filter (politician_ids, party, level, province, from, to, parliament+session, speech_type)");
+      return reply.badRequest("provide `q`, `anchor_chunk_id`, or at least one filter (politician_ids, party, level, province, from, to, parliament+session, speech_type, politician_active)");
     }
 
     const { whereSql: baseWhereSql, filterParams } = buildFilterWhere(parsed.data);

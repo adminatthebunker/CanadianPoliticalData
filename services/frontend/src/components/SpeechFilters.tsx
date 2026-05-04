@@ -18,7 +18,8 @@ type FilterType =
   | "hide_chair"
   | "min_similarity"
   | "session"
-  | "speech_type";
+  | "speech_type"
+  | "politician_status";
 
 const FILTER_LABELS: Record<FilterType, string> = {
   lang: "Language",
@@ -30,6 +31,7 @@ const FILTER_LABELS: Record<FilterType, string> = {
   min_similarity: "Min similarity",
   session: "Parliament & session",
   speech_type: "Speech type",
+  politician_status: "Politician status",
 };
 
 const ALL_FILTERS: FilterType[] = [
@@ -39,6 +41,7 @@ const ALL_FILTERS: FilterType[] = [
   "date",
   "min_similarity",
   "speech_type",
+  "politician_status",
   "session",
   "lang",
   "hide_chair",
@@ -115,6 +118,7 @@ function isActive(t: FilterType, v: SpeechSearchFilter): boolean {
     case "min_similarity": return v.min_similarity != null && v.min_similarity !== DEFAULT_MIN_SIMILARITY;
     case "session":        return v.parliament_number != null && v.session_number != null;
     case "speech_type":    return !!v.speech_types && v.speech_types.length > 0;
+    case "politician_status": return v.politician_active === "active" || v.politician_active === "inactive";
   }
 }
 
@@ -158,6 +162,12 @@ function chipLabel(t: FilterType, v: SpeechSearchFilter): string {
       if (ts.length === 1) return SPEECH_TYPE_LABELS[ts[0]];
       return `${ts.length} types`;
     }
+    case "politician_status":
+      return v.politician_active === "active"
+        ? "In office"
+        : v.politician_active === "inactive"
+          ? "Out of office"
+          : "Politician status";
   }
 }
 
@@ -172,6 +182,7 @@ function clearPatch(t: FilterType): Partial<SpeechSearchFilter> {
     case "min_similarity": return { min_similarity: undefined };
     case "session":        return { parliament_number: undefined, session_number: undefined };
     case "speech_type":    return { speech_types: undefined };
+    case "politician_status": return { politician_active: undefined };
   }
 }
 
@@ -393,6 +404,7 @@ function renderPicker(
     case "min_similarity": return <MinSimilarityPicker value={value} apply={apply} />;
     case "session":        return <SessionPicker value={value} apply={apply} />;
     case "speech_type":    return <SpeechTypePicker value={value} apply={apply} />;
+    case "politician_status": return <PoliticianStatusPicker value={value} apply={apply} />;
   }
 }
 
@@ -540,6 +552,47 @@ function DateRangePicker({ value, apply }: PickerProps) {
           Apply
         </button>
       </div>
+    </>
+  );
+}
+
+function PoliticianStatusPicker({ value, apply }: PickerProps) {
+  return (
+    <>
+      <PickerHeader title="Politician status" />
+      <div className="cpd-filter-popover__radio-list">
+        <label className="cpd-filter-popover__radio">
+          <input
+            type="radio"
+            name="cpd-politician-status"
+            checked={!value.politician_active}
+            onChange={() => apply({ politician_active: undefined })}
+          />
+          <span>Any</span>
+        </label>
+        <label className="cpd-filter-popover__radio">
+          <input
+            type="radio"
+            name="cpd-politician-status"
+            checked={value.politician_active === "active"}
+            onChange={() => apply({ politician_active: "active" })}
+          />
+          <span>In office</span>
+        </label>
+        <label className="cpd-filter-popover__radio">
+          <input
+            type="radio"
+            name="cpd-politician-status"
+            checked={value.politician_active === "inactive"}
+            onChange={() => apply({ politician_active: "inactive" })}
+          />
+          <span>Out of office</span>
+        </label>
+      </div>
+      <p className="cpd-filter-popover__help">
+        Excludes speeches whose speaker hasn't been resolved to a politician
+        record yet.
+      </p>
     </>
   );
 }

@@ -30,6 +30,7 @@ interface SearchHit {
   party: string | null;
   level: string | null;
   province_territory: string | null;
+  speech_count?: number;
 }
 
 interface Props {
@@ -172,7 +173,7 @@ export function PoliticianPinChips({ ids, onAdd, onRemove, onClearAll }: Props) 
         <input
           type="text"
           className="cpd-pin-picker__input"
-          placeholder={atCap ? `Pin limit reached (${MAX_POLITICIAN_PINS})` : "+ pin a politician by name…"}
+          placeholder={atCap ? `Pin limit reached (${MAX_POLITICIAN_PINS})` : "+ pin a politician (try last name)…"}
           value={query}
           onChange={e => {
             setQuery(e.target.value);
@@ -203,8 +204,8 @@ export function PoliticianPinChips({ ids, onAdd, onRemove, onClearAll }: Props) 
                     <img
                       src={h.photo_url}
                       alt=""
-                      width={22}
-                      height={22}
+                      width={36}
+                      height={36}
                       className="cpd-pin-picker__photo"
                       loading="lazy"
                     />
@@ -213,12 +214,22 @@ export function PoliticianPinChips({ ids, onAdd, onRemove, onClearAll }: Props) 
                       {h.name.slice(0, 1)}
                     </span>
                   )}
-                  <span className="cpd-pin-picker__name">{h.name}</span>
-                  {(h.party || h.province_territory) && (
-                    <span className="cpd-pin-picker__meta">
-                      {[h.party, h.province_territory].filter(Boolean).join(" · ")}
-                    </span>
-                  )}
+                  <span className="cpd-pin-picker__body">
+                    <span className="cpd-pin-picker__name">{h.name}</span>
+                    {(h.party || h.province_territory || (h.speech_count ?? 0) > 0) && (
+                      <span className="cpd-pin-picker__meta">
+                        {[
+                          h.party,
+                          h.province_territory,
+                          (h.speech_count ?? 0) > 0
+                            ? `${h.speech_count!.toLocaleString()} speech${h.speech_count === 1 ? "" : "es"}`
+                            : null,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </span>
+                    )}
+                  </span>
                 </button>
               </li>
             ))}

@@ -116,13 +116,27 @@ export default async function politicianRoutes(app: FastifyInstance) {
     };
   });
 
-  // Lightweight typeahead for the pin picker: name-prefix match, tiny
-  // projection, capped at 10 rows. Distinct from `/` (full listing w/
-  // socials/offices joins — heavy, wrong shape for a dropdown).
+  // Lightweight typeahead for the pin picker. Tokenizes the query on
+  // whitespace and ANDs each token under unaccent(), so "trudeau justin"
+  // and "justin trudeau" both find Justin Trudeau and accented French
+  // names match regardless of input. Inactive politicians are first-class
+  // results — the Hansard corpus is overwhelmingly historical, so most
+  // useful pin targets (Harper, Kenney, Layton, …) are no longer in
+  // office. Ranking puts politicians with actual speeches at the top of
+  // the dropdown so a councillor with zero Hansard presence doesn't beat
+  // a chatty MLA.
   app.get("/search", async (req, reply) => {
     const q = ((req.query as { q?: string }).q ?? "").trim();
     if (q.length < 2) return { items: [] };
     if (q.length > 64) return reply.badRequest("q too long");
+    const tokens = q.split(/\s+/).filter(Boolean).slice(0, 6);
+    if (tokens.length === 0) return { items: [] };
+
+    const params = tokens.map(t => `%${t}%`);
+    const whereSql = tokens
+      .map((_, i) => `unaccent(name) ILIKE unaccent($${i + 1})`)
+      .join(" AND ");
+
     const rows = await query<{
       id: string;
       name: string;
@@ -132,15 +146,28 @@ export default async function politicianRoutes(app: FastifyInstance) {
       party: string | null;
       level: string | null;
       province_territory: string | null;
+      is_active: boolean;
+      speech_count: number;
     }>(
-      `SELECT id, name, photo_url, photo_path, openparliament_slug,
-              party, level, province_territory
-         FROM politicians
-        WHERE is_active = true
-          AND name ILIKE $1
-        ORDER BY name
+      `WITH candidates AS (
+         SELECT id, name, photo_url, photo_path, openparliament_slug,
+                party, level, province_territory, is_active
+           FROM politicians
+          WHERE ${whereSql}
+          LIMIT 500
+       )
+       SELECT c.id, c.name, c.photo_url, c.photo_path, c.openparliament_slug,
+              c.party, c.level, c.province_territory, c.is_active,
+              COALESCE(sc.cnt, 0)::int AS speech_count
+         FROM candidates c
+         LEFT JOIN LATERAL (
+           SELECT count(*) AS cnt
+             FROM speeches s
+            WHERE s.politician_id = c.id
+         ) sc ON true
+        ORDER BY speech_count DESC NULLS LAST, c.is_active DESC, c.name
         LIMIT 10`,
-      [`%${q}%`],
+      params,
     );
     return {
       items: rows.map(r => ({
@@ -151,6 +178,7 @@ export default async function politicianRoutes(app: FastifyInstance) {
         party: r.party,
         level: r.level,
         province_territory: r.province_territory,
+        speech_count: r.speech_count,
       })),
     };
   });

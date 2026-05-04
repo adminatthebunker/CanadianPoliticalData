@@ -125,6 +125,11 @@ export interface SpeechSearchFilter {
    *  filler ("I declare the motion lost"), which floods semantic search
    *  for unrelated phrases. */
   exclude_presiding?: boolean;
+  /** Restrict to speeches by politicians who are currently in office
+   *  ("active") or no longer in office ("inactive"). Implemented server-
+   *  side as an EXISTS join, so unresolved speakers (politician_id IS NULL)
+   *  are excluded from both sides — they are neither active nor inactive. */
+  politician_active?: "active" | "inactive";
   /** Cosine-similarity floor 0..1. Only applied when `q` is set; raising
    *  this drops weaker semantic matches from both the count and the page. */
   min_similarity?: number;
@@ -180,6 +185,7 @@ export function buildSpeechSearchQuery(f: SpeechSearchFilter): string {
   if (f.from) p.set("from", f.from);
   if (f.to) p.set("to", f.to);
   if (f.exclude_presiding) p.set("exclude_presiding", "true");
+  if (f.politician_active) p.set("politician_active", f.politician_active);
   // 0 is meaningful — explicit "all matches" override of the API's
   // 0.5 default. Send it through so the server doesn't silently
   // re-apply the floor.
@@ -218,6 +224,7 @@ export function buildSpeechCountQuery(f: SpeechSearchFilter): string {
   if (f.from) p.set("from", f.from);
   if (f.to) p.set("to", f.to);
   if (f.exclude_presiding) p.set("exclude_presiding", "true");
+  if (f.politician_active) p.set("politician_active", f.politician_active);
   if (f.min_similarity != null) p.set("min_similarity", String(f.min_similarity));
   if (f.parliament_number != null && f.session_number != null) {
     p.set("parliament_number", String(f.parliament_number));
@@ -378,6 +385,7 @@ export async function fetchPoliticianQuotes(
   if (parentFilter.from) p.set("from", parentFilter.from);
   if (parentFilter.to) p.set("to", parentFilter.to);
   if (parentFilter.exclude_presiding) p.set("exclude_presiding", "true");
+  if (parentFilter.politician_active) p.set("politician_active", parentFilter.politician_active);
   if (parentFilter.parliament_number != null && parentFilter.session_number != null) {
     p.set("parliament_number", String(parentFilter.parliament_number));
     p.set("session_number", String(parentFilter.session_number));

@@ -128,6 +128,10 @@ function readFilter(params: URLSearchParams): SpeechSearchFilter {
     from: params.get("from") ?? undefined,
     to: params.get("to") ?? undefined,
     exclude_presiding: params.get("exclude_presiding") === "true" ? true : undefined,
+    politician_active:
+      params.get("politician_active") === "active" ? "active" :
+      params.get("politician_active") === "inactive" ? "inactive" :
+      undefined,
     min_similarity: parseMinSimilarity(params.get("min_similarity")),
     parliament_number: havePair ? parliament : undefined,
     session_number: havePair ? session : undefined,
@@ -150,6 +154,7 @@ function writeFilter(f: SpeechSearchFilter, view: ViewMode): URLSearchParams {
   if (f.from) p.set("from", f.from);
   if (f.to) p.set("to", f.to);
   if (f.exclude_presiding) p.set("exclude_presiding", "true");
+  if (f.politician_active) p.set("politician_active", f.politician_active);
   // Emit min_similarity whenever the caller explicitly set it AND the
   // value differs from the implicit server default. This keeps the URL
   // clean for default searches while preserving explicit overrides
