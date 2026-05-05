@@ -28,7 +28,9 @@ _INLINE_OUTCOME_RE = re.compile(
 )
 _QUESTION_CALL_RE = re.compile(
     r'\b(?:all (?:those|in) (?:in\s+)?favou?r|all (?:those )?opposed|on division|'
-    r'is it the pleasure of the House|division called)\b',
+    r'is it the pleasure of the House|division called|'
+    r'contrary minded|i hear (?:several|a few|the) n(?:o|ay)e?s?|'
+    r'request for (?:waiver|unanimous consent)|request to revert)\b',
     re.IGNORECASE,
 )
 _BILL_REF_RE = re.compile(r'\bBill\s+(?:No\.\s*)?(\d+)\b', re.IGNORECASE)
@@ -149,7 +151,7 @@ async def extract_ns_votes(db: Database, *, limit_sittings: Optional[int] = None
           FROM speeches s
          WHERE s.source_system='hansard-ns' AND s.text IS NOT NULL
            AND s.text ~* 'motion (is\\s+)?(carried|defeated|adopted|agreed to|lost|negatived|withdrawn)'
-           AND s.text ~* 'all (those|in) in favou?r|all (those )?opposed|on division|division called'
+           AND s.text ~* 'all (those|in) in favou?r|all (those )?opposed|on division|division called|contrary minded|i hear (several|a few|the) n(o|ay)|request for (waiver|unanimous consent)|request to revert'
            {where_sittings}
          ORDER BY s.spoken_at, s.sequence
     """)

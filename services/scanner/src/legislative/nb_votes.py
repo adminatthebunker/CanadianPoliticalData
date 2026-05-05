@@ -35,16 +35,32 @@ _QUESTION_CALL_RE = re.compile(
     r'vote nominal)\b',
     re.IGNORECASE,
 )
+
+# NB-specific: bilingual heading-style vote announcements.
+# Hansard inserts a single line like:
+#   "Recorded Vote—Proposed Amendment to Motion for Second Reading of Bill 3 Defeated"
+#   "Vote nominal—Rejet de l'amendement proposé de la motion portant deuxième lecture du projet de loi 3"
+# Both forms self-contained — the heading carries the outcome, no separate
+# question-call line needed. EN heading and FR heading often appear together
+# separated by "/".
+_HEADING_VOTE_EN_RE = re.compile(
+    r'Recorded\s+Vote\W{1,3}.{0,200}?\b(?P<outcome>Defeated|Carried|Adopted|Negatived|Withdrawn)\b',
+    re.IGNORECASE | re.DOTALL,
+)
+_HEADING_VOTE_FR_RE = re.compile(
+    r'Vote\s+nominal\W{1,3}.{0,200}?\b(?P<outcome>Rejet|Adoption|Adopt[ée]e?|Retrait|Retir[ée]e?)\b',
+    re.IGNORECASE | re.DOTALL,
+)
 _BILL_REF_RE = re.compile(
     r'\bBill\s+(\d+)\b|\bprojet\s+de\s+loi\s+(?:n[°ºo]?\s*)?(\d+)\b',
     re.IGNORECASE,
 )
 _RESULT_BY_OUTCOME = {
     "carried": "passed", "adopted": "passed", "passed": "passed", "agreed to": "passed",
-    "adopté": "passed", "adoptée": "passed",
+    "adopté": "passed", "adoptée": "passed", "adoption": "passed", "adopt": "passed",
     "defeated": "defeated", "negatived": "defeated", "lost": "defeated",
-    "rejeté": "defeated", "rejetée": "defeated",
-    "withdrawn": "withdrawn",
+    "rejet": "defeated", "rejeté": "defeated", "rejetée": "defeated",
+    "withdrawn": "withdrawn", "retrait": "withdrawn",
     "retiré": "withdrawn", "retirée": "withdrawn",
 }
 
@@ -68,15 +84,36 @@ class _Detected:
 
 
 def _classify(text: str) -> Optional[_Detected]:
-    if not text or not _QUESTION_CALL_RE.search(text):
+    """NB priority — heading-style only.
+
+    "Recorded Vote—...Defeated" / "Vote nominal—...Rejet" headings are the
+    only high-precision NB signal. The inline-outcome + question-call
+    consensus path was tried and produced ~80% false positives — NB debate
+    speeches routinely reference past motions by name with outcome words,
+    and "vote nominal" appears in any narrative block describing a recorded
+    vote being requested (not just one being announced).
+
+    Per-MNA tallies aren't in body text; division rows leave ayes/nays NULL.
+    """
+    if not text:
         return None
-    m = _INLINE_OUTCOME_RE.search(text)
-    if not m:
+
+    head_en = _HEADING_VOTE_EN_RE.search(text)
+    head_fr = _HEADING_VOTE_FR_RE.search(text)
+    if not (head_en or head_fr):
         return None
+
+    # Prefer EN match if both present (it carries explicit outcome word);
+    # fall back to FR shape ("Rejet"/"Adoption") otherwise.
+    m = head_en or head_fr
     outcome = re.sub(r'\s+', ' ', m.group("outcome").lower().strip())
-    sentences = re.split(r'(?<=[.!?])\s+', text.strip())
-    motion = " ".join(sentences[-3:])[:500] if sentences else None
-    return _Detected(vote_type="consensus",
+    # Pull the heading line itself as motion_text (back to nearest line break).
+    line_start = text.rfind("\n", 0, m.start())
+    line_end = text.find("\n", m.end())
+    if line_end == -1:
+        line_end = min(m.end() + 200, len(text))
+    motion = text[max(line_start + 1, 0):line_end].strip()[:500] or None
+    return _Detected(vote_type="division",
                      result=_RESULT_BY_OUTCOME.get(outcome, "passed"),
                      motion_text=motion)
 
@@ -159,8 +196,14 @@ async def extract_nb_votes(db: Database, *, limit_sittings: Optional[int] = None
                s.source_url, s.sequence, s.spoken_at, s.speaker_role, s.text, s.raw
           FROM speeches s
          WHERE s.source_system='legnb-hansard' AND s.text IS NOT NULL
-           AND s.text ~* 'motion (is\\s+)?(carried|defeated|adopted|agreed to|lost|adopt[ée]e?|rejet[ée]e?)'
-           AND s.text ~* 'all (those|in) in favou?r|all (those )?opposed|mise aux voix|on division|division called'
+           AND (
+             (s.text ~* 'motion (is\\s+)?(carried|defeated|adopted|agreed to|lost|adopt[ée]e?|rejet[ée]e?)'
+              AND s.text ~* 'all (those|in) in favou?r|all (those )?opposed|mise aux voix|on division|division called')
+             OR (s.text ~* 'recorded vote'
+                 AND s.text ~* '\\m(defeated|carried|adopted|negatived|withdrawn)\\M')
+             OR (s.text ~* 'vote nominal'
+                 AND s.text ~* '\\m(rejet|adoption|adopt[ée]e?|retrait|retir[ée]e?)\\M')
+           )
            {where_sittings}
          ORDER BY s.spoken_at, s.sequence
     """)

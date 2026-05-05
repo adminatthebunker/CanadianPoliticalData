@@ -61,9 +61,13 @@ _INLINE_OUTCOME_RE = re.compile(
 )
 
 # Procedural question-call (presence makes inline-outcome a real vote).
+# Two patterns combined: the main alternates wrap in \b…\b; "Opposed?" gets
+# special handling because the trailing `?` punctuation can't anchor a \b.
 _QUESTION_CALL_RE = re.compile(
     r'\b(?:question (?:has been|is) called|all (?:those|in) (?:in\s+)?favou?r|'
-    r'all (?:those )?opposed|on division|hon\.?\s+members.*?(?:aye|yes|nay|no))\b',
+    r'all (?:those )?opposed|on division|hon\.?\s+members.*?(?:aye|yes|nay|no)|'
+    r'contrary minded|i hear (?:several|a few|the) n(?:o|ay)e?s?)\b'
+    r'|(?<![a-z])opposed\?',
     re.IGNORECASE | re.DOTALL,
 )
 
@@ -126,8 +130,12 @@ def _classify(text: str) -> Optional[_Detected]:
         )
 
     if _QUESTION_CALL_RE.search(text):
-        m = _INLINE_OUTCOME_RE.search(text)
-        if m:
+        # Speaker corrections sometimes restate the outcome mid-speech
+        # ("defeated. Oh, no, it's carried. Sorry, mea culpa."). Take the
+        # LAST inline match so the corrected outcome wins.
+        matches = list(_INLINE_OUTCOME_RE.finditer(text))
+        if matches:
+            m = matches[-1]
             outcome = re.sub(r'\s+', ' ', m.group("outcome").lower().strip())
             result = _RESULT_BY_OUTCOME.get(outcome, "passed")
             return _Detected(
@@ -280,8 +288,8 @@ async def extract_ab_votes(
            AND s.text IS NOT NULL
            AND (
              s.text ~* '\\[\\s*(?:the\\s+)?(?:motion|amendment|bill|question)\\s+(?:is\\s+)?(?:carried|defeated|adopted|negatived|withdrawn|agreed|lost|passed)'
-             OR (s.text ~* 'motion (is\\s+)?(carried|defeated|adopted|agreed to|lost)'
-                 AND s.text ~* 'question (has been|is) called|all (those|in) in favou?r')
+             OR (s.text ~* 'motion (is\\s+)?(carried|defeated|adopted|agreed to|lost|negatived)'
+                 AND s.text ~* 'question (has been|is) called|all (those|in) in favou?r|contrary minded|i hear (several|a few|the) n(o|ay)|opposed[?]')
            )
            {where_sittings}
          ORDER BY s.spoken_at, s.sequence
