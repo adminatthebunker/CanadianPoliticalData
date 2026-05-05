@@ -539,6 +539,14 @@ COMMANDS: dict[str, dict[str, Any]] = {
              "help": "Walk paginated /members/former-members and insert missing MLAs."},
         ],
     },
+    "ingest-sk-mlas": {
+        "description": "Upsert SK MLA roster from the Hansard speaker index (docs.legassembly.sk.ca/legdocs/Assembly/Debates/Indexes/{N}/{N}L-SP-full.html). Synthesises `sk_assembly_slug` (firstname-lastname) since SK exposes no stable per-MLA ID. Captures party, constituency, cabinet portfolio. Idempotent. Run before ingest-sk-hansard.",
+        "cli": "ingest-sk-mlas", "category": "hansard",
+        "args": [
+            {"name": "parliaments", "type": "str", "required": False, "default": "30",
+             "help": "Comma-separated SK parliament numbers (e.g. '29,30')."},
+        ],
+    },
     "ingest-nt-hansard": {
         "description": "Ingest NT Hansard from ntlegislativeassembly.ca. Discovery via paginated /documents-proceedings/hansard listing; per-sitting HTML at /hansard/hn{YYMMDD}. Speaker attribution by direct nt_mla_slug FK. Consensus government — no party, party_at_time=NULL.",
         "cli": "ingest-nt-hansard", "category": "hansard",

@@ -2178,6 +2178,44 @@ def cmd_ingest_nt_hansard(
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 
 
+@cli.command("ingest-sk-mlas")
+@click.option("--parliaments", default="30",
+              help="Comma-separated SK parliament numbers to fetch (e.g. '29,30'). Default: 30.")
+@click.pass_context
+def cmd_ingest_sk_mlas(ctx: click.Context, parliaments: str) -> None:
+    """Upsert SK MLA roster from the Hansard speaker index.
+
+    SK publishes no per-MLA stable identifier; we synthesise the slug
+    `firstname-lastname` and persist it as `politicians.sk_assembly_slug`.
+    The speaker index at docs.legassembly.sk.ca/legdocs/Assembly/Debates/
+    Indexes/{N}/{N}L-SP-full.html lists every MLA who has spoken during
+    the parliament along with party, constituency, session participation,
+    and cabinet portfolio.
+
+    Idempotent. Re-runs upsert via ON CONFLICT on sk_assembly_slug.
+    """
+    from .legislative.sk_mlas import ingest_sk_mlas as _ingest
+
+    parls = [int(p.strip()) for p in parliaments.split(",") if p.strip()]
+
+    async def _wrap(db: Database) -> None:
+        stats = await _ingest(db, parliaments=parls)
+        console.print(
+            f"[green]ingest-sk-mlas[/green]: "
+            f"parliaments={stats.parliaments_fetched} "
+            f"entries={stats.entries_parsed} "
+            f"inserted={stats.politicians_inserted} "
+            f"updated={stats.politicians_updated} "
+            f"failures={len(stats.failures)}"
+        )
+        if stats.failures:
+            console.print(
+                f"[yellow]sk_mlas warnings:[/yellow] "
+                f"{stats.failures[:5]}"
+            )
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
 @cli.command("ingest-nt-mlas")
 @click.option("--include-former/--no-include-former", default=True,
               help="Walk /members/former-members and insert any MLA missing from politicians.")
