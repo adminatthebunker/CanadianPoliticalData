@@ -547,6 +547,22 @@ COMMANDS: dict[str, dict[str, Any]] = {
              "help": "Comma-separated SK parliament numbers (e.g. '29,30')."},
         ],
     },
+    "ingest-sk-hansard": {
+        "description": "Ingest SK Hansard from docs.legassembly.sk.ca (Word HTML). Discovery via paginated /legislative-business/archive/; per-sitting at /legdocs/Assembly/Debates/{N}L{S}S/{YYYYMMDD}DebatesHTML.htm. Speaker attribution via synthesised sk_assembly_slug (run ingest-sk-mlas first).",
+        "cli": "ingest-sk-hansard", "category": "hansard",
+        "args": [
+            {"name": "limit_sittings", "type": "int", "required": False,
+             "help": "Cap to first N sittings (newest-first)."},
+            {"name": "since", "type": "str", "required": False,
+             "help": "Only ingest sittings on or after YYYY-MM-DD."},
+            {"name": "url", "type": "str", "required": False,
+             "help": "Bypass discovery; ingest one transcript URL."},
+            {"name": "delay", "type": "float", "required": False, "default": 1.0,
+             "help": "Seconds between per-sitting fetches."},
+            {"name": "max_archive_pages", "type": "int", "required": False,
+             "help": "Cap discovery walker (defensive)."},
+        ],
+    },
     "ingest-nt-hansard": {
         "description": "Ingest NT Hansard from ntlegislativeassembly.ca. Discovery via paginated /documents-proceedings/hansard listing; per-sitting HTML at /hansard/hn{YYMMDD}. Speaker attribution by direct nt_mla_slug FK. Consensus government — no party, party_at_time=NULL.",
         "cli": "ingest-nt-hansard", "category": "hansard",

@@ -2178,6 +2178,69 @@ def cmd_ingest_nt_hansard(
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 
 
+@cli.command("ingest-sk-hansard")
+@click.option("--limit-sittings", type=int, default=None,
+              help="Cap to first N sittings (newest-first ordering).")
+@click.option("--since", type=str, default=None,
+              help="Only ingest sittings on or after YYYY-MM-DD.")
+@click.option("--url", type=str, default=None,
+              help="Bypass discovery; ingest one transcript URL.")
+@click.option("--delay", type=float, default=1.0,
+              help="Seconds between per-sitting fetches.")
+@click.option("--max-archive-pages", type=int, default=None,
+              help="Cap discovery walker (defensive). Default: walk to empty.")
+@click.pass_context
+def cmd_ingest_sk_hansard(
+    ctx: click.Context, limit_sittings, since, url, delay, max_archive_pages,
+) -> None:
+    """Ingest SK Hansard from docs.legassembly.sk.ca.
+
+    Discovery walks the paginated archive at /legislative-business/archive/
+    and harvests every Assembly-debates HTML URL. Per-sitting URLs embed
+    parliament/session/date (e.g. 30L2S/20260504DebatesHTML.htm) so we
+    don't need to read body headers for those fields. Speakers are
+    attached to politicians via sk_assembly_slug — run ingest-sk-mlas
+    first.
+
+    Idempotent. UPSERT keys: (source_system='hansard-sk', source_url, sequence).
+    """
+    from .legislative.sk_hansard import ingest_sk_hansard as _ingest
+    from datetime import date as _Date
+
+    since_date = None
+    if since:
+        try:
+            since_date = _Date.fromisoformat(since)
+        except ValueError:
+            console.print(f"[red]invalid --since {since!r}; expected YYYY-MM-DD[/red]")
+            raise click.exceptions.Exit(2)
+
+    async def _wrap(db: Database) -> None:
+        stats = await _ingest(
+            db,
+            limit_sittings=limit_sittings,
+            since=since_date,
+            url=url,
+            delay=delay,
+            max_archive_pages=max_archive_pages,
+        )
+        console.print(
+            f"[green]ingest-sk-hansard[/green]: "
+            f"seen={stats.sittings_seen} fetched={stats.sittings_fetched} "
+            f"skipped={stats.sittings_skipped} "
+            f"speeches_inserted={stats.speeches_inserted} "
+            f"speeches_updated={stats.speeches_updated} "
+            f"sessions={len(stats.sessions_touched)} "
+            f"fetch_fail={len(stats.fetch_failures)} "
+            f"parse_fail={len(stats.parse_failures)}"
+        )
+        if stats.fetch_failures or stats.parse_failures:
+            for f in (stats.fetch_failures + stats.parse_failures)[:5]:
+                console.print(f"  [yellow]warn:[/yellow] {f}")
+
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
 @cli.command("ingest-sk-mlas")
 @click.option("--parliaments", default="30",
               help="Comma-separated SK parliament numbers to fetch (e.g. '29,30'). Default: 30.")
