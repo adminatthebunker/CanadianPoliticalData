@@ -254,7 +254,10 @@ INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) V
  '0 22 * * *', true, 'daily-ingest-rollout'),
 ('SK Hansard daily ingest',
  'ingest-sk-hansard', '{"limit_sittings": 5}'::jsonb,
- '15 22 * * *', true, 'daily-ingest-rollout');
+ '15 22 * * *', true, 'daily-ingest-rollout'),
+('SK presiding speaker resolver',
+ 'resolve-presiding-speakers', '{"province": "SK"}'::jsonb,
+ '30 22 * * *', true, 'daily-ingest-rollout');
 
 -- ─── Post-ingest semantic layer (08:00 UTC = 02:00 MDT) ─────────────
 -- Cross-jurisdictional. Last per-jurisdiction Hansard ingest (NT/NU at

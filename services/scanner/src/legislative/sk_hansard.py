@@ -277,8 +277,11 @@ async def _upsert_speech(
 ) -> str:
     raw_json = orjson.dumps(raw_payload).decode("utf-8")
     speech_type = "hansard"
+    # Preserve the parser's distinct roles — the presiding-officer resolver
+    # only attributes role='speaker' (main Speaker chair) via SPEAKER_ROSTER,
+    # not deputy_speaker / chair / deputy_chair (separate rotating-role
+    # people). Collapsing them all to 'speaker' here would mis-attribute.
     speaker_role = (
-        "speaker" if speech.is_speaker_role else
         "chorus" if speech.is_chorus else
         speech.speaker_role or "member"
     )

@@ -232,6 +232,25 @@ SPEAKER_ROSTER: dict[str, list[SpeakerTerm]] = {
         SpeakerTerm("Frederick Blake Jr.", "Frederick",  "Blake",    date(2019,  1,  1), date(2023, 12,  7)),  # 19th
         SpeakerTerm("Shane Thompson",      "Shane",      "Thompson", date(2023, 12,  7), None),                # 20th
     ],
+    # Saskatchewan: Speakers since the 23rd Legislative Assembly (1995-).
+    # Pre-30th-leg Hansard uses role-only "The Speaker" labels — this
+    # roster provides date-windowed FK attribution. Year-precision dates
+    # for older entries (Wikipedia gives only year-level transitions);
+    # 29L+30L use first-sitting-day precision for accuracy on ingested
+    # speeches. Source: Wikipedia "Speaker of the Legislative Assembly
+    # of Saskatchewan" + cross-checked against politicians.extras
+    # ->>'cabinet_role'='Speaker' from the speaker-index ingester.
+    "SK": [
+        SpeakerTerm("Glenn Hagel",     "Glenn",   "Hagel",      date(1996,  1,  1), date(1999,  1,  1)),  # 23L
+        SpeakerTerm("Ron Osika",       "Ron",     "Osika",      date(1999,  1,  1), date(2001,  1,  1)),  # 24L
+        SpeakerTerm("Myron Kowalsky",  "Myron",   "Kowalsky",   date(2001,  1,  1), date(2007,  1,  1)),  # 25L
+        SpeakerTerm("Don Toth",        "Don",     "Toth",       date(2007,  1,  1), date(2011,  1,  1)),  # 26L
+        SpeakerTerm("Dan D'Autremont", "Dan",     "D'Autremont", date(2011,  1,  1), date(2016,  1,  1)),  # 27L
+        SpeakerTerm("Corey Tochor",    "Corey",   "Tochor",     date(2016,  1,  1), date(2018,  1,  1)),  # 28L (1st)
+        SpeakerTerm("Mark Docherty",   "Mark",    "Docherty",   date(2018,  1,  1), date(2020, 12,  7)),  # 28L (2nd)
+        SpeakerTerm("Randy Weekes",    "Randy",   "Weekes",     date(2020, 12,  7), date(2024, 11, 25)),  # 29L
+        SpeakerTerm("Todd Goudy",      "Todd",    "Goudy",      date(2024, 11, 25), None),                # 30L
+    ],
 }
 
 
@@ -430,6 +449,12 @@ _SPEAKER_ROLE_BY_PROVINCE: dict[str, tuple[str, ...]] = {
     # — they're rare in modern transcripts and the parens-name path
     # resolves them directly when the markup includes the name inline.
     "ON": ("The Speaker",),
+    # Saskatchewan: sk_hansard parser emits 'speaker' (lowercase) for
+    # the main Speaker chair — both name-bearing ("Speaker Goudy", 30L)
+    # and role-only ("The Speaker", 29L). 'deputy_speaker' / 'chair' /
+    # 'deputy_chair' are deliberately excluded — they're separate
+    # rotating-role people whose attribution requires its own roster.
+    "SK": ("speaker",),
 }
 
 # Back-compat default for any province without an explicit mapping.

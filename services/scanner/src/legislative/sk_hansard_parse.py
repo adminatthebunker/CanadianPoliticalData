@@ -100,7 +100,8 @@ def _slug_from_name(first: str, last: str) -> str:
 @dataclass
 class SpeakerMeta:
     raw: str
-    role: Optional[str]            # 'speaker' / 'deputy_speaker' / 'minister' / 'member' / 'chorus' / 'unknown'
+    role: Optional[str]            # 'speaker' / 'deputy_speaker' / 'chair' / 'deputy_chair' /
+                                   # 'minister' / 'member' / 'chorus' / 'unknown'
     candidate_slug: Optional[str]
     last_name: Optional[str]
     first_name: Optional[str]
@@ -130,8 +131,26 @@ def classify_speaker(raw_text: str) -> Optional[SpeakerMeta]:
                            last_name=None, first_name=None,
                            is_speaker_role=False, is_chorus=True)
 
-    if re.match(r"^the\s+(deputy\s+)?speaker\b", text, re.IGNORECASE) or \
-       re.match(r"^(the\s+)?(deputy\s+)?chair\b", text, re.IGNORECASE):
+    # Role-only labels — distinct roles for distinct people. The main
+    # Speaker is attributable via SPEAKER_ROSTER; the Deputy Speaker /
+    # Chair / Deputy Chair are separate (rotating-role) people who
+    # need their own roster work — those rows stay unattributed for now.
+    # Important: keep these branches separate so the resolver's role-
+    # tuple filter (`("speaker",)` for SK) doesn't sweep deputy/chair
+    # turns into the main Speaker's bucket.
+    if re.match(r"^the\s+deputy\s+chair(\s+of\s+committees?)?\b", text, re.IGNORECASE):
+        return SpeakerMeta(raw=text, role="deputy_chair", candidate_slug=None,
+                           last_name=None, first_name=None,
+                           is_speaker_role=True, is_chorus=False)
+    if re.match(r"^the\s+deputy\s+speaker\b", text, re.IGNORECASE):
+        return SpeakerMeta(raw=text, role="deputy_speaker", candidate_slug=None,
+                           last_name=None, first_name=None,
+                           is_speaker_role=True, is_chorus=False)
+    if re.match(r"^(the\s+)?chair\b", text, re.IGNORECASE):
+        return SpeakerMeta(raw=text, role="chair", candidate_slug=None,
+                           last_name=None, first_name=None,
+                           is_speaker_role=True, is_chorus=False)
+    if re.match(r"^the\s+speaker\b", text, re.IGNORECASE):
         return SpeakerMeta(raw=text, role="speaker", candidate_slug=None,
                            last_name=None, first_name=None,
                            is_speaker_role=True, is_chorus=False)
@@ -142,6 +161,36 @@ def classify_speaker(raw_text: str) -> Optional[SpeakerMeta]:
                            last_name=m.group(1).strip(), first_name=None,
                            is_speaker_role=True, is_chorus=False)
 
+    # "Deputy Chair (of Committees) {Lastname}" — committee chair with name.
+    m = re.match(
+        r"^deputy\s+chair(?:\s+of\s+committees?)?\s+"
+        r"(?P<init>[A-Z]\.?\s*)?(?P<last>[A-Z][\w'\-]+)\.?$",
+        text, re.IGNORECASE,
+    )
+    if m:
+        last = m.group("last").strip()
+        init = m.group("init")
+        first = (init.strip().rstrip(".") + ".") if init and init.strip() else None
+        return SpeakerMeta(
+            raw=text, role="deputy_chair", candidate_slug=None,
+            last_name=last, first_name=first,
+            is_speaker_role=True, is_chorus=False,
+        )
+    # "Chair {Initial.} {Lastname}" — committee chair with name.
+    m = re.match(
+        r"^chair\s+(?P<init>[A-Z]\.?\s*)?(?P<last>[A-Z][\w'\-]+)\.?$",
+        text, re.IGNORECASE,
+    )
+    if m:
+        last = m.group("last").strip()
+        init = m.group("init")
+        first = (init.strip().rstrip(".") + ".") if init and init.strip() else None
+        return SpeakerMeta(
+            raw=text, role="chair", candidate_slug=None,
+            last_name=last, first_name=first,
+            is_speaker_role=True, is_chorus=False,
+        )
+
     m = re.match(
         r"^deputy\s+speaker\s+(?P<init>[A-Z])\.?\s*(?P<last>[A-Z][\w'\-]+)\.?$",
         text, re.IGNORECASE,
@@ -150,7 +199,7 @@ def classify_speaker(raw_text: str) -> Optional[SpeakerMeta]:
         return SpeakerMeta(
             raw=text, role="deputy_speaker", candidate_slug=None,
             last_name=m.group("last").strip(),
-            first_name=m.group("init").upper() + ".",  # carries initial for FK fallback
+            first_name=m.group("init").upper() + ".",
             is_speaker_role=True, is_chorus=False,
         )
     m = re.match(r"^deputy\s+speaker\s+(?P<last>[A-Z][\w'\-]+)\.?$", text, re.IGNORECASE)

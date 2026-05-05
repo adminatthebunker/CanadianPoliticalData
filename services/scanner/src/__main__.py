@@ -3709,7 +3709,7 @@ def cmd_refresh_coverage_stats(ctx: click.Context) -> None:
 
 
 @cli.command("resolve-presiding-speakers")
-@click.option("--province", type=click.Choice(["AB", "BC", "QC", "MB", "NB", "NL", "NS", "ON", "NT"]), default="AB",
+@click.option("--province", type=click.Choice(["AB", "BC", "QC", "MB", "NB", "NL", "NS", "ON", "NT", "SK"]), default="AB",
               help="Jurisdiction whose Speaker roster to seed + resolve.")
 @click.option("--limit", type=int, default=None,
               help="Cap candidate speeches scanned (smoke-test aid).")
