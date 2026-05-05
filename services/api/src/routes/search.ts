@@ -4,6 +4,13 @@ import { config } from "../config.js";
 import { pool, query, queryOne } from "../db.js";
 import { resolvePhotoUrl } from "../lib/photos.js";
 import { requireUser, getUser } from "../middleware/user-auth.js";
+import {
+  registerSearchTelemetry,
+  recordTeiCall,
+  markAnchorQuery,
+  markHasFilters,
+  recordResultCount,
+} from "../lib/search-telemetry.js";
 
 // Instruction prefix for Qwen3-Embedding-0.6B query encoding.
 // Indexing pipeline (scanner/src/legislative/speech_embedder.py) writes
@@ -11,6 +18,67 @@ import { requireUser, getUser } from "../middleware/user-auth.js";
 // drops NDCG@10 from 0.43 to 0.22 per services/embed/eval/REPORT.md.
 const INSTRUCT_PREFIX =
   "Instruct: Given a parliamentary search query, retrieve relevant Canadian Hansard speech excerpts\nQuery: ";
+
+// Cap for threshold-count queries. "How many vectors fall within cosine
+// distance D of this query?" can't be answered by any precomputed index
+// — it's a per-query property of the corpus — so the planner falls back
+// to a sequential cosine-distance evaluation over the structural filter
+// set. On q-only / anchor-only searches against the full corpus that's
+// ~15s and routinely exceeds the 60s nginx wall, leaving the UI to
+// render its "Many matches" error fallback.
+//
+// The fix flips the count into a shape HNSW *can* serve: ORDER BY <=>
+// LIMIT N — the same pattern runTimelineSearch's main SELECT relies on
+// — gives us the top-N nearest neighbours in milliseconds. We then
+// count how many of those landed inside the threshold. Two outcomes:
+//
+//   • count < CAP+1 → exact total. Anything beyond the Nth nearest
+//     can't be inside the threshold either, since distances are
+//     monotonically increasing in the sorted set.
+//   • count == CAP+1 → at least CAP matches; report capped (UI renders
+//     "10,000+"). We deliberately don't attempt to refine further;
+//     above 10k the exact integer doesn't drive any user decision.
+const COUNT_CAP = 10_000;
+
+interface ThresholdCount {
+  total: number;
+  capped: boolean;
+}
+
+// `baseWhere` / `baseParams` must already include any anchor-exclusion
+// clause — caller has visibility into whether an anchor is active and
+// handles that append before calling. Helper just tacks on the vector,
+// max-distance, and LIMIT params.
+async function countWithinThreshold(
+  baseWhere: string,
+  baseParams: (string | number | string[])[],
+  vecLiteral: string,
+  maxDistance: number,
+): Promise<ThresholdCount> {
+  const params: (string | number | string[])[] = [
+    ...baseParams,
+    vecLiteral,
+    maxDistance,
+    COUNT_CAP + 1,
+  ];
+  const vecIdx = baseParams.length + 1;
+  const distIdx = baseParams.length + 2;
+  const limitIdx = baseParams.length + 3;
+  const row = await queryOne<{ n: number }>(
+    `SELECT COUNT(*)::int AS n FROM (
+       SELECT (sc.embedding <=> $${vecIdx}::vector)::float AS d
+         FROM speech_chunks sc
+        WHERE ${baseWhere}
+        ORDER BY sc.embedding <=> $${vecIdx}::vector
+        LIMIT $${limitIdx}
+     ) t
+     WHERE d <= $${distIdx}`,
+    params,
+  );
+  const n = row?.n ?? 0;
+  if (n > COUNT_CAP) return { total: COUNT_CAP, capped: true };
+  return { total: n, capped: false };
+}
 
 // Shared filter fields for /speeches and /facets. Both handlers accept
 // the same shape; /speeches adds page+limit on top.
@@ -201,6 +269,20 @@ const QUERY_CACHE_MAX = 500;
 const QUERY_CACHE_TTL_MS = 60_000;
 const queryCache = new Map<string, { vec: number[]; expiresAt: number }>();
 
+// Tagged error for "we couldn't reach / got a non-OK from TEI". The
+// app-level setErrorHandler in index.ts maps this to a 503 with a stable
+// `code: "embedding_service_unavailable"` body, instead of the bare
+// undici `Error("fetch failed")` which Fastify would otherwise surface
+// as a generic 500 with no useful signal to the frontend.
+export class EmbeddingServiceUnavailableError extends Error {
+  readonly statusCode = 503;
+  readonly code = "embedding_service_unavailable";
+  constructor(message: string, readonly cause?: unknown) {
+    super(message);
+    this.name = "EmbeddingServiceUnavailableError";
+  }
+}
+
 export async function encodeQuery(text: string): Promise<number[]> {
   const cacheKey = text.trim().toLowerCase();
   const now = Date.now();
@@ -208,18 +290,34 @@ export async function encodeQuery(text: string): Promise<number[]> {
   if (hit && hit.expiresAt > now) {
     queryCache.delete(cacheKey);
     queryCache.set(cacheKey, hit);
+    recordTeiCall(0, true);
     return hit.vec;
   }
   if (hit) queryCache.delete(cacheKey);
 
   const wrapped = `${INSTRUCT_PREFIX}${text}`;
-  const res = await fetch(`${config.teiUrl}/embed`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ inputs: [wrapped], normalize: true }),
-  });
+  const t0 = Date.now();
+  let res: Response;
+  try {
+    res = await fetch(`${config.teiUrl}/embed`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ inputs: [wrapped], normalize: true }),
+    });
+  } catch (err) {
+    recordTeiCall(Date.now() - t0, false);
+    throw new EmbeddingServiceUnavailableError(
+      "embedding service unreachable",
+      err,
+    );
+  }
   if (!res.ok) {
-    throw new Error(`TEI returned ${res.status}: ${await res.text().catch(() => "")}`);
+    recordTeiCall(Date.now() - t0, false);
+    const body = await res.text().catch(() => "");
+    throw new EmbeddingServiceUnavailableError(
+      `embedding service returned ${res.status}`,
+      body,
+    );
   }
   const data: unknown = await res.json();
   // TEI default: bare [[...floats...]]. OpenAI-compat: {data: [{embedding: [...]}]}.
@@ -237,6 +335,7 @@ export async function encodeQuery(text: string): Promise<number[]> {
     if (oldest !== undefined) queryCache.delete(oldest);
   }
   queryCache.set(cacheKey, { vec, expiresAt: now + QUERY_CACHE_TTL_MS });
+  recordTeiCall(Date.now() - t0, false);
   return vec;
 }
 
@@ -401,6 +500,9 @@ async function handleGroupedByPolitician(
   if (!q && !input.anchor_chunk_id) {
     return reply.badRequest("group_by=politician requires a semantic query (`q`) or `anchor_chunk_id`");
   }
+
+  if (input.anchor_chunk_id) markAnchorQuery();
+  markHasFilters(hasAnyStructuralFilter(input));
 
   const { whereSql: baseWhereSql, filterParams } = buildFilterWhere(input);
   const resolved = await resolveSearchVector(input);
@@ -677,6 +779,7 @@ async function handleGroupedByPolitician(
     });
   }
 
+  recordResultCount(groups.length);
   return {
     mode: "grouped",
     group_by: "politician" as const,
@@ -717,6 +820,9 @@ async function runTimelineSearch(
   const includeCount = options.includeCount !== false;
   const offset = (page - 1) * limit;
 
+  if (input.anchor_chunk_id) markAnchorQuery();
+  markHasFilters(hasAnyStructuralFilter(input));
+
   const { whereSql: baseWhereSql, filterParams } = buildFilterWhere(input);
 
   // Resolve the search vector — text query, anchor chunk, or recent-mode.
@@ -726,7 +832,7 @@ async function runTimelineSearch(
   if (resolved === "missing_anchor") {
     const reply = options.reply;
     if (reply) return reply.notFound("anchor_not_found");
-    return { items: [], page: 1, limit, total: 0, pages: 0, mode: "recent" as const };
+    return { items: [], page: 1, limit, total: 0, capped: false, pages: 0, mode: "recent" as const };
   }
   let queryVecLiteral: string | null = null;
   let excludeChunkId: string | null = null;
@@ -750,36 +856,32 @@ async function runTimelineSearch(
     hasVector && minSimilarity != null && minSimilarity > 0;
   const maxDistance = applyThreshold ? 1 - (minSimilarity as number) : null;
 
-  // Exact count — no cap. The cheap path (no threshold) is just
-  // COUNT(*) over the structural filter set, which Postgres answers
-  // from indexes in <100ms even at corpus scale. The expensive path
-  // (threshold set) requires evaluating cosine distance for each row
-  // that passes the structural filters; cost scales with the filter
-  // set size and on a q-only query degrades to ~15s. Callers that need
-  // results-fast can set include_count=false and fetch the total from
-  // /search/speeches/count in parallel — the results query is HNSW-
-  // bounded (~50-200ms) regardless of threshold.
+  // Two count paths. The structural-only path (no vector / threshold=0)
+  // is a plain COUNT(*) over the filter set — Postgres answers from
+  // indexes in <100ms at corpus scale. The threshold path delegates to
+  // countWithinThreshold(), which uses the HNSW-friendly LIMIT trick
+  // and reports capped=true when the true count exceeds COUNT_CAP.
+  // Callers that don't need a count at all should set include_count=false
+  // and let the frontend stage /search/speeches/count off in parallel.
   let total: number | null = null;
+  let capped = false;
   if (includeCount) {
-    // filterParams already carries the anchor-exclusion param (if any)
-    // appended above. The threshold branch adds the vector+distance
-    // pair on top so anchor mode can also threshold-count.
-    const countParams: (string | number | string[])[] = [...filterParams];
-    let countWhere = whereSql;
     if (applyThreshold) {
-      countParams.push(queryVecLiteral as string);
-      const cvIdx = countParams.length;
-      countParams.push(maxDistance as number);
-      const cdIdx = countParams.length;
-      countWhere = `${whereSql} AND (sc.embedding <=> $${cvIdx}::vector) <= $${cdIdx}`;
+      const result = await countWithinThreshold(
+        whereSql,
+        filterParams,
+        queryVecLiteral as string,
+        maxDistance as number,
+      );
+      total = result.total;
+      capped = result.capped;
+    } else {
+      const countRow = await queryOne<{ n: number }>(
+        `SELECT COUNT(*)::int AS n FROM speech_chunks sc WHERE ${whereSql}`,
+        filterParams,
+      );
+      total = countRow?.n ?? 0;
     }
-    const countRow = await queryOne<{ n: number }>(
-      `SELECT COUNT(*)::int AS n
-         FROM speech_chunks sc
-        WHERE ${countWhere}`,
-      countParams,
-    );
-    total = countRow?.n ?? 0;
   }
 
   // Build the main SELECT.
@@ -909,17 +1011,21 @@ async function runTimelineSearch(
     },
   }));
 
+  recordResultCount(items.length);
   return {
     items,
     page,
     limit,
     total,
+    capped,
     pages: total != null ? Math.max(1, Math.ceil(total / limit)) : null,
     mode: (hasVector ? "semantic" : "recent") as "semantic" | "recent",
   };
 }
 
 export default async function searchRoutes(app: FastifyInstance) {
+  registerSearchTelemetry(app);
+
   app.get("/speeches", async (req, reply) => {
     const parsed = searchQuery.safeParse(req.query);
     if (!parsed.success) return reply.badRequest(parsed.error.message);
@@ -974,6 +1080,9 @@ export default async function searchRoutes(app: FastifyInstance) {
       return reply.badRequest("provide `q`, `anchor_chunk_id`, or at least one filter (politician_ids, party, level, province, from, to, parliament+session, speech_type, politician_active)");
     }
 
+    if (parsed.data.anchor_chunk_id) markAnchorQuery();
+    markHasFilters(hasAnyStructuralFilter(parsed.data));
+
     const { whereSql: baseWhereSql, filterParams } = buildFilterWhere(parsed.data);
     const effectiveMin = parsed.data.min_similarity ?? 0.5;
 
@@ -988,21 +1097,20 @@ export default async function searchRoutes(app: FastifyInstance) {
       countParams.push(resolved.excludeChunkId);
       whereSql = `${baseWhereSql} AND sc.id != $${countParams.length}::uuid`;
     }
-    let countWhere = whereSql;
     if (applyThreshold && resolved) {
-      countParams.push(toPgVector(resolved.vec));
-      const cvIdx = countParams.length;
-      countParams.push(1 - effectiveMin);
-      const cdIdx = countParams.length;
-      countWhere = `${whereSql} AND (sc.embedding <=> $${cvIdx}::vector) <= $${cdIdx}`;
+      const result = await countWithinThreshold(
+        whereSql,
+        countParams,
+        toPgVector(resolved.vec),
+        1 - effectiveMin,
+      );
+      return result;
     }
     const row = await queryOne<{ n: number }>(
-      `SELECT COUNT(*)::int AS n
-         FROM speech_chunks sc
-        WHERE ${countWhere}`,
+      `SELECT COUNT(*)::int AS n FROM speech_chunks sc WHERE ${whereSql}`,
       countParams,
     );
-    return { total: row?.n ?? 0 };
+    return { total: row?.n ?? 0, capped: false };
   });
 
   // Authenticated deep-dive: every quote one politician has on the query.
@@ -1069,6 +1177,9 @@ export default async function searchRoutes(app: FastifyInstance) {
     ) {
       return reply.badRequest("provide `q`, `anchor_chunk_id`, or at least one filter to aggregate");
     }
+
+    if (parsed.data.anchor_chunk_id) markAnchorQuery();
+    markHasFilters(hasAnyStructuralFilter(parsed.data));
 
     const { whereSql: baseWhereSql, filterParams } = buildFilterWhere(parsed.data);
     const params: (string | number | string[])[] = [...filterParams];

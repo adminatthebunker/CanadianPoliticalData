@@ -53,6 +53,11 @@ export interface TimelineSearchResponse {
    *  off via /search/speeches/count to avoid blocking results on the
    *  threshold-COUNT seq scan). Filled in once the count fetch lands. */
   total: number | null;
+  /** True when the count was capped (only meaningful for threshold
+   *  searches — the API caps at 10,000 to avoid the unbounded seq scan
+   *  on "count vectors within radius" queries). UI should render
+   *  "{total}+ matches" rather than the exact integer. */
+  capped: boolean | null;
   /** Same nullability as `total` — derived once the count is known. */
   pages: number | null;
 }
@@ -451,13 +456,22 @@ export function useSpeechSearchMeta(): AsyncState<SpeechSearchMeta> {
 
 export interface SpeechSearchCount {
   total: number;
+  /** True when the API stopped counting at COUNT_CAP (10,000). UI
+   *  should render "{total}+ matches" instead of the exact integer. */
+  capped: boolean;
 }
 
-const countCache = new Map<string, { total: number; expiresAt: number }>();
+interface CountCacheEntry {
+  total: number;
+  capped: boolean;
+  expiresAt: number;
+}
+
+const countCache = new Map<string, CountCacheEntry>();
 const COUNT_CACHE_MAX = 30;
 const COUNT_CACHE_TTL_MS = 60_000;
 
-function getCachedCount(qs: string): number | null {
+function getCachedCount(qs: string): SpeechSearchCount | null {
   const hit = countCache.get(qs);
   if (!hit) return null;
   if (hit.expiresAt <= Date.now()) {
@@ -466,15 +480,19 @@ function getCachedCount(qs: string): number | null {
   }
   countCache.delete(qs);
   countCache.set(qs, hit);
-  return hit.total;
+  return { total: hit.total, capped: hit.capped };
 }
 
-function setCachedCount(qs: string, total: number): void {
+function setCachedCount(qs: string, value: SpeechSearchCount): void {
   if (countCache.size >= COUNT_CACHE_MAX) {
     const oldest = countCache.keys().next().value;
     if (oldest !== undefined) countCache.delete(oldest);
   }
-  countCache.set(qs, { total, expiresAt: Date.now() + COUNT_CACHE_TTL_MS });
+  countCache.set(qs, {
+    total: value.total,
+    capped: value.capped,
+    expiresAt: Date.now() + COUNT_CACHE_TTL_MS,
+  });
 }
 
 export function useSpeechSearchCount(
@@ -486,7 +504,7 @@ export function useSpeechSearchCount(
   const [state, setState] = useState<AsyncState<SpeechSearchCount>>(() => {
     if (!enabled) return { data: null, error: null, loading: false };
     const cached = getCachedCount(qs);
-    if (cached != null) return { data: { total: cached }, error: null, loading: false };
+    if (cached != null) return { data: cached, error: null, loading: false };
     return { data: null, error: null, loading: true };
   });
 
@@ -500,7 +518,7 @@ export function useSpeechSearchCount(
     }
     const cached = getCachedCount(qs);
     if (cached != null) {
-      setState({ data: { total: cached }, error: null, loading: false });
+      setState({ data: cached, error: null, loading: false });
       return;
     }
     let cancelled = false;
@@ -524,8 +542,9 @@ export function useSpeechSearchCount(
           });
           return;
         }
-        const data = (await res.json()) as SpeechSearchCount;
-        setCachedCount(qs, data.total);
+        const raw = (await res.json()) as { total: number; capped?: boolean };
+        const data: SpeechSearchCount = { total: raw.total, capped: raw.capped ?? false };
+        setCachedCount(qs, data);
         setState({ data, error: null, loading: false });
       })
       .catch((err: Error) => {

@@ -358,6 +358,11 @@ export default function HansardSearchPage() {
   // "still pending" as null so the UI can render a "Counting…" cue.
   const total: number | null =
     countData?.total ?? timeline?.total ?? null;
+  // True when the API stopped counting at COUNT_CAP (10,000). UI renders
+  // "{total}+ matches" instead of an exact integer. Threshold counts only
+  // — structural-only counts come back exact.
+  const totalCapped: boolean =
+    countData?.capped ?? timeline?.capped ?? false;
   const limit = timeline?.limit ?? 20;
   const pages: number | null =
     total != null ? Math.max(1, Math.ceil(total / limit)) : null;
@@ -402,7 +407,9 @@ export default function HansardSearchPage() {
       }
       const countFragment =
         total != null
-          ? `${total.toLocaleString()} ${total === 1 ? "match" : "matches"}`
+          ? totalCapped
+            ? `${total.toLocaleString()}+ matches`
+            : `${total.toLocaleString()} ${total === 1 ? "match" : "matches"}`
           : "Many matches";
       return order ? `${countFragment} · ${order}` : countFragment;
     }
