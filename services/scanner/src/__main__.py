@@ -3782,6 +3782,44 @@ def cmd_refresh_coverage_stats(ctx: click.Context) -> None:
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 
 
+@cli.command("resolve-bc-allcaps")
+@click.option("--limit", type=int, default=None,
+              help="Cap candidate speeches scanned (smoke-test aid).")
+@click.pass_context
+def cmd_resolve_bc_allcaps(ctx: click.Context, limit: Optional[int]) -> None:
+    """Resolve BC pre-1990 ALL-CAPS speaker labels.
+
+    Targets `MR. G.S. WALLACE (Oak Bay)` / `HON. D. BARRETT (Premier)`
+    shape that the existing `resolve-bc-speakers-dated` extracts the
+    constituency-in-parens as the surname (wrong). Parses honorific +
+    initials + lastname + parens-hint, then FK-matches against
+    politician_terms by date-windowed lastname with constituency or
+    first-initial disambiguation when surname-only is ambiguous.
+
+    Idempotent. Re-runs no-op since the WHERE clause excludes already-
+    resolved rows.
+    """
+    from .legislative.bc_allcaps_resolver import resolve_bc_allcaps
+
+    async def _wrap(db: Database) -> None:
+        stats = await resolve_bc_allcaps(db, limit=limit)
+        console.print(
+            f"[green]resolve-bc-allcaps[/green]: "
+            f"scanned={stats.scanned} parsed={stats.parsed} "
+            f"by_riding={stats.resolved_by_riding} "
+            f"by_initial={stats.resolved_by_initial} "
+            f"by_lastname={stats.resolved_by_lastname} "
+            f"still_ambiguous={stats.still_ambiguous} "
+            f"no_term_match={stats.no_term_match} "
+            f"no_parse={stats.no_parse}"
+        )
+        if stats.miss_samples:
+            console.print("[yellow]parse-fail samples:[/yellow]")
+            for s in stats.miss_samples[:5]:
+                console.print(f"  {s}")
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
 @cli.command("resolve-inline-presiding-officers")
 @click.option("--province", type=str, default=None,
               help="2-letter code (AB/BC/QC/...) to scope the run. Default: all provinces.")

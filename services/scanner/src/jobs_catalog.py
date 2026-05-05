@@ -539,6 +539,14 @@ COMMANDS: dict[str, dict[str, Any]] = {
              "help": "Walk paginated /members/former-members and insert missing MLAs."},
         ],
     },
+    "resolve-bc-allcaps": {
+        "description": "BC pre-1990 ALL-CAPS speaker resolver — parses `MR. G.S. WALLACE (Oak Bay)` / `HON. D. BARRETT (Premier)` shape that resolve-bc-speakers-dated mishandles (extracts constituency-in-parens as surname). Date-windowed FK match against politician_terms with constituency / first-initial disambiguation. One-shot historical backfill — no daily schedule needed.",
+        "cli": "resolve-bc-allcaps", "category": "hansard",
+        "args": [
+            {"name": "limit", "type": "int", "required": False,
+             "help": "Cap candidate speeches scanned (smoke-test aid)."},
+        ],
+    },
     "resolve-inline-presiding-officers": {
         "description": "Tier-2 attribution Pass 1 — extract names from parenthesised presiding-officer labels (e.g. `The Deputy Speaker (Mr. Bas Balkissoon)`) and FK-match against politicians within the same province. Cross-jurisdictional, idempotent. Sister of resolve-presiding-speakers.",
         "cli": "resolve-inline-presiding-officers", "category": "hansard",
