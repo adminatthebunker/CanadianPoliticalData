@@ -55,10 +55,15 @@ HEADERS = {
 # with split responsibilities) or trailing punctuation after the
 # constituency. Capture everything up to </a> as `remainder` and pull
 # session participation + cabinet role out of it post-match.
+#
+# Honorifics: 30th-leg index uses bare names (only Hon./Dr. as prefix).
+# Older legislatures (29L and below) sometimes use Mr./Ms./Mrs./Miss
+# prefixes ("Goudy, Mr. Todd"). Capture all of them so the synthesised
+# slug stays clean (todd-goudy, not mr-todd-goudy).
 _ENTRY_RE = re.compile(
     r"<a\s+href='[^']+'>"
     r"(?P<last>[^,<]+),\s+"
-    r"(?P<honorific>Hon\.|Dr\.)?\s*"
+    r"(?P<honorific>Hon\.|Dr\.|Mr\.|Mrs\.|Ms\.|Miss)?\s*"
     r"(?P<first>[^(<]+?)\s*"
     r"\((?P<party>[^,)]+),\s*(?P<constituency>[^)]+)\)"
     r"(?P<remainder>.*?)"
@@ -159,7 +164,13 @@ def _parse_index(html: str) -> list[SKMember]:
             continue
         seen.add(slug)
 
-        display = f"{honorific + ' ' if honorific else ''}{first} {last}".strip()
+        # Only "Hon." / "Dr." flag a meaningful prefix on display name
+        # (cabinet minister / honorary title). "Mr./Ms./Mrs./Miss" are
+        # editorial conventions in older indexes — drop them.
+        prefix = ""
+        if honorific and honorific.lower().startswith(("hon", "dr")):
+            prefix = f"{honorific} "
+        display = f"{prefix}{first} {last}".strip()
 
         members.append(SKMember(
             slug=slug, last_name=last, first_name=first,
