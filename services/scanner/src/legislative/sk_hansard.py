@@ -42,6 +42,8 @@ import orjson
 
 from ..db import Database
 from .sk_hansard_parse import parse_hansard_html, ParsedSpeech, SittingMeta
+from .sk_hansard_pdf_parse import extract_speeches_from_text, ParsedSpeech as PDFParsedSpeech
+from .pdf_utils import pdftotext as _pdftotext
 
 log = logging.getLogger(__name__)
 
@@ -57,13 +59,26 @@ HEADERS = {
 
 # URL extracted from the archive listing. Filename pattern carries the
 # parliament/session/date — e.g.
-#   https://docs.legassembly.sk.ca/legdocs/Assembly/Debates/30L2S/20260504DebatesHTML.htm
-_ASSEMBLY_HANSARD_RE = re.compile(
+#   …/Assembly/Debates/30L2S/20260504DebatesHTML.htm        (HTML, current era)
+#   …/Assembly/Debates/29L1S/20201207Debates.pdf            (PDF, main sitting)
+#   …/Assembly/Debates/29L1S/20201201Debates-EVE.pdf        (PDF, evening sitting)
+#   …/Assembly/Debates/29L1S/20221026Debates-AM.pdf         (PDF, morning sitting)
+# AM/EVE are SEPARATE sittings (not duplicates) on the same date — each
+# gets its own SittingRef so they're stored as distinct rows.
+_ASSEMBLY_HANSARD_HTML_RE = re.compile(
     r"https://docs\.legassembly\.sk\.ca/legdocs/Assembly/Debates/"
     r"(?P<parl>\d+)L(?P<sess>\d+)S/"
     r"(?P<ymd>\d{8})DebatesHTML\.htm",
     re.IGNORECASE,
 )
+_ASSEMBLY_HANSARD_PDF_RE = re.compile(
+    r"https://docs\.legassembly\.sk\.ca/legdocs/Assembly/Debates/"
+    r"(?P<parl>\d+)L(?P<sess>\d+)S/"
+    r"(?P<ymd>\d{8})Debates(?P<suffix>-AM|-EVE)?\.pdf",
+    re.IGNORECASE,
+)
+# Back-compat alias — older imports / tests reference this name.
+_ASSEMBLY_HANSARD_RE = _ASSEMBLY_HANSARD_HTML_RE
 
 
 # ── Discovery ──────────────────────────────────────────────────────
@@ -75,6 +90,8 @@ class SittingRef:
     session: int
     sitting_date: Date
     canonical_url: str
+    fmt: str = "html"            # 'html' or 'pdf'
+    time_of_day: str = "main"    # 'main' / 'morning' / 'evening'
 
 
 @dataclass
@@ -91,11 +108,12 @@ class IngestStats:
 
 
 async def _fetch(client: httpx.AsyncClient, url: str) -> Optional[str]:
+    """Fetch HTML / archive listing as text (decoded). Skips PDFs — those
+    use _fetch_pdf_bytes to avoid mis-decoding binary as windows-1252.
+    """
     try:
         r = await client.get(url, timeout=REQUEST_TIMEOUT)
         r.raise_for_status()
-        # The archive listing pages are utf-8; the Hansard transcripts
-        # at docs.legassembly.sk.ca are windows-1252.
         if "docs.legassembly.sk.ca" in url:
             return r.content.decode("windows-1252", errors="replace")
         return r.text
@@ -104,12 +122,44 @@ async def _fetch(client: httpx.AsyncClient, url: str) -> Optional[str]:
         return None
 
 
+async def _fetch_pdf_bytes(client: httpx.AsyncClient, url: str) -> Optional[bytes]:
+    try:
+        r = await client.get(url, timeout=REQUEST_TIMEOUT)
+        r.raise_for_status()
+        if not r.content or len(r.content) < 500:
+            log.warning("sk_hansard: pdf %s too small (%d bytes)",
+                        url, len(r.content) if r.content else 0)
+            return None
+        return r.content
+    except Exception as exc:
+        log.warning("sk_hansard: pdf fetch %s failed: %s", url, exc)
+        return None
+
+
+def _suffix_to_time_of_day(suffix: Optional[str]) -> str:
+    if not suffix:
+        return "main"
+    s = suffix.upper()
+    if s == "-AM":
+        return "morning"
+    if s == "-EVE":
+        return "evening"
+    return "main"
+
+
 async def discover_sittings(
     client: httpx.AsyncClient, *, max_pages: Optional[int] = None,
 ) -> list[SittingRef]:
-    """Walk the archive pager, return one SittingRef per Assembly-debates URL."""
+    """Walk the archive pager, return one SittingRef per Assembly sitting.
+
+    Both HTML and PDF transcripts are surfaced. When both formats exist
+    for the same (parliament, session, date, time_of_day) tuple, HTML
+    wins — we re-ingest from the richer format and skip the PDF
+    duplicate. AM/EVE supplementary PDFs are distinct sittings (same
+    date, different sittings) and each gets its own SittingRef.
+    """
     seen_urls: set[str] = set()
-    refs: list[SittingRef] = []
+    by_key: dict[tuple[int, int, str, str], SittingRef] = {}
     page = 0
     consecutive_empty = 0
     while True:
@@ -118,7 +168,9 @@ async def discover_sittings(
         if html is None:
             break
         new_for_page = 0
-        for m in _ASSEMBLY_HANSARD_RE.finditer(html):
+
+        # 1. HTML matches first — these win over any PDF for the same key.
+        for m in _ASSEMBLY_HANSARD_HTML_RE.finditer(html):
             full_url = m.group(0)
             if full_url in seen_urls:
                 continue
@@ -129,13 +181,44 @@ async def discover_sittings(
                          int(m.group("ymd")[6:8]))
             except ValueError:
                 continue
-            refs.append(SittingRef(
+            key = (int(m.group("parl")), int(m.group("sess")),
+                   m.group("ymd"), "main")  # HTML pattern has no -AM/-EVE
+            ref = SittingRef(
                 parliament=int(m.group("parl")),
                 session=int(m.group("sess")),
-                sitting_date=d,
-                canonical_url=full_url,
-            ))
+                sitting_date=d, canonical_url=full_url,
+                fmt="html", time_of_day="main",
+            )
+            by_key[key] = ref
             new_for_page += 1
+
+        # 2. PDF matches second — only added when no HTML for the same key.
+        for m in _ASSEMBLY_HANSARD_PDF_RE.finditer(html):
+            full_url = m.group(0)
+            if full_url in seen_urls:
+                continue
+            seen_urls.add(full_url)
+            try:
+                d = Date(int(m.group("ymd")[:4]),
+                         int(m.group("ymd")[4:6]),
+                         int(m.group("ymd")[6:8]))
+            except ValueError:
+                continue
+            tod = _suffix_to_time_of_day(m.group("suffix"))
+            key = (int(m.group("parl")), int(m.group("sess")),
+                   m.group("ymd"), tod)
+            existing = by_key.get(key)
+            if existing is not None and existing.fmt == "html":
+                continue  # HTML already captured this sitting.
+            ref = SittingRef(
+                parliament=int(m.group("parl")),
+                session=int(m.group("sess")),
+                sitting_date=d, canonical_url=full_url,
+                fmt="pdf", time_of_day=tod,
+            )
+            by_key[key] = ref
+            new_for_page += 1
+
         if new_for_page == 0:
             consecutive_empty += 1
             if consecutive_empty >= 2:
@@ -146,7 +229,7 @@ async def discover_sittings(
         if max_pages is not None and page >= max_pages:
             break
         await asyncio.sleep(0.5)
-    return refs
+    return list(by_key.values())
 
 
 # ── Sessions / FK lookup ───────────────────────────────────────────
@@ -328,6 +411,128 @@ async def _upsert_speech(
     return "inserted" if result and result["inserted"] else "updated"
 
 
+def _resolve_pdf_speech(
+    speech: PDFParsedSpeech,
+    slug_lookup: dict[str, str],
+    lastname_lookup: dict[str, list[tuple[str, str]]],
+) -> tuple[Optional[str], float]:
+    """PDF-shape resolver — uses surname (+ optional initial) instead of
+    a synthesised slug, since PDF speaker lines lack the Word-HTML
+    bold-name convention that produces clean firstname-lastname slugs.
+    """
+    if speech.surname:
+        import unicodedata
+        key = unicodedata.normalize("NFKD", speech.surname.lower())
+        key = "".join(c for c in key if not unicodedata.combining(c))
+        key = re.sub(r"[^a-z0-9]", "", key)
+        candidates = lastname_lookup.get(key, [])
+        if len(candidates) == 1:
+            return candidates[0][0], (
+                0.85 if speech.is_speaker_role else 0.9
+            )
+        if len(candidates) > 1 and speech.initial:
+            initial = speech.initial[0].lower()
+            narrowed = [c for c in candidates if c[1].startswith(initial)]
+            if len(narrowed) == 1:
+                return narrowed[0][0], (
+                    0.8 if speech.is_speaker_role else 0.85
+                )
+    return None, (0.5 if not speech.is_chorus else 0.3)
+
+
+async def _ingest_pdf_sitting(
+    db: Database, ref: SittingRef, pdf_bytes: bytes,
+    slug_lookup: dict[str, str],
+    lastname_lookup: dict[str, list[tuple[str, str]]],
+    stats: IngestStats,
+) -> None:
+    """Fetch + parse one PDF transcript, upsert speeches."""
+    try:
+        text = _pdftotext(pdf_bytes, layout=False)
+    except Exception as exc:
+        stats.parse_failures.append(f"pdftotext failed for {ref.canonical_url}: {exc}")
+        return
+    speeches = extract_speeches_from_text(text)
+    if not speeches:
+        stats.parse_failures.append(f"no speeches parsed from {ref.canonical_url}")
+        return
+
+    session_id = await _ensure_session(
+        db, parliament=ref.parliament, session=ref.session,
+    )
+    stats.sessions_touched.add(f"{ref.parliament}L{ref.session}S")
+
+    # spoken_at: AM=09:00, main=13:30 (afternoon), evening=19:00.
+    # These are typical SK sitting times; sequence preserves intra-sitting order.
+    hh, mm = {
+        "morning": (9, 0),
+        "evening": (19, 0),
+    }.get(ref.time_of_day, (13, 30))
+    ts = datetime(ref.sitting_date.year, ref.sitting_date.month,
+                  ref.sitting_date.day, hh, mm, tzinfo=timezone.utc)
+
+    for s in speeches:
+        pol_id, conf = _resolve_pdf_speech(s, slug_lookup, lastname_lookup)
+        speaker_role = (
+            "chorus" if s.is_chorus else
+            s.speaker_role or "member"
+        )
+        raw_payload = {
+            "extractor": "sk_hansard_pdf/v1",
+            "section_label": s.section,
+            "speaker_role_detected": s.speaker_role,
+            "honorific": s.honorific,
+            "initial": s.initial,
+            "surname": s.surname,
+            "time_of_day": ref.time_of_day,
+        }
+        raw_json = orjson.dumps(raw_payload).decode("utf-8")
+        # Store raw_html=NULL for PDF rows; the speech text itself is the
+        # content. (The chunker / embedder don't need raw_html.)
+        result = await db.fetchrow(
+            """
+            INSERT INTO speeches (
+                session_id, politician_id, level, province_territory,
+                speaker_name_raw, speaker_role, party_at_time, constituency_at_time,
+                confidence, speech_type, spoken_at, sequence, language,
+                text, word_count,
+                source_system, source_url, source_anchor,
+                raw, raw_html, content_hash
+            ) VALUES (
+                $1::uuid, $2, 'provincial', 'SK',
+                $3, $4, NULL, NULL,
+                $5, $6, $7, $8, 'en',
+                $9, $10,
+                $11, $12, NULL,
+                $13::jsonb, NULL, $14
+            )
+            ON CONFLICT (source_system, source_url, sequence)
+            DO UPDATE SET
+                politician_id = EXCLUDED.politician_id,
+                speaker_name_raw = EXCLUDED.speaker_name_raw,
+                speaker_role = EXCLUDED.speaker_role,
+                confidence = EXCLUDED.confidence,
+                spoken_at = EXCLUDED.spoken_at,
+                text = EXCLUDED.text,
+                word_count = EXCLUDED.word_count,
+                raw = EXCLUDED.raw,
+                content_hash = EXCLUDED.content_hash,
+                updated_at = now()
+            RETURNING (xmax = 0) AS inserted
+            """,
+            session_id, pol_id,
+            s.speaker_name_raw, speaker_role,
+            conf, "hansard", ts, s.sequence,
+            s.body, len(s.body.split()),
+            SOURCE_SYSTEM, ref.canonical_url,
+            raw_json, _content_hash(s.body),
+        )
+        if result and result["inserted"]:
+            stats.speeches_inserted += 1
+        else:
+            stats.speeches_updated += 1
+
+
 async def _ingest_sitting(
     db: Database, ref: SittingRef, html: str,
     slug_lookup: dict[str, str], lastname_lookup: dict[str, list[str]],
@@ -412,18 +617,30 @@ async def ingest_sk_hansard(
 
     async with httpx.AsyncClient(headers=HEADERS, follow_redirects=True) as client:
         if url:
-            m = _ASSEMBLY_HANSARD_RE.match(url)
-            if m is None:
+            m_html = _ASSEMBLY_HANSARD_HTML_RE.match(url)
+            m_pdf = _ASSEMBLY_HANSARD_PDF_RE.match(url) if not m_html else None
+            if m_html:
+                ref = SittingRef(
+                    parliament=int(m_html.group("parl")),
+                    session=int(m_html.group("sess")),
+                    sitting_date=Date(int(m_html.group("ymd")[:4]),
+                                      int(m_html.group("ymd")[4:6]),
+                                      int(m_html.group("ymd")[6:8])),
+                    canonical_url=url, fmt="html", time_of_day="main",
+                )
+            elif m_pdf:
+                ref = SittingRef(
+                    parliament=int(m_pdf.group("parl")),
+                    session=int(m_pdf.group("sess")),
+                    sitting_date=Date(int(m_pdf.group("ymd")[:4]),
+                                      int(m_pdf.group("ymd")[4:6]),
+                                      int(m_pdf.group("ymd")[6:8])),
+                    canonical_url=url, fmt="pdf",
+                    time_of_day=_suffix_to_time_of_day(m_pdf.group("suffix")),
+                )
+            else:
                 stats.fetch_failures.append(f"unrecognised SK Hansard URL: {url}")
                 return stats
-            ref = SittingRef(
-                parliament=int(m.group("parl")),
-                session=int(m.group("sess")),
-                sitting_date=Date(int(m.group("ymd")[:4]),
-                                  int(m.group("ymd")[4:6]),
-                                  int(m.group("ymd")[6:8])),
-                canonical_url=url,
-            )
             refs = [ref]
         else:
             refs = await discover_sittings(client, max_pages=max_archive_pages)
@@ -440,23 +657,40 @@ async def ingest_sk_hansard(
 
         slug_lookup = await _load_slug_lookup(db)
         lastname_lookup = await _load_lastname_lookup(db)
+        html_count = sum(1 for r in refs if r.fmt == "html")
+        pdf_count = sum(1 for r in refs if r.fmt == "pdf")
         log.info(
-            "sk_hansard: %d sittings to ingest; %d slug-keyed politicians",
-            len(refs), len(slug_lookup),
+            "sk_hansard: %d sittings to ingest (html=%d pdf=%d); %d slug-keyed politicians",
+            len(refs), html_count, pdf_count, len(slug_lookup),
         )
 
         for ref in refs:
-            html = await _fetch(client, ref.canonical_url)
-            if html is None:
-                stats.fetch_failures.append(ref.canonical_url)
-                stats.sittings_skipped += 1
-                continue
-            stats.sittings_fetched += 1
-            try:
-                await _ingest_sitting(db, ref, html, slug_lookup, lastname_lookup, stats)
-            except Exception as exc:
-                stats.parse_failures.append(f"{ref.canonical_url}: {exc}")
-                log.exception("sk_hansard: ingest failed for %s", ref.canonical_url)
+            if ref.fmt == "pdf":
+                pdf_bytes = await _fetch_pdf_bytes(client, ref.canonical_url)
+                if pdf_bytes is None:
+                    stats.fetch_failures.append(ref.canonical_url)
+                    stats.sittings_skipped += 1
+                    continue
+                stats.sittings_fetched += 1
+                try:
+                    await _ingest_pdf_sitting(
+                        db, ref, pdf_bytes, slug_lookup, lastname_lookup, stats,
+                    )
+                except Exception as exc:
+                    stats.parse_failures.append(f"{ref.canonical_url}: {exc}")
+                    log.exception("sk_hansard: pdf ingest failed for %s", ref.canonical_url)
+            else:
+                html = await _fetch(client, ref.canonical_url)
+                if html is None:
+                    stats.fetch_failures.append(ref.canonical_url)
+                    stats.sittings_skipped += 1
+                    continue
+                stats.sittings_fetched += 1
+                try:
+                    await _ingest_sitting(db, ref, html, slug_lookup, lastname_lookup, stats)
+                except Exception as exc:
+                    stats.parse_failures.append(f"{ref.canonical_url}: {exc}")
+                    log.exception("sk_hansard: ingest failed for %s", ref.canonical_url)
             await asyncio.sleep(delay)
 
     log.info(
