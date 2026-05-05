@@ -3782,6 +3782,47 @@ def cmd_refresh_coverage_stats(ctx: click.Context) -> None:
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 
 
+@cli.command("resolve-inline-presiding-officers")
+@click.option("--province", type=str, default=None,
+              help="2-letter code (AB/BC/QC/...) to scope the run. Default: all provinces.")
+@click.option("--limit", type=int, default=None,
+              help="Cap candidate speeches scanned (smoke-test aid).")
+@click.pass_context
+def cmd_resolve_inline_presiding_officers(
+    ctx: click.Context, province: Optional[str], limit: Optional[int],
+) -> None:
+    """Tier-2 attribution Pass 1 — extract names from parenthesised
+    presiding-officer labels and FK-match against politicians.
+
+    Targets speeches like `The Deputy Speaker (Mr. Bas Balkissoon)` or
+    `The Chair (Ms. Donna Skelly)` whose chamber's primary parser left
+    them unattributed. Sister of resolve-presiding-speakers (which
+    handles role-only "The Speaker" turns via SPEAKER_ROSTER).
+
+    Cross-jurisdictional, idempotent. Re-runs are no-ops.
+    """
+    from .legislative.inline_presiding_resolver import resolve_inline_presiding
+
+    async def _wrap(db: Database) -> None:
+        stats = await resolve_inline_presiding(
+            db, province=province, limit=limit,
+        )
+        console.print(
+            f"[green]resolve-inline-presiding-officers[/green]: "
+            f"candidates={stats.candidates} "
+            f"extracted={stats.extracted} "
+            f"fk_hits={stats.fk_hits} "
+            f"fk_misses={stats.fk_misses} "
+            f"speeches_updated={stats.speeches_updated} "
+            f"chunks_updated={stats.chunks_updated}"
+        )
+        if stats.misses_sample:
+            console.print("[yellow]FK miss samples:[/yellow]")
+            for prov, name in stats.misses_sample:
+                console.print(f"  [{prov}] {name!r}")
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
 @cli.command("resolve-presiding-speakers")
 @click.option("--province", type=click.Choice(["AB", "BC", "QC", "MB", "NB", "NL", "NS", "ON", "NT", "SK"]), default="AB",
               help="Jurisdiction whose Speaker roster to seed + resolve.")

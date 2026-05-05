@@ -263,6 +263,17 @@ INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) V
  'resolve-presiding-speakers', '{"province": "SK"}'::jsonb,
  '30 22 * * *', true, 'daily-ingest-rollout');
 
+-- ─── Post-ingest cross-jurisdictional resolvers (23:30 UTC) ────────
+-- Runs after every provincial chain; idempotent UPDATE-only resolver
+-- that backfills politician_id on speeches whose chamber-specific
+-- parser left them unattributed but whose speaker_name_raw carries an
+-- inline parens-name (e.g. "The Deputy Speaker (Mr. Bas Balkissoon)").
+-- Tier-2 attribution Pass 1.
+INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) VALUES
+('Inline-name presiding-officer resolver',
+ 'resolve-inline-presiding-officers', '{}'::jsonb,
+ '30 23 * * *', true, 'daily-ingest-rollout');
+
 -- ─── Post-ingest semantic layer (08:00 UTC = 02:00 MDT) ─────────────
 -- Cross-jurisdictional. Last per-jurisdiction Hansard ingest (NT/NU at
 -- 21:15 UTC) finishes by ~22 UTC, so 08:00 UTC the next day gives a

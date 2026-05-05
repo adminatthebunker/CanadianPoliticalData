@@ -539,6 +539,16 @@ COMMANDS: dict[str, dict[str, Any]] = {
              "help": "Walk paginated /members/former-members and insert missing MLAs."},
         ],
     },
+    "resolve-inline-presiding-officers": {
+        "description": "Tier-2 attribution Pass 1 — extract names from parenthesised presiding-officer labels (e.g. `The Deputy Speaker (Mr. Bas Balkissoon)`) and FK-match against politicians within the same province. Cross-jurisdictional, idempotent. Sister of resolve-presiding-speakers.",
+        "cli": "resolve-inline-presiding-officers", "category": "hansard",
+        "args": [
+            {"name": "province", "type": "str", "required": False,
+             "help": "2-letter code (AB/BC/QC/...) to scope the run. Default: all provinces."},
+            {"name": "limit", "type": "int", "required": False,
+             "help": "Cap candidate speeches scanned (smoke-test aid)."},
+        ],
+    },
     "ingest-sk-bills": {
         "description": "Ingest SK bills from progress-of-bills.pdf (legassembly.sk.ca/legislative-business/bills/). Discovery scrapes the bills page; identifies each PDF's (parliament, session) from its first-page header. Parses tabular text via pdftotext -layout; upserts bills + bill_events + bill_sponsors. Idempotent. --all-sessions walks every recent PDF (excludes 1998–2017 yearly-span legacy era). Run before ingest-sk-hansard so sponsor FKs land on already-populated MLAs.",
         "cli": "ingest-sk-bills", "category": "bills",
