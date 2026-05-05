@@ -2178,6 +2178,80 @@ def cmd_ingest_nt_hansard(
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 
 
+@cli.command("ingest-sk-bills")
+@click.option("--all-sessions", is_flag=True, default=False,
+              help="Walk every progress-of-bills PDF on the bills page (historical backfill).")
+@click.option("--url", type=str, default=None,
+              help="Bypass discovery; ingest a single PDF URL.")
+@click.option("--delay", type=float, default=1.0,
+              help="Seconds between per-PDF requests when walking multiple.")
+@click.option("--dry-run", is_flag=True, default=False,
+              help="Parse + report counts without writing to the DB.")
+@click.option("--selftest", is_flag=True, default=False,
+              help="Fetch the current PDF and assert hand-curated golden cases. No DB writes.")
+@click.pass_context
+def cmd_ingest_sk_bills(
+    ctx: click.Context, all_sessions, url, delay, dry_run, selftest,
+) -> None:
+    """Ingest SK bills from progress-of-bills.pdf.
+
+    Single-command flow: scrapes /legislative-business/bills/, identifies
+    each PDF's (parliament, session) by reading the first-page header,
+    parses the tabular text via pdftotext -layout, and upserts bills +
+    bill_events + bill_sponsors. Idempotent.
+
+    Default: ingest the currently-active session only. --all-sessions
+    walks every recent progress-of-bills PDF (skips yearly-span legacy
+    PDFs from 1998–2017 which use a different table shape).
+    """
+    if selftest:
+        from .legislative.sk_bills import run_selftest
+        rc = asyncio.run(run_selftest())
+        raise click.exceptions.Exit(rc)
+
+    from .legislative.sk_bills import ingest_sk_bills as _ingest
+
+    async def _wrap(db: Database) -> None:
+        stats = await _ingest(
+            db,
+            all_sessions=all_sessions,
+            url=url,
+            delay=delay,
+            dry_run=dry_run,
+        )
+        prefix = "[yellow]DRY-RUN[/yellow] " if dry_run else ""
+        console.print(
+            f"{prefix}[green]ingest-sk-bills[/green]: "
+            f"pdfs={stats.pdfs_seen} "
+            f"bills_parsed={stats.bills_parsed} "
+            f"bills_inserted={stats.bills_inserted} "
+            f"bills_updated={stats.bills_updated} "
+            f"sponsors={stats.sponsors_inserted} "
+            f"fk_hits={stats.sponsor_fk_hits} "
+            f"fk_misses={stats.sponsor_fk_misses} "
+            f"events={stats.events_inserted} "
+            f"failures={len(stats.failures)}"
+        )
+        if dry_run and stats.sample:
+            console.print("[yellow]DRY-RUN sample (first 5 bills):[/yellow]")
+            for pb in stats.sample:
+                stages = ", ".join(f"{k}={v}" for k, v in pb.stages.items())
+                console.print(
+                    f"  [{pb.bill_number}] {pb.bill_type:14} "
+                    f"{(pb.title[:60] + '…') if len(pb.title) > 60 else pb.title}"
+                )
+                console.print(
+                    f"      sponsor={pb.sponsor_raw!r} force={pb.force_code!r} "
+                    f"comm1={pb.committee_first!r} comm2={pb.committee_second!r}"
+                )
+                console.print(f"      stages: {stages}")
+        if stats.failures:
+            for f in stats.failures[:5]:
+                console.print(f"  [yellow]warn:[/yellow] {f}")
+
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
 @cli.command("ingest-sk-hansard")
 @click.option("--limit-sittings", type=int, default=None,
               help="Cap to first N sittings (newest-first ordering).")

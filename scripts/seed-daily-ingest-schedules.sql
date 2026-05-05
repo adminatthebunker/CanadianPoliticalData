@@ -19,7 +19,7 @@
 --   11:00 federal  | 12:00 NS (existing) | 13:50 NS votes | 14:00 BC
 --   15:00 AB       | 16:00 QC            | 17:00 MB       | 18:00 ON
 --   19:00 NB       | 20:00 NL            | 21:00 NT bills + Hansard chain
---   21:15 NU bills (Hansard pending) | 22:00 SK MLA roster + Hansard chain
+--   21:15 NU bills (Hansard pending) | 21:45 SK bills | 22:00 SK MLA roster + Hansard chain
 -- Per-province votes extraction at :50 of the Hansard hour (ON at :55 to
 -- avoid collision with the ON presiding-speaker resolver).
 
@@ -241,14 +241,18 @@ INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) V
  'ingest-nu-bills', '{}'::jsonb,
  '15 21 * * *', true, 'daily-ingest-rollout');
 
--- ─── SK (22:00 UTC) ─────────────────────────────────────────────────
+-- ─── SK (21:45–22:30 UTC) ───────────────────────────────────────────
 -- SK has no per-MLA stable identifier; the MLA roster ingester
 -- synthesises slugs from the Hansard speaker index (one HTTP call per
 -- run, idempotent — daily refresh is cheap and catches cabinet
--- shuffles). SK bills are PDF-only (deferred); no ingest-sk-bills slot
--- yet. Hansard discovery walks the paginated archive at :05 and ingests
--- new sittings at :15.
+-- shuffles). SK bills come from progress-of-bills.pdf (single
+-- session-scoped PDF, parsed via pdftotext -layout). Hansard discovery
+-- walks the paginated archive at :15 and ingests new sittings.
+-- Chain order: bills → mlas → hansard → presiding-resolver.
 INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) VALUES
+('SK bills daily ingest',
+ 'ingest-sk-bills', '{}'::jsonb,
+ '45 21 * * *', true, 'daily-ingest-rollout'),
 ('SK MLA roster refresh',
  'ingest-sk-mlas', '{"parliaments": "30"}'::jsonb,
  '0 22 * * *', true, 'daily-ingest-rollout'),

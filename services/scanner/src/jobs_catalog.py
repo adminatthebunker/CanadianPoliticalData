@@ -539,6 +539,22 @@ COMMANDS: dict[str, dict[str, Any]] = {
              "help": "Walk paginated /members/former-members and insert missing MLAs."},
         ],
     },
+    "ingest-sk-bills": {
+        "description": "Ingest SK bills from progress-of-bills.pdf (legassembly.sk.ca/legislative-business/bills/). Discovery scrapes the bills page; identifies each PDF's (parliament, session) from its first-page header. Parses tabular text via pdftotext -layout; upserts bills + bill_events + bill_sponsors. Idempotent. --all-sessions walks every recent PDF (excludes 1998–2017 yearly-span legacy era). Run before ingest-sk-hansard so sponsor FKs land on already-populated MLAs.",
+        "cli": "ingest-sk-bills", "category": "bills",
+        "args": [
+            {"name": "all_sessions", "type": "bool", "required": False, "default": False,
+             "help": "Walk every progress-of-bills PDF on the bills page (historical backfill)."},
+            {"name": "url", "type": "str", "required": False,
+             "help": "Bypass discovery; ingest a single PDF URL."},
+            {"name": "delay", "type": "float", "required": False, "default": 1.0,
+             "help": "Seconds between per-PDF requests."},
+            {"name": "dry_run", "type": "bool", "required": False, "default": False,
+             "help": "Parse + report counts without writing to the DB."},
+            {"name": "selftest", "type": "bool", "required": False, "default": False,
+             "help": "Fetch current PDF and assert golden cases. No DB writes."},
+        ],
+    },
     "ingest-sk-mlas": {
         "description": "Upsert SK MLA roster from the Hansard speaker index (docs.legassembly.sk.ca/legdocs/Assembly/Debates/Indexes/{N}/{N}L-SP-full.html). Synthesises `sk_assembly_slug` (firstname-lastname) since SK exposes no stable per-MLA ID. Captures party, constituency, cabinet portfolio. Idempotent. Run before ingest-sk-hansard.",
         "cli": "ingest-sk-mlas", "category": "hansard",
