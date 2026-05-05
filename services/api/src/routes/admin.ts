@@ -337,6 +337,25 @@ const COMMAND_CATALOG = [
       { name: "delay", type: "float", required: false, default: 0.5, help: "Seconds between API calls." },
     ],
   },
+  { key: "ingest-federal-bill-events", category: "bills", description: "Federal bill stage events from parl.ca/LegisInfo XML. One HTTP GET per session yields ~7 milestones per bill (1st/2nd/3rd reading × House+Senate + royal assent). FK via bills.raw->>'legisinfo_id'. Idempotent. Run after ingest-federal-bills.",
+    args: [
+      { name: "parliament", type: "int", required: false, help: "Parliament number (default: current)." },
+      { name: "session", type: "int", required: false, help: "Session number (default: current)." },
+      { name: "all_sessions", type: "bool", required: false, help: "Walk every federal session in legislative_sessions." },
+    ],
+  },
+  { key: "fetch-qc-bill-introduced-dates", category: "bills", description: "Fetch QC bill detail pages and extract introduction-sitting dates from the <h3>Introduction</h3> block. Inserts bill_events first_reading rows, then rolls up onto bills.introduced_date. Sibling of fetch-qc-bill-sponsors. Idempotent.",
+    args: [
+      { name: "limit", type: "int", required: false, help: "Cap bills scanned (default: every undated bill)." },
+      { name: "delay", type: "float", required: false, default: 1.5, help: "Seconds between HTTP requests." },
+    ],
+  },
+  { key: "relink-bill-introduced-dates", category: "bills", description: "Pure-SQL backfill of bills.introduced_date from bill_events first_reading rows. Cross-jurisdictional, idempotent. Closes denormalisation gaps where events exist but the column is null.",
+    args: [
+      { name: "levels", type: "str", required: false, help: "Comma-separated levels (e.g. 'provincial,federal'). Default: all." },
+      { name: "provinces", type: "str", required: false, help: "Comma-separated province codes (e.g. 'MB,NS'). Default: all." },
+    ],
+  },
   { key: "ingest-nu-bills", category: "bills", description: "Nunavut bills via assembly.nu.ca (consensus gov't, no sponsors; multilingual).",
     args: [
       { name: "assembly", type: "int", required: false, help: "Assembly number (default: current)." },
@@ -452,6 +471,9 @@ const COMMAND_CATALOG = [
       { name: "concurrency", type: "int", required: false, default: 4, help: "Parallel fetches. Per-host spacing still applies." },
     ],
   },
+  { key: "gc-usage-metrics", category: "maintenance",
+    description: "Drop old rows from private.gpu_samples / tei_samples (90d) and search_request_log (30d). Drives the admin /usage page retention.",
+    args: [] },
   { key: "scan", category: "maintenance", description: "Infrastructure scan across tracked websites.",
     args: [
       { name: "limit", type: "int", required: false, help: "Max sites this run." },
@@ -709,6 +731,201 @@ export default async function adminRoutes(app: FastifyInstance) {
     };
   });
 
+  // ── Operator observability: GPU + TEI + search-traffic dashboard ─
+  // Backed by the gpu-sampler container (NVML + TEI /metrics scrape
+  // every 30s) and the inline search-route telemetry hook. All three
+  // tables live in the `private` schema; never in the public dump.
+  // Frontend at /admin/usage polls /snapshot every 5s for live cards
+  // + the most recent N samples for sparklines.
+  app.get("/usage/snapshot", async () => {
+    const [gpu, tei, searchCounts] = await Promise.all([
+      queryOne<{
+        sampled_at: string; mem_used_mb: number; mem_total_mb: number;
+        util_gpu_pct: number; util_mem_pct: number;
+        temperature_c: number | null; power_w: number | null;
+      }>(
+        `SELECT sampled_at, mem_used_mb, mem_total_mb, util_gpu_pct,
+                util_mem_pct, temperature_c, power_w
+           FROM private.gpu_samples
+           ORDER BY sampled_at DESC LIMIT 1`
+      ),
+      queryOne<{
+        sampled_at: string; queue_size: number | null;
+        request_count_total: string | null;
+        request_failure_total: string | null;
+        request_duration_p50_ms: string | null;
+        request_duration_p95_ms: string | null;
+        request_duration_p99_ms: string | null;
+        batch_next_size_avg: string | null;
+      }>(
+        `SELECT sampled_at, queue_size, request_count_total, request_failure_total,
+                request_duration_p50_ms, request_duration_p95_ms,
+                request_duration_p99_ms, batch_next_size_avg
+           FROM private.tei_samples
+           ORDER BY sampled_at DESC LIMIT 1`
+      ),
+      queryOne<{
+        searches_5m: number; searches_60m: number; searches_24h: number;
+        p50_60m: number | null; p95_60m: number | null;
+        errors_60m: number;
+      }>(
+        `SELECT
+            COUNT(*) FILTER (WHERE created_at > now() - interval '5 minutes')::int  AS searches_5m,
+            COUNT(*) FILTER (WHERE created_at > now() - interval '1 hour')::int     AS searches_60m,
+            COUNT(*) FILTER (WHERE created_at > now() - interval '24 hours')::int   AS searches_24h,
+            -- Postgres percentile_cont needs sorted input; the window
+            -- is small enough that the sort is in-memory cheap.
+            percentile_cont(0.5) WITHIN GROUP (ORDER BY total_ms)
+              FILTER (WHERE created_at > now() - interval '1 hour')                 AS p50_60m,
+            percentile_cont(0.95) WITHIN GROUP (ORDER BY total_ms)
+              FILTER (WHERE created_at > now() - interval '1 hour')                 AS p95_60m,
+            COUNT(*) FILTER (
+              WHERE created_at > now() - interval '1 hour' AND status_code >= 500
+            )::int                                                                  AS errors_60m
+           FROM private.search_request_log`
+      ),
+    ]);
+    return {
+      gpu: gpu ?? null,
+      tei: tei ?? null,
+      search: searchCounts ?? {
+        searches_5m: 0, searches_60m: 0, searches_24h: 0,
+        p50_60m: null, p95_60m: null, errors_60m: 0,
+      },
+    };
+  });
+
+  // Time-bucketed series for sparklines. The frontend picks one metric
+  // per chart and a range (60 = last hour, 1440 = last day). Bucketing
+  // keeps payloads bounded — a 24h x 30s sample run is 2,880 rows raw,
+  // which we floor into 1-min (60m view) or 5-min (24h view) buckets.
+  const usageSeriesQuery = z.object({
+    metric: z.enum([
+      "vram_used_mb",
+      "vram_pct",
+      "gpu_util_pct",
+      "tei_queue",
+      "tei_p95_ms",
+      "search_p95_ms",
+      "search_count",
+    ]),
+    minutes: z.coerce.number().int().min(5).max(2880).default(60),
+  });
+
+  app.get("/usage/timeseries", async (req, reply) => {
+    const parsed = usageSeriesQuery.safeParse(req.query);
+    if (!parsed.success) return reply.badRequest(parsed.error.message);
+    const { metric, minutes } = parsed.data;
+    const bucketSeconds = minutes <= 120 ? 60 : 300;
+
+    let sql: string;
+    switch (metric) {
+      case "vram_used_mb":
+        sql = `
+          SELECT to_timestamp(floor(extract(epoch FROM sampled_at) / $2) * $2) AS bucket_at,
+                 AVG(mem_used_mb)::numeric(10,2) AS value
+            FROM private.gpu_samples
+           WHERE sampled_at > now() - ($1 || ' minutes')::interval
+           GROUP BY 1 ORDER BY 1`;
+        break;
+      case "vram_pct":
+        sql = `
+          SELECT to_timestamp(floor(extract(epoch FROM sampled_at) / $2) * $2) AS bucket_at,
+                 (100.0 * AVG(mem_used_mb) / NULLIF(AVG(mem_total_mb), 0))::numeric(5,2) AS value
+            FROM private.gpu_samples
+           WHERE sampled_at > now() - ($1 || ' minutes')::interval
+           GROUP BY 1 ORDER BY 1`;
+        break;
+      case "gpu_util_pct":
+        sql = `
+          SELECT to_timestamp(floor(extract(epoch FROM sampled_at) / $2) * $2) AS bucket_at,
+                 AVG(util_gpu_pct)::numeric(5,2) AS value
+            FROM private.gpu_samples
+           WHERE sampled_at > now() - ($1 || ' minutes')::interval
+           GROUP BY 1 ORDER BY 1`;
+        break;
+      case "tei_queue":
+        sql = `
+          SELECT to_timestamp(floor(extract(epoch FROM sampled_at) / $2) * $2) AS bucket_at,
+                 AVG(queue_size)::numeric(8,2) AS value
+            FROM private.tei_samples
+           WHERE sampled_at > now() - ($1 || ' minutes')::interval
+           GROUP BY 1 ORDER BY 1`;
+        break;
+      case "tei_p95_ms":
+        sql = `
+          SELECT to_timestamp(floor(extract(epoch FROM sampled_at) / $2) * $2) AS bucket_at,
+                 AVG(request_duration_p95_ms)::numeric(10,2) AS value
+            FROM private.tei_samples
+           WHERE sampled_at > now() - ($1 || ' minutes')::interval
+           GROUP BY 1 ORDER BY 1`;
+        break;
+      case "search_p95_ms":
+        sql = `
+          SELECT to_timestamp(floor(extract(epoch FROM created_at) / $2) * $2) AS bucket_at,
+                 percentile_cont(0.95) WITHIN GROUP (ORDER BY total_ms)::numeric(10,2) AS value
+            FROM private.search_request_log
+           WHERE created_at > now() - ($1 || ' minutes')::interval
+           GROUP BY 1 ORDER BY 1`;
+        break;
+      case "search_count":
+        sql = `
+          SELECT to_timestamp(floor(extract(epoch FROM created_at) / $2) * $2) AS bucket_at,
+                 COUNT(*)::numeric AS value
+            FROM private.search_request_log
+           WHERE created_at > now() - ($1 || ' minutes')::interval
+           GROUP BY 1 ORDER BY 1`;
+        break;
+    }
+    const rows = await query<{ bucket_at: string; value: string }>(
+      sql,
+      [String(minutes), bucketSeconds],
+    );
+    return {
+      metric,
+      minutes,
+      bucket_seconds: bucketSeconds,
+      points: rows.map(r => ({
+        t: r.bucket_at,
+        v: r.value === null ? null : Number(r.value),
+      })),
+    };
+  });
+
+  const usageSlowQuery = z.object({
+    minutes: z.coerce.number().int().min(5).max(43200).default(1440),
+    limit: z.coerce.number().int().min(1).max(200).default(20),
+  });
+
+  // Top-N slowest search requests in the window. Drives the
+  // "what's slow lately" drill-down on the admin /usage page.
+  // No raw query text exists to display — only timing + filter shape
+  // + status. That's by design (privacy) and what the operator
+  // actually needs for "is this a TEI bottleneck or a SQL bottleneck?"
+  app.get("/usage/slow-searches", async (req, reply) => {
+    const parsed = usageSlowQuery.safeParse(req.query);
+    if (!parsed.success) return reply.badRequest(parsed.error.message);
+    const { minutes, limit } = parsed.data;
+    const rows = await query<{
+      created_at: string; endpoint: string;
+      total_ms: number; tei_ms: number | null; sql_ms: number | null;
+      result_count: number | null;
+      was_anchor_query: boolean; was_authenticated: boolean;
+      tier: string | null; status_code: number;
+      cached_embedding: boolean; has_filters: boolean;
+    }>(
+      `SELECT created_at, endpoint, total_ms, tei_ms, sql_ms, result_count,
+              was_anchor_query, was_authenticated, tier, status_code,
+              cached_embedding, has_filters
+         FROM private.search_request_log
+        WHERE created_at > now() - ($1 || ' minutes')::interval
+        ORDER BY total_ms DESC, created_at DESC
+        LIMIT $2`,
+      [String(minutes), limit],
+    );
+    return { rows };
+  });
+
   // ── Socials audit + review queue ───────────────────────────────
   // The Tier-2 probe and Tier-3 agent can land rows with
   // flagged_low_confidence=true. This endpoint surfaces them for
@@ -839,9 +1056,9 @@ export default async function adminRoutes(app: FastifyInstance) {
              cs.received_at, cs.resolved_at,
              u.email AS user_email, u.display_name AS user_display_name,
              p.name  AS politician_name
-        FROM correction_submissions cs
-        LEFT JOIN users u ON u.id = cs.user_id
-        LEFT JOIN politicians p
+        FROM private.correction_submissions cs
+        LEFT JOIN private.users u ON u.id = cs.user_id
+        LEFT JOIN public.politicians p
                ON cs.subject_type = 'politician' AND p.id = cs.subject_id
       ${whereSql}
       ORDER BY cs.received_at DESC
@@ -855,7 +1072,7 @@ export default async function adminRoutes(app: FastifyInstance) {
   app.get("/corrections/stats", async () => {
     const rows = await query<{ status: string; n: string }>(
       `SELECT status, count(*)::text AS n
-         FROM correction_submissions
+         FROM private.correction_submissions
         GROUP BY status`,
     );
     const out: Record<string, number> = {
@@ -915,7 +1132,7 @@ export default async function adminRoutes(app: FastifyInstance) {
 
       const res = await client.query<CorrectionRowFull>(
         `
-        UPDATE correction_submissions
+        UPDATE private.correction_submissions
            SET status         = $1,
                reviewer_notes = $2,
                reviewed_by    = $3,
@@ -979,10 +1196,10 @@ export default async function adminRoutes(app: FastifyInstance) {
                     u.display_name,
                     u.email_bounced_at,
                     (SELECT COALESCE(SUM(delta), 0)::text
-                       FROM credit_ledger
+                       FROM private.credit_ledger
                       WHERE user_id = u.id
                         AND state IN ('committed','held')) AS balance
-               FROM users u
+               FROM private.users u
               WHERE u.id = $1`,
             [updated!.user_id!]
           );
@@ -1072,7 +1289,7 @@ export default async function adminRoutes(app: FastifyInstance) {
     const rows = await query(
       `SELECT id, email, display_name, is_admin, rate_limit_tier,
               stripe_customer_id, created_at, last_login_at
-         FROM users
+         FROM private.users
          ${whereSql}
          ORDER BY created_at DESC
          LIMIT $${params.length}`,
@@ -1088,7 +1305,7 @@ export default async function adminRoutes(app: FastifyInstance) {
     const user = await queryOne(
       `SELECT id, email, display_name, is_admin, rate_limit_tier,
               stripe_customer_id, created_at, last_login_at
-         FROM users WHERE id = $1`,
+         FROM private.users WHERE id = $1`,
       [id],
     );
     if (!user) return reply.notFound();
@@ -1115,7 +1332,7 @@ export default async function adminRoutes(app: FastifyInstance) {
     }
 
     const target = await queryOne<{ id: string }>(
-      `SELECT id FROM users WHERE id = $1`,
+      `SELECT id FROM private.users WHERE id = $1`,
       [id],
     );
     if (!target) return reply.notFound();
@@ -1126,7 +1343,7 @@ export default async function adminRoutes(app: FastifyInstance) {
     const actingAdminEmail = getAdminEmail(req) ?? null;
     if (!actingAdminEmail) return reply.code(403).send({ error: "admin identity lost" });
     const actingAdmin = await queryOne<{ id: string }>(
-      `SELECT id FROM users WHERE email = $1`,
+      `SELECT id FROM private.users WHERE email = $1`,
       [actingAdminEmail],
     );
     if (!actingAdmin) return reply.code(403).send({ error: "admin row missing" });
@@ -1161,7 +1378,7 @@ export default async function adminRoutes(app: FastifyInstance) {
     }
 
     const row = await queryOne(
-      `UPDATE users
+      `UPDATE private.users
           SET rate_limit_tier = $1
         WHERE id = $2
         RETURNING id, email, rate_limit_tier`,
@@ -1198,8 +1415,8 @@ export default async function adminRoutes(app: FastifyInstance) {
     const rows = await query(
       `SELECT r.id, r.user_id, u.email, r.reason, r.requested_tier,
               r.status, r.admin_response, r.created_at, r.resolved_at
-         FROM rate_limit_increase_requests r
-         JOIN users u ON u.id = r.user_id
+         FROM private.rate_limit_increase_requests r
+         JOIN private.users u ON u.id = r.user_id
          ${whereSql}
          ORDER BY r.created_at DESC
          LIMIT $${params.length}`,
@@ -1229,13 +1446,13 @@ export default async function adminRoutes(app: FastifyInstance) {
     const actingAdminEmail = getAdminEmail(req) ?? null;
     if (!actingAdminEmail) return reply.code(403).send({ error: "admin identity lost" });
     const actingAdmin = await queryOne<{ id: string }>(
-      `SELECT id FROM users WHERE email = $1`,
+      `SELECT id FROM private.users WHERE email = $1`,
       [actingAdminEmail],
     );
     if (!actingAdmin) return reply.code(403).send({ error: "admin row missing" });
 
     const requestRow = await queryOne<{ user_id: string; status: string }>(
-      `SELECT user_id, status FROM rate_limit_increase_requests WHERE id = $1`,
+      `SELECT user_id, status FROM private.rate_limit_increase_requests WHERE id = $1`,
       [id],
     );
     if (!requestRow) return reply.notFound();
@@ -1244,7 +1461,7 @@ export default async function adminRoutes(app: FastifyInstance) {
     }
 
     const updated = await queryOne(
-      `UPDATE rate_limit_increase_requests
+      `UPDATE private.rate_limit_increase_requests
           SET status         = $1,
               admin_response = $2,
               resolved_by    = $3,
@@ -1257,7 +1474,7 @@ export default async function adminRoutes(app: FastifyInstance) {
 
     if (parsed.data.status === "approved" && parsed.data.apply_tier) {
       await query(
-        `UPDATE users SET rate_limit_tier = $1 WHERE id = $2`,
+        `UPDATE private.users SET rate_limit_tier = $1 WHERE id = $2`,
         [parsed.data.apply_tier, requestRow.user_id],
       );
     }
@@ -1300,9 +1517,9 @@ export default async function adminRoutes(app: FastifyInstance) {
               rj.model_used, rj.tokens_in, rj.tokens_out,
               rj.created_at, rj.finished_at, rj.error,
               rj.hold_ledger_id
-         FROM report_jobs rj
-         JOIN users u       ON u.id = rj.user_id
-         JOIN politicians p ON p.id = rj.politician_id
+         FROM private.report_jobs rj
+         JOIN private.users u       ON u.id = rj.user_id
+         JOIN public.politicians p ON p.id = rj.politician_id
          ${where}
         ORDER BY rj.created_at DESC
         LIMIT $${params.length}`,
@@ -1314,9 +1531,9 @@ export default async function adminRoutes(app: FastifyInstance) {
     const id = req.params.id;
     const row = await queryOne(
       `SELECT rj.*, u.email AS user_email, p.name AS politician_name
-         FROM report_jobs rj
-         JOIN users u       ON u.id = rj.user_id
-         JOIN politicians p ON p.id = rj.politician_id
+         FROM private.report_jobs rj
+         JOIN private.users u       ON u.id = rj.user_id
+         JOIN public.politicians p ON p.id = rj.politician_id
         WHERE rj.id = $1`,
       [id],
     );
@@ -1349,7 +1566,7 @@ export default async function adminRoutes(app: FastifyInstance) {
         hold_ledger_id: string | null;
       }>(
         `SELECT id, user_id, status, estimated_credits, hold_ledger_id
-           FROM report_jobs
+           FROM private.report_jobs
           WHERE id = $1`,
         [id],
       );
@@ -1357,13 +1574,13 @@ export default async function adminRoutes(app: FastifyInstance) {
 
       const ledger = job.hold_ledger_id
         ? await queryOne<{ state: string }>(
-            `SELECT state FROM credit_ledger WHERE id = $1`,
+            `SELECT state FROM private.credit_ledger WHERE id = $1`,
             [job.hold_ledger_id],
           )
         : null;
 
       const actingAdmin = await queryOne<{ id: string }>(
-        `SELECT id FROM users WHERE email = $1 LIMIT 1`,
+        `SELECT id FROM private.users WHERE email = $1 LIMIT 1`,
         [getAdminEmail(req)],
       );
       if (!actingAdmin) {
@@ -1373,7 +1590,7 @@ export default async function adminRoutes(app: FastifyInstance) {
       if (ledger && ledger.state === "held") {
         // releaseHold path: flip held → refunded.
         await query(
-          `UPDATE credit_ledger
+          `UPDATE private.credit_ledger
               SET state = 'refunded',
                   reason = $2
             WHERE id = $1
@@ -1382,7 +1599,7 @@ export default async function adminRoutes(app: FastifyInstance) {
           [job.hold_ledger_id, `admin refund: ${parsed.data.reason}`],
         );
         await query(
-          `UPDATE report_jobs SET status = 'refunded' WHERE id = $1`,
+          `UPDATE private.report_jobs SET status = 'refunded' WHERE id = $1`,
           [id],
         );
         return { refunded: true, mode: "released_hold", credits: job.estimated_credits };
@@ -1390,7 +1607,7 @@ export default async function adminRoutes(app: FastifyInstance) {
 
       // Committed (or no hold): compensating admin_credit grant.
       await query(
-        `INSERT INTO credit_ledger
+        `INSERT INTO private.credit_ledger
              (user_id, delta, state, kind, reason, created_by_admin_id)
            VALUES ($1, $2, 'committed', 'admin_credit', $3, $4)`,
         [
@@ -1401,7 +1618,7 @@ export default async function adminRoutes(app: FastifyInstance) {
         ],
       );
       await query(
-        `UPDATE report_jobs SET status = 'refunded' WHERE id = $1`,
+        `UPDATE private.report_jobs SET status = 'refunded' WHERE id = $1`,
         [id],
       );
       return { refunded: true, mode: "compensating_admin_credit", credits: job.estimated_credits };
@@ -1428,10 +1645,10 @@ export default async function adminRoutes(app: FastifyInstance) {
       `SELECT br.id, br.report_id, br.user_id, u.email AS user_email,
               rj.politician_id, p.name AS politician_name, rj.query AS report_query,
               br.message, br.status, br.admin_notes, br.created_at, br.resolved_at
-         FROM report_bug_reports br
-         JOIN users u       ON u.id = br.user_id
-         JOIN report_jobs rj ON rj.id = br.report_id
-         JOIN politicians p ON p.id = rj.politician_id
+         FROM private.report_bug_reports br
+         JOIN private.users u       ON u.id = br.user_id
+         JOIN private.report_jobs rj ON rj.id = br.report_id
+         JOIN public.politicians p ON p.id = rj.politician_id
          ${where}
         ORDER BY br.created_at DESC
         LIMIT $${params.length}`,
@@ -1455,7 +1672,7 @@ export default async function adminRoutes(app: FastifyInstance) {
           ? "now()"
           : "NULL";
       const updated = await queryOne(
-        `UPDATE report_bug_reports
+        `UPDATE private.report_bug_reports
             SET status = $1,
                 admin_notes = $2,
                 resolved_at = ${resolvedExpr}

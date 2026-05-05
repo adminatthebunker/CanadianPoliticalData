@@ -42,7 +42,7 @@ export default async function rateLimitRequestRoutes(app: FastifyInstance) {
     const rows = await query<OwnRequestRow>(
       `SELECT id, reason, requested_tier, status, admin_response,
               created_at, resolved_at
-         FROM rate_limit_increase_requests
+         FROM private.rate_limit_increase_requests
         WHERE user_id = $1
         ORDER BY created_at DESC
         LIMIT 20`,
@@ -80,7 +80,7 @@ export default async function rateLimitRequestRoutes(app: FastifyInstance) {
       // becomes a concern, a partial unique index on
       // (user_id) WHERE status = 'pending' moves this to the DB.
       const existing = await queryOne<{ id: string }>(
-        `SELECT id FROM rate_limit_increase_requests
+        `SELECT id FROM private.rate_limit_increase_requests
           WHERE user_id = $1 AND status = 'pending'
           LIMIT 1`,
         [claims.sub]
@@ -93,7 +93,7 @@ export default async function rateLimitRequestRoutes(app: FastifyInstance) {
       }
 
       const row = await queryOne<OwnRequestRow>(
-        `INSERT INTO rate_limit_increase_requests
+        `INSERT INTO private.rate_limit_increase_requests
              (user_id, reason, requested_tier, status)
            VALUES ($1, $2, $3, 'pending')
            RETURNING id, reason, requested_tier, status, admin_response,

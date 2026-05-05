@@ -93,12 +93,24 @@ def _clean_text(html: str) -> str:
 
 
 def _parse_date(s: str) -> Optional[date]:
-    s = (s or "").strip().rstrip(",.")
-    if not s:
+    s = (s or "").strip()
+    if not s or s == "&nbsp;":
         return None
+    # Older NL pages (pre-GA 49 era) use "Mar. 5/2012" — period-abbreviated
+    # month, slash separator, no space before the year. Newer pages use
+    # "March 5, 2026". Try the newer format first (cheapest path), then
+    # peel off the trailing period/comma and try the older shapes.
     for fmt in ("%B %d, %Y", "%b %d, %Y"):
         try:
-            return datetime.strptime(s, fmt).date()
+            return datetime.strptime(s.rstrip(",."), fmt).date()
+        except ValueError:
+            continue
+    # Older shape: "Mar. 5/2012" or "March 5/2012". Strip the period after
+    # the month, then try slash-separated year forms.
+    s_no_period = s.replace(".", "", 1)
+    for fmt in ("%b %d/%Y", "%B %d/%Y"):
+        try:
+            return datetime.strptime(s_no_period, fmt).date()
         except ValueError:
             continue
     return None

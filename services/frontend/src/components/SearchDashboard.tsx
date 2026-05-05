@@ -48,10 +48,15 @@ interface SearchDashboardProps {
    *  dashboard as the sole content of a tab want this; the inline usage
    *  (where the dashboard sits alongside a result list) leaves it closed. */
   defaultOpen?: boolean;
+  /** Pre-fetched facets, when the parent has already called
+   *  useSpeechFacets (e.g. to share the same response with a sibling
+   *  CTA). When provided, the dashboard skips its own fetch. */
+  facets?: { data: FacetsResponse | null; loading: boolean; error: Error | null };
 }
 
-export function SearchDashboard({ filter, enabled, totalMatches, defaultOpen }: SearchDashboardProps) {
-  const { data, loading, error } = useSpeechFacets(filter, enabled);
+export function SearchDashboard({ filter, enabled, totalMatches, defaultOpen, facets }: SearchDashboardProps) {
+  const ownFetch = useSpeechFacets(filter, enabled && !facets);
+  const { data, loading, error } = facets ?? ownFetch;
 
   if (!enabled) return null;
 

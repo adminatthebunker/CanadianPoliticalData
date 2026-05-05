@@ -1380,6 +1380,44 @@ def cmd_ingest_qc_bills_rss(ctx: click.Context) -> None:
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 
 
+@cli.command("fetch-qc-bill-introduced-dates")
+@click.option("--limit", type=int, default=None,
+              help="Cap bills scanned this run (default: every undated bill).")
+@click.option("--delay", type=float, default=1.5,
+              help="Delay between HTTP requests (seconds).")
+@click.pass_context
+def cmd_fetch_qc_bill_introduced_dates(
+    ctx: click.Context, limit, delay,
+) -> None:
+    """Fetch QC bill detail pages and write introduced_date events.
+
+    Sibling of fetch-qc-bill-sponsors. Iterates every QC bill where
+    `introduced_date IS NULL`, GETs the detail page, extracts the
+    `<h3>Introduction</h3> Sitting held on <date>` token, and inserts
+    a `bill_events` first_reading row. Calls derive-qc-introduced-dates
+    at the end to roll the events up onto bills.introduced_date in a
+    single SQL pass.
+
+    ~1,019 candidates × 1.5s = ~25 min on first backfill. Steady-state
+    runs touch only newly-discovered undated bills (seconds).
+    """
+    from .legislative.qc_bills import fetch_qc_bill_introduced_dates
+
+    async def _wrap(db: Database) -> None:
+        stats = await fetch_qc_bill_introduced_dates(
+            db, limit=limit, delay_seconds=delay,
+        )
+        console.print(
+            f"[green]fetch-qc-bill-introduced-dates[/green]: "
+            f"scanned={stats['scanned']} fetched={stats['pages_fetched']} "
+            f"events_inserted={stats['events_inserted']} "
+            f"rolled_up={stats['rolled_up']} "
+            f"no_date={stats['no_date_found']} "
+            f"not_found={stats['not_found']} errors={stats['errors']}"
+        )
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
 @cli.command("fetch-qc-bill-sponsors")
 @click.option("--limit", type=int, default=None,
               help="Cap bills scanned this run (default: every un-sponsored bill).")
@@ -2544,6 +2582,93 @@ def cmd_ingest_federal_bills(
             f"sessions={stats['sessions_touched']} bills={stats['bills']} "
             f"sponsors={stats['sponsors']} sponsors_linked={stats['sponsors_linked']}"
         )
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
+@cli.command("ingest-federal-bill-events")
+@click.option("--parliament", type=int, default=None,
+              help="Parliament number. Default: latest in legislative_sessions.")
+@click.option("--session", type=int, default=None,
+              help="Session number. Default: latest.")
+@click.option("--all-sessions", is_flag=True,
+              help="Walk every federal session in legislative_sessions.")
+@click.pass_context
+def cmd_ingest_federal_bill_events(
+    ctx: click.Context, parliament, session, all_sessions,
+) -> None:
+    """Ingest federal bill stage events from parl.ca/LegisInfo XML.
+
+    Closes the federal stage-timeline gap: openparliament.ca (the
+    federal bills source) doesn't expose milestones, so prior to this
+    command all 5,542 federal bills had 0 bill_events rows. One HTTP
+    GET per session yields ~7 milestones per bill (1st/2nd/3rd reading
+    in each chamber + royal assent). FK to bills.id via
+    bills.raw->>'legisinfo_id'.
+
+    Idempotent on bill_events_uniq (bill_id, stage, event_date,
+    event_type, committee_name). Run after ingest-federal-bills so the
+    legisinfo_id index is populated.
+    """
+    from .legislative.federal_bill_events import ingest_federal_bill_events
+
+    async def _wrap(db: Database) -> None:
+        stats = await ingest_federal_bill_events(
+            db,
+            parliament=parliament, session=session,
+            all_sessions=all_sessions,
+        )
+        console.print(
+            f"[green]ingest-federal-bill-events[/green]: "
+            f"sessions={stats.sessions_touched}/{stats.sessions_touched + stats.sessions_skipped} "
+            f"bills_seen={stats.bills_seen} matched={stats.bills_matched} "
+            f"no_match={stats.bills_no_match} "
+            f"events_attempted={stats.events_attempted} "
+            f"inserted={stats.events_inserted} existing={stats.events_existing}"
+        )
+        if stats.by_stage:
+            console.print(f"[dim]inserted by stage:[/dim] {stats.by_stage}")
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
+@cli.command("relink-bill-introduced-dates")
+@click.option("--levels", "levels_csv", type=str, default=None,
+              help="Comma-separated list of levels (e.g. 'provincial,federal'). "
+                   "Default: all.")
+@click.option("--provinces", "provinces_csv", type=str, default=None,
+              help="Comma-separated list of province/territory codes "
+                   "(e.g. 'MB,NS'). Default: all.")
+@click.pass_context
+def cmd_relink_bill_introduced_dates(
+    ctx: click.Context, levels_csv, provinces_csv,
+) -> None:
+    """Backfill bills.introduced_date from bill_events first_reading rows.
+
+    Pure-SQL UPDATE pass — no upstream calls. Wherever a bill has at
+    least one first_reading event but introduced_date IS NULL, set
+    introduced_date to the earliest such event's date. Idempotent.
+
+    Was conceived to close MB (81 bills) + NS (2,114 bills) gap where
+    the events existed but the denormalised intro-date column was
+    never populated. Generic across jurisdictions; safe to schedule
+    daily after the ingest chain.
+    """
+    from .legislative.federal_bill_events import relink_bill_introduced_dates
+
+    levels = [s.strip() for s in levels_csv.split(",")] if levels_csv else None
+    provinces = (
+        [s.strip().upper() for s in provinces_csv.split(",")] if provinces_csv else None
+    )
+
+    async def _wrap(db: Database) -> None:
+        stats = await relink_bill_introduced_dates(
+            db, levels=levels, provinces=provinces,
+        )
+        console.print(
+            f"[green]relink-bill-introduced-dates[/green]: "
+            f"candidates={stats.candidates} updated={stats.updated}"
+        )
+        if stats.by_jurisdiction:
+            console.print(f"[dim]updated by jurisdiction:[/dim] {stats.by_jurisdiction}")
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 
 
@@ -3923,6 +4048,211 @@ def cmd_resolve_acting_speakers(ctx: click.Context, limit) -> None:
             f"ambiguous={stats['ambiguous']} "
             f"no_politician_found={stats['no_politician_found']} "
             f"no_parens={stats['no_parens']}"
+        )
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
+@cli.command("gc-usage-metrics")
+@click.pass_context
+def cmd_gc_usage_metrics(ctx: click.Context) -> None:
+    """Drop old rows from the operator-observability tables.
+
+    Deletes:
+      * private.gpu_samples         older than 90 days
+      * private.tei_samples         older than 90 days
+      * private.search_request_log  older than 30 days
+
+    Implemented as a thin wrapper over the SQL function
+    `private.gc_usage_metrics()` so the retention windows live in one
+    place (the migration). Safe to run on an empty DB.
+    """
+    async def _wrap(db: Database) -> None:
+        rows = await db.fetch("SELECT * FROM private.gc_usage_metrics()")
+        for r in rows:
+            console.print(
+                f"[green]gc-usage-metrics[/green]: "
+                f"{r['table_name']} deleted={r['deleted_rows']}"
+            )
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Municipal — eScribe + YouTube captions (Calgary, Edmonton)
+#
+# Seven-stage chain. Stages 1-4 ingest the structured-decisions surface
+# (motions, bylaws, recorded votes) from the eScribe SaaS. Stages 5-7
+# add the speech corpus by matching meetings to YouTube videos and
+# parsing auto-generated captions. The downstream chunk-and-embed-speeches
+# job picks up new municipal speeches automatically.
+# ─────────────────────────────────────────────────────────────────────
+
+_ESCRIBE_CITY_CHOICES = ("calgary", "edmonton", "all")
+
+
+@cli.command("ingest-escribe-meetings")
+@click.option("--city", type=click.Choice(_ESCRIBE_CITY_CHOICES), default="all")
+@click.option("--limit", type=int, default=None,
+              help="Max meetings to ingest per city. Smoke-test friendly.")
+@click.pass_context
+def cmd_ingest_escribe_meetings(ctx: click.Context, city, limit) -> None:
+    """Stage 1 — discover meetings from pub-{city}.escribemeetings.com.
+
+    One GET of MeetingsCalendarView.aspx returns the full meeting list
+    (typically 2017-present) inline. Idempotent on
+    (source_system, source_meeting_id).
+    """
+    from .legislative.escribe_ingest import ingest_meetings as _ingest
+
+    async def _wrap(db: Database) -> None:
+        stats = await _ingest(db, city_slug=city, limit=limit)
+        console.print(
+            f"[green]ingest-escribe-meetings[/green]: cities={stats.cities_processed} "
+            f"seen={stats.meetings_seen} inserted={stats.meetings_inserted} "
+            f"updated={stats.meetings_updated} warns={stats.parse_warnings} "
+            f"fails={len(stats.fetch_failures)}"
+        )
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
+@cli.command("fetch-escribe-meeting-pages")
+@click.option("--city", type=click.Choice(_ESCRIBE_CITY_CHOICES), default="all")
+@click.option("--limit", type=int, default=None)
+@click.option("--force", is_flag=True, default=False,
+              help="Re-fetch already-cached pages.")
+@click.option("--delay", type=float, default=1.0,
+              help="Seconds between per-meeting GETs.")
+@click.pass_context
+def cmd_fetch_escribe_meeting_pages(ctx: click.Context, city, limit, force, delay) -> None:
+    """Stage 2 — populate meetings.raw_html for unfetched rows."""
+    from .legislative.escribe_ingest import fetch_meeting_pages as _fetch
+
+    async def _wrap(db: Database) -> None:
+        stats = await _fetch(db, city_slug=city, limit=limit, force=force, delay=delay)
+        console.print(
+            f"[green]fetch-escribe-meeting-pages[/green]: cities={stats.cities_processed} "
+            f"fetched={stats.meetings_fetched} fails={len(stats.fetch_failures)}"
+        )
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
+@cli.command("parse-escribe-meeting-pages")
+@click.option("--city", type=click.Choice(_ESCRIBE_CITY_CHOICES), default="all")
+@click.option("--limit", type=int, default=None)
+@click.pass_context
+def cmd_parse_escribe_meeting_pages(ctx: click.Context, city, limit) -> None:
+    """Stage 3 — re-parse cached HTML into bills/votes rows. No HTTP.
+
+    Idempotent: every insert is upsert-on-conflict. Re-runnable after
+    parser fixes without re-fetching.
+    """
+    from .legislative.escribe_ingest import parse_meeting_pages as _parse
+
+    async def _wrap(db: Database) -> None:
+        stats = await _parse(db, city_slug=city, limit=limit)
+        console.print(
+            f"[green]parse-escribe-meeting-pages[/green]: cities={stats.cities_processed} "
+            f"parsed={stats.pages_parsed} bills_inserted={stats.bills_inserted} "
+            f"bills_updated={stats.bills_updated} events={stats.bill_events_inserted} "
+            f"sponsors={stats.bill_sponsors_inserted} votes={stats.votes_inserted} "
+            f"positions={stats.vote_positions_inserted} warns={stats.parse_warnings}"
+        )
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
+@cli.command("resolve-escribe-motion-movers")
+@click.option("--city", type=click.Choice(_ESCRIBE_CITY_CHOICES), default="all")
+@click.pass_context
+def cmd_resolve_escribe_motion_movers(ctx: click.Context, city) -> None:
+    """Stage 4 — name-fuzz match bill_sponsors.politician_id for municipal motions.
+
+    Matches surname tokens against the city's Open North roster
+    (politicians with source_id LIKE 'opennorth:{city}-city-council:%').
+    """
+    from .legislative.escribe_ingest import resolve_motion_movers as _resolve
+
+    async def _wrap(db: Database) -> None:
+        stats = await _resolve(db, city_slug=city)
+        console.print(
+            f"[green]resolve-escribe-motion-movers[/green]: cities={stats.cities_processed} "
+            f"resolved={stats.movers_resolved} unresolved={stats.movers_unresolved}"
+        )
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
+@cli.command("match-meetings-to-youtube")
+@click.option("--city", type=click.Choice(_ESCRIBE_CITY_CHOICES), default="all")
+@click.option("--limit", type=int, default=None)
+@click.option("--max-channel-videos", type=int, default=200)
+@click.option("--max-date-drift-days", type=int, default=3)
+@click.pass_context
+def cmd_match_meetings_to_youtube(
+    ctx: click.Context, city, limit, max_channel_videos, max_date_drift_days,
+) -> None:
+    """Stage 5 — list city's YouTube channel via yt-dlp; match each meeting to a video.
+
+    Sets meetings.video_url when a date-proximity + body-name match lands
+    within max_date_drift_days.
+    """
+    from .legislative.youtube_captions import match_meetings_to_youtube as _match
+
+    async def _wrap(db: Database) -> None:
+        stats = await _match(
+            db, city_slug=city, limit=limit,
+            max_channel_videos=max_channel_videos,
+            max_date_drift_days=max_date_drift_days,
+        )
+        console.print(
+            f"[green]match-meetings-to-youtube[/green]: cities={stats.cities_processed} "
+            f"seen={stats.meetings_seen} matched={stats.matched_videos} "
+            f"skipped_no_match={stats.skipped_no_match} fails={len(stats.fetch_failures)}"
+        )
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
+@cli.command("fetch-meeting-captions")
+@click.option("--city", type=click.Choice(_ESCRIBE_CITY_CHOICES), default="all")
+@click.option("--limit", type=int, default=3,
+              help="Cap meetings per city. Default 3 — caption fetches are slow + rate-limited.")
+@click.option("--delay", type=float, default=30.0,
+              help="Seconds between yt-dlp invocations.")
+@click.pass_context
+def cmd_fetch_meeting_captions(ctx: click.Context, city, limit, delay) -> None:
+    """Stage 6 — yt-dlp auto-captions VTT → speeches rows.
+
+    Speech rows land with politician_id=NULL + confidence=0.0; Stage 7
+    fills in attribution. Downstream chunk-and-embed-speeches picks up
+    level='municipal' rows automatically.
+    """
+    from .legislative.youtube_captions import fetch_meeting_captions as _fetch
+
+    async def _wrap(db: Database) -> None:
+        stats = await _fetch(db, city_slug=city, limit=limit, delay=delay)
+        console.print(
+            f"[green]fetch-meeting-captions[/green]: cities={stats.cities_processed} "
+            f"seen={stats.meetings_seen} captions={stats.captions_fetched} "
+            f"speeches_inserted={stats.speeches_inserted} updated={stats.speeches_updated} "
+            f"warns={stats.parse_warnings} fails={len(stats.fetch_failures)}"
+        )
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
+@cli.command("resolve-meeting-caption-speakers")
+@click.option("--city", type=click.Choice(_ESCRIBE_CITY_CHOICES), default="all")
+@click.pass_context
+def cmd_resolve_meeting_caption_speakers(ctx: click.Context, city) -> None:
+    """Stage 7 — best-effort speaker FK for caption-derived speeches.
+
+    Mayor / 'her worship' role tokens → mayor politician.id (confidence 0.7).
+    'Councillor SMITH' → surname-match against Open North roster (0.7
+    when unique, 0.5 when ambiguous). Otherwise politician_id=NULL.
+    """
+    from .legislative.youtube_captions import resolve_meeting_caption_speakers as _resolve
+
+    async def _wrap(db: Database) -> None:
+        stats = await _resolve(db, city_slug=city)
+        console.print(
+            f"[green]resolve-meeting-caption-speakers[/green]: cities={stats.cities_processed} "
+            f"resolved={stats.speakers_resolved} unresolved={stats.speakers_unresolved}"
         )
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 

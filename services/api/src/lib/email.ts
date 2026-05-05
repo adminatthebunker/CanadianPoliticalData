@@ -152,4 +152,55 @@ export async function sendCorrectionApprovedEmail(
   await sendMail({ to: args.to, subject, text, html }, logger);
 }
 
+/**
+ * Notify admins that a new correction landed in the inbox. Fire-and-forget
+ * from the public POST handler — a failure here must not block the
+ * submitter's response. One email per recipient (callers iterate the
+ * admin roster).
+ */
+export async function sendCorrectionInboxNotification(
+  args: {
+    to: string;
+    subjectType: string;
+    issue: string;
+    submitter: string;        // pre-formatted "name <email>" or "anonymous"
+    adminUrl: string;         // direct link to /admin/corrections
+  },
+  logger?: { info: (o: object, m: string) => void }
+): Promise<void> {
+  const issueSnippet =
+    args.issue.length > 280 ? `${args.issue.slice(0, 280)}…` : args.issue;
+  const subject = `New correction: ${args.subjectType} (from ${args.submitter})`;
+
+  const text =
+    `A new correction was submitted to Canadian Political Data.\n\n` +
+    `Subject:    ${args.subjectType}\n` +
+    `Submitter:  ${args.submitter}\n\n` +
+    `Issue:\n  "${issueSnippet}"\n\n` +
+    `Review:     ${args.adminUrl}\n\n` +
+    `— Canadian Political Data\n`;
+
+  const safeIssue = issueSnippet
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+  const safeSubmitter = args.submitter
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+  const html =
+    `<p>A new correction was submitted to <strong>Canadian Political Data</strong>.</p>` +
+    `<dl style="margin:0;">` +
+    `<dt style="color:#6a7a95;">Subject</dt><dd style="margin:0 0 0.5em 0;"><code>${args.subjectType}</code></dd>` +
+    `<dt style="color:#6a7a95;">Submitter</dt><dd style="margin:0 0 0.5em 0;">${safeSubmitter}</dd>` +
+    `</dl>` +
+    `<blockquote style="margin:0.75em 0;padding:0.5em 1em;border-left:3px solid #2563eb;color:#4a5a75;">` +
+    safeIssue +
+    `</blockquote>` +
+    `<p><a href="${args.adminUrl}">Open the corrections inbox →</a></p>` +
+    `<p style="color:#6a7a95;font-size:0.9em;">— Canadian Political Data</p>`;
+
+  await sendMail({ to: args.to, subject, text, html }, logger);
+}
+
 export const emailIsConfigured = isConfigured;

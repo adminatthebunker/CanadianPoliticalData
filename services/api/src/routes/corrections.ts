@@ -2,6 +2,8 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { query } from "../db.js";
 import { optionalUser, getUser, requireUser } from "../middleware/user-auth.js";
+import { sendCorrectionInboxNotification, emailIsConfigured } from "../lib/email.js";
+import { config } from "../config.js";
 
 /**
  * Public corrections intake + signed-in user's own submissions list.
@@ -96,7 +98,7 @@ export default async function correctionsRoutes(app: FastifyInstance) {
       }
 
       const rows = await query<CorrectionRow>(
-        `INSERT INTO correction_submissions
+        `INSERT INTO private.correction_submissions
             (subject_type, subject_id, issue, proposed_fix, evidence_url,
              submitter_name, submitter_email, user_id, source, raw)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'web', $9::jsonb)
@@ -114,9 +116,91 @@ export default async function correctionsRoutes(app: FastifyInstance) {
           JSON.stringify({ ua: req.headers["user-agent"] ?? null }),
         ]
       );
-      return reply.code(201).send(rows[0]);
+      const inserted = rows[0];
+      if (!inserted) {
+        // Should be unreachable — INSERT … RETURNING always yields a row
+        // unless an error already threw above.
+        return reply.code(500).send({ error: "insert returned no row" });
+      }
+      // Fire-and-forget: notify all admins. Failure here must not roll
+      // back the insert or the submitter's response. The notify path is
+      // a no-op when SMTP is unconfigured (dev-stub mode).
+      void notifyAdminsOfNewCorrection(req, {
+        id: inserted.id,
+        subjectType: inserted.subject_type,
+        issue: inserted.issue,
+        submitterName: body.submitter_name ?? null,
+        submitterEmail: submitter_email,
+        signedInUserDisplay: signedInUser?.email ?? null,
+      });
+      return reply.code(201).send(inserted);
     }
   );
+}
+
+/**
+ * Lookup admin emails and fire one inbox-notification email per admin.
+ * Skips bounced addresses and dedupes on the submitter (an admin who
+ * submits their own correction shouldn't email themselves about it).
+ * All sends are fire-and-forget; errors are logged at warn level.
+ */
+async function notifyAdminsOfNewCorrection(
+  req: { log: { warn: (o: object, m: string) => void; info: (o: object, m: string) => void } },
+  payload: {
+    id: string;
+    subjectType: string;
+    issue: string;
+    submitterName: string | null;
+    submitterEmail: string | null;
+    signedInUserDisplay: string | null;
+  },
+): Promise<void> {
+  if (!emailIsConfigured()) return;
+  try {
+    const admins = await query<{ email: string }>(
+      `SELECT email
+         FROM private.users
+        WHERE is_admin = true
+          AND email_bounced_at IS NULL`,
+    );
+    if (admins.length === 0) return;
+
+    const submitterLabel = payload.signedInUserDisplay
+      ? `${payload.signedInUserDisplay} (signed in)`
+      : payload.submitterName && payload.submitterEmail
+        ? `${payload.submitterName} <${payload.submitterEmail}>`
+        : payload.submitterEmail || payload.submitterName || "anonymous";
+
+    const adminUrl = `${config.publicSiteUrl}/admin/corrections`;
+    const submitterEmail = payload.submitterEmail?.toLowerCase() ?? null;
+
+    for (const a of admins) {
+      // Don't email an admin about their own submission.
+      if (submitterEmail && a.email.toLowerCase() === submitterEmail) continue;
+      try {
+        await sendCorrectionInboxNotification(
+          {
+            to: a.email,
+            subjectType: payload.subjectType,
+            issue: payload.issue,
+            submitter: submitterLabel,
+            adminUrl,
+          },
+          req.log,
+        );
+      } catch (err) {
+        req.log.warn(
+          { err: err instanceof Error ? err.message : String(err), to: a.email, correction_id: payload.id },
+          "correction inbox notification failed",
+        );
+      }
+    }
+  } catch (err) {
+    req.log.warn(
+      { err: err instanceof Error ? err.message : String(err), correction_id: payload.id },
+      "correction inbox notification: admin roster lookup failed",
+    );
+  }
 }
 
 /** Mounted under /api/v1/me — lists the signed-in user's submissions. */
@@ -129,8 +213,8 @@ export async function meCorrectionsRoutes(app: FastifyInstance) {
               cs.evidence_url, cs.status, cs.reviewer_notes,
               cs.received_at, cs.resolved_at,
               COALESCE(cl.delta, 0)::int AS credits_earned
-         FROM correction_submissions cs
-         LEFT JOIN credit_ledger cl
+         FROM private.correction_submissions cs
+         LEFT JOIN private.credit_ledger cl
                 ON cl.reference_id = cs.id::text
                AND cl.kind = 'correction_reward'
                AND cl.state IN ('committed','held')

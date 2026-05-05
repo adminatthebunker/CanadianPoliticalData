@@ -50,7 +50,7 @@ function verifyToken(token: string, savedSearchId: string): boolean {
 async function findSavedSearchByToken(token: string): Promise<string | null> {
   if (!config.jwtSecret) return null;
   const rows = await query<{ id: string }>(
-    `SELECT id FROM saved_searches WHERE alert_cadence <> 'none'`
+    `SELECT id FROM private.saved_searches WHERE alert_cadence <> 'none'`
   );
   for (const row of rows) {
     if (verifyToken(token, row.id)) return row.id;
@@ -60,7 +60,7 @@ async function findSavedSearchByToken(token: string): Promise<string | null> {
 
 async function applyUnsubscribe(savedSearchId: string): Promise<void> {
   await query(
-    `UPDATE saved_searches SET alert_cadence = 'none' WHERE id = $1`,
+    `UPDATE private.saved_searches SET alert_cadence = 'none' WHERE id = $1`,
     [savedSearchId]
   );
 }

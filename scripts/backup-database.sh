@@ -129,12 +129,12 @@ log "writing manifest header"
     echo
     echo "row_counts:"
     docker exec sw-db psql -U sw -d sovereignwatch -tAc \
-        "SELECT 'users', count(*) FROM users UNION ALL
-         SELECT 'credit_ledger', count(*) FROM credit_ledger UNION ALL
-         SELECT 'politicians', count(*) FROM politicians UNION ALL
-         SELECT 'bills', count(*) FROM bills UNION ALL
-         SELECT 'speeches', count(*) FROM speeches UNION ALL
-         SELECT 'speech_chunks', count(*) FROM speech_chunks"
+        "SELECT 'private.users', count(*) FROM private.users UNION ALL
+         SELECT 'private.credit_ledger', count(*) FROM private.credit_ledger UNION ALL
+         SELECT 'public.politicians', count(*) FROM public.politicians UNION ALL
+         SELECT 'public.bills', count(*) FROM public.bills UNION ALL
+         SELECT 'public.speeches', count(*) FROM public.speeches UNION ALL
+         SELECT 'public.speech_chunks', count(*) FROM public.speech_chunks"
     echo
     echo "applied_migrations:"
     ls "$SOVPRO_REPO/db/migrations/" | sort

@@ -469,13 +469,25 @@ def extract_status_events(html: str) -> list[dict]:
         chunk = re.split(r"</tr>|</table>", chunk, maxsplit=1)[0]
         cells = re.findall(r"<t[dh][^>]*>(.*?)(?=</t[dh]>|<t[dh][^>]*>|$)",
                            chunk, re.DOTALL)
-        if len(cells) < 5:
+        # Pre-P42 sessions emit a 4-column layout (Date / Bill stage /
+        # Activity / Committee) — no Outcome column. P42+ adds Outcome
+        # between Activity and Committee. Branch on cell count rather
+        # than fork the function; both layouts share Date at [0] and
+        # Bill stage at [1].
+        if len(cells) >= 5:
+            date_txt = _strip(cells[0])
+            stage_txt = _strip(cells[1])
+            event_txt = _strip(cells[2])
+            outcome_txt = _strip(cells[3])
+            committee_txt = _strip(cells[4])
+        elif len(cells) == 4:
+            date_txt = _strip(cells[0])
+            stage_txt = _strip(cells[1])
+            event_txt = _strip(cells[2])
+            outcome_txt = ""
+            committee_txt = _strip(cells[3])
+        else:
             continue
-        date_txt = _strip(cells[0])
-        stage_txt = _strip(cells[1])
-        event_txt = _strip(cells[2])
-        outcome_txt = _strip(cells[3])
-        committee_txt = _strip(cells[4])
 
         if stage_txt.lower() in ("bill stage", ""):  # header row
             continue

@@ -20,7 +20,7 @@ import socialsRoutes from "./routes/socials.js";
 import committeesRoutes from "./routes/committees.js";
 import openparliamentRoutes from "./routes/openparliament.js";
 import coverageRoutes from "./routes/coverage.js";
-import searchRoutes from "./routes/search.js";
+import searchRoutes, { EmbeddingServiceUnavailableError } from "./routes/search.js";
 import projectionRoutes from "./routes/projections.js";
 import speechRoutes from "./routes/speeches.js";
 import adminRoutes from "./routes/admin.js";
@@ -56,6 +56,23 @@ await app.register(sensible);
 await app.register(rateLimit, {
   max: 300,
   timeWindow: "1 minute",
+});
+
+// Map embedding-service outages to a stable 503 instead of letting the bare
+// undici `Error("fetch failed")` surface as a generic 500. Frontend can
+// branch on `code: "embedding_service_unavailable"` for retry UX.
+app.setErrorHandler((err, _req, reply) => {
+  if (err instanceof EmbeddingServiceUnavailableError) {
+    app.log.warn({ err: err.message, cause: err.cause }, "embedding service unavailable");
+    return reply.status(503).send({
+      statusCode: 503,
+      error: "Service Unavailable",
+      code: "embedding_service_unavailable",
+      message:
+        "Search embedding service is temporarily unavailable. Please try again in a moment.",
+    });
+  }
+  reply.send(err);
 });
 
 // ── Health ───────────────────────────────────────────────────

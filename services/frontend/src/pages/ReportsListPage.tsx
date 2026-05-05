@@ -4,6 +4,7 @@ import {
   userFetch,
   UserUnauthorizedError,
   UserAuthDisabledError,
+  type AnalysisKind,
   type ReportListEntry,
 } from "../api";
 import { useUserAuth } from "../hooks/useUserAuth";
@@ -15,6 +16,16 @@ const STATUS_LABEL: Record<ReportListEntry["status"], string> = {
   failed: "Failed",
   cancelled: "Cancelled",
   refunded: "Refunded",
+};
+
+const KIND_LABEL: Record<AnalysisKind, string> = {
+  full_report: "Full report",
+  search_synthesis: "Synthesis",
+  stance_map: "Stance map",
+  topic_pulse: "Topic pulse",
+  narrative_timeline: "Narrative timeline",
+  voting_audit: "Voting audit",
+  compare_politicians: "Comparison",
 };
 
 function formatRelative(iso: string): string {
@@ -170,11 +181,18 @@ export default function ReportsListPage() {
                   } cpd-reports-list__item--${r.status}`}
                 >
                   <div className="cpd-reports-list__head">
-                    <strong>{r.politician_name ?? "Unknown politician"}</strong>
-                    {r.politician_party && (
-                      <span className="cpd-reports-list__party">({r.politician_party})</span>
-                    )}
-                    <span className="cpd-reports-list__topic">"{r.query}"</span>
+                    <span className={`cpd-reports-list__kind cpd-reports-list__kind--${r.kind ?? "full_report"}`}>
+                      {KIND_LABEL[r.kind ?? "full_report"]}
+                    </span>
+                    {r.politician_name ? (
+                      <>
+                        <strong>{r.politician_name}</strong>
+                        {r.politician_party && (
+                          <span className="cpd-reports-list__party">({r.politician_party})</span>
+                        )}
+                      </>
+                    ) : null}
+                    {r.query && <span className="cpd-reports-list__topic">"{r.query}"</span>}
                   </div>
                   <div className="cpd-reports-list__meta">
                     <span className={`cpd-reports-list__status cpd-reports-list__status--${r.status}`}>

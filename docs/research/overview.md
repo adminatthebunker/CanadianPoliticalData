@@ -3,7 +3,7 @@
 > Shared methodology, schema log, and progress tracking for the Canadian Political Data legislative-data effort. Per-jurisdiction dossiers (federal + 13 provinces/territories) are siblings of this file in `docs/research/`. See [`README.md`](./README.md) for the index.
 
 **Status:** Active — federal Hansard + NS + ON + BC + QC + AB + NB + NL + NT + NU + **MB** bills layer in production (11 of 14 Canadian legislatures including federal); **QC Hansard live** for 8 sessions (39-1 → 43-2, Jan 2009 → Apr 2026 — **313,345 speeches / 1,278 sittings / 17-year span**) via origin HTML + Wayback CDX fallback for historical URL discovery; **MB Hansard live end-to-end for legs 37-43 (1999-11 → 2026-04, 407,695 speeches across 2,325 sittings / 27-year span)** — era-dispatching parser covers both modern MsoNormal (legs 39+) and Word-97 HTML export (legs 37-38); SK deferred (PDF-only, single-province investment); PEI and YT deferred (CAPTCHA / Cloudflare pair). **Historical-MLA roster backfills** landed for AB (+901 MLAs back to 1906) and MB (+764 MLAs back to 1870), enabling date-windowed speaker resolution across the full Hansard span. Corpus-wide: **2,568,359 speeches / 3,398,197 Qwen3 chunks, 100% embedded.**
-**Last updated:** 2026-04-23
+**Last updated:** 2026-05-05
 
 ## Implementation Log
 
@@ -119,7 +119,7 @@ Difficulty rating: **1** = documented API, **2** = undocumented but structured (
 | Alberta | 87 | HTML (3) | PDF-only (4) | Embedded in Hansard (4) | **HTML (2) — already scraped** |
 | Nova Scotia | 55 | **Socrata API (2)** | HTML (3) | HTML Journals (3) | HTML (2) |
 | Manitoba | 57 | HTML (3) | HTML (3) | HTML Votes/Proceedings (4) | HTML (2) |
-| Saskatchewan | 61 | PDF-only (4) | HTML + PDF (2) | HTML (3) | HTML (2) |
+| Saskatchewan | 61 | **✅ PDF live (3)** | **✅ HTML + PDF live (2)** | HTML (3) | HTML (2) |
 | New Brunswick | 49 | **Socrata + HTML (2)** | HTML + PDF (3) | Embedded in Journals (4) | HTML (2) |
 | Newfoundland & Labrador | 40 | HTML (3) | HTML (3) | Embedded in Hansard (3) | HTML (3) |
 | Prince Edward Island | 27 | **Radware CAPTCHA (5)** | HTML + A/V (3)* | Embedded in Hansard (3)* | HTML + A/V (3)* |
@@ -130,8 +130,10 @@ Difficulty rating: **1** = documented API, **2** = undocumented but structured (
 Notes on the matrix:
 - **Alberta committees** are already partially ingested via `ingest_ab_committees` in the current scanner — an existing asset, not a greenfield build.
 - **Nova Scotia** and **New Brunswick** have **Socrata-backed open data portals** (`data.novascotia.ca`, `gnb.socrata.com`) which provide SoQL/REST APIs — the lowest-friction starting points in the country.
+- **Saskatchewan** (2026-05-05): Hansard `live` (50,948 speeches, 360 sittings, 29L1S–30L2S; HTML at `docs.legassembly.sk.ca/legdocs/Assembly/Debates/{N}L{S}S/{YYYYMMDD}DebatesHTML.htm` + PDF for 29L1S–29L3S all-PDF era + AM/EVE supplementary sittings). Bills `partial` (367 bills across 8 sessions via `progress-of-bills.pdf` parser; reaching `live` needs the yearly-span 1998-2017 PDF era which uses a different table shape).
 - **Yukon** is behind Cloudflare Bot Management and returns HTTP 403 to all non-browser requests, confirmed April 2026. Requires Playwright/Selenium or an alternative source (`yukon.ca` government legislation portal may be an option for bill text only).
 - **NT and NU** are consensus governments — non-partisan MLAs, no party lines, and "voting records" in the partisan sense largely don't apply. Schema will need to accommodate this.
+- **Cross-jurisdictional Tier-2 attribution** (commits `bb41d88` + `b0b2562`, 2026-05-05): inline-name presiding-officer resolver picks up `(Mr. Bas Balkissoon)` / `(Mme Gaudreault)` parens-name shapes left by chamber parsers (ON +862 / MB +1,961 / QC +16, daily 23:30 UTC schedule). BC ALL-CAPS resolver picks up `MR. G.S. WALLACE (Oak Bay)` / `HON. D. BARRETT (Premier)` (P29-P34 era, +11,017 attributions; BC corpus 92.5% → 94.4%).
 
 ---
 
@@ -143,7 +145,7 @@ Recommended implementation order, balancing data accessibility against political
 2. **Ontario** — 124 MPPs makes it the largest civic impact. HTML-only but well-structured. Pair well after NS prototype so we can see how the schema stretches from "API-driven" to "scrape-driven".
 3. **British Columbia** — Third largest by population. Solid Hansard archives (1970+) and structured Votes and Proceedings. Similar difficulty profile to ON.
 4. **Alberta** — Can build on existing `ingest_ab_committees` and extend to bills/Hansard/votes. Hansard is PDF-only, so this forces us to solve PDF extraction before tackling other PDF-heavy jurisdictions.
-5. **Saskatchewan** — Well-indexed Hansard (subject + speaker indexes from 1996) and structured Votes and Proceedings. Moderate assembly size (61).
+5. **Saskatchewan** — ✅ Hansard + bills shipped 2026-05-05. Well-indexed Hansard (subject + speaker indexes from 1996) consumed via the speaker-index roster pattern; bills via `progress-of-bills.pdf` tabular parser. Votes (Journals — session-aggregated PDFs with per-MLA roll-call tables) remains the open SK workstream.
 6. **New Brunswick** — Socrata portal means bills are cheap; rest of data is moderate HTML. Complements NS in proving the Socrata ingestion code generalizes.
 7. **Quebec** — High civic salience but bilingual complexity (FR primary, EN translations) adds implementation cost. Worth tackling once the pipeline has been hardened elsewhere.
 8. **Manitoba** — Standard HTML scrape. No special difficulties or opportunities.

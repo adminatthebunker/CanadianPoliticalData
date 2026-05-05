@@ -110,6 +110,18 @@ Read this before any non-trivial change to a listed area. The structure mirrors 
 **Why:** Stripe rejects every Session that requests `automatic_tax` without an upstream registration. Result: outage on the buy-credits flow.
 **How to apply:** Run the full activation checklist in `docs/operations.md` § Stripe Tax — including the test-mode dry-run — before flipping the flag in production.
 
+### Do not flip from test mode to live mode without scrubbing test-mode `users.stripe_customer_id`
+**Why:** Stripe customer namespace is per-mode. A `cus_…` created in test mode does not exist in live mode; the live API rejects requests that reference it with `"No such customer: 'cus_…'"`. The frontend sees a generic 502 and the user can't buy credits. Bit me on 2026-05-05 cutover.
+**How to apply:** As part of the live-mode swap, run `UPDATE private.users SET stripe_customer_id = NULL WHERE stripe_customer_id IS NOT NULL;` before the first live checkout. `getOrCreateCustomer` mints fresh live-mode customers on next purchase. Stale test-mode customers are abandoned in test mode (harmless, never billable). Documented in `docs/operations.md` § Phase 3 step 6.
+
+### Do not assume the test-mode webhook subscription carries over to live mode
+**Why:** Stripe scopes webhook endpoint registrations per-mode (test vs live each have their own list). A webhook registered while the dashboard was toggled to test mode receives test-mode events only — live-mode events have no destination, so the buy succeeds, no credit lands, and the failure is invisible from the user's perspective (success-redirect doesn't carry payment confirmation by design). The Dashboard's "Recent deliveries" view is the only place this surfaces.
+**How to apply:** When going live, register `https://canadianpoliticaldata.org/api/v1/webhooks/stripe` a **second time** in the live-mode dashboard. Verify the URL exactly matches your live host (the `.ca` brand-aspiration domain is not currently DNS-routed; using it would silently fail). Subscribe to `checkout.session.completed` only. Stripe retries failed webhooks 5x over 72h, so a delayed fix still works as long as you click Resend on the failed deliveries within that window.
+
+### Do not pass `prod_…` as a Price ID
+**Why:** The Stripe Dashboard surfaces the Product ID (`prod_…`) more visibly than the Price ID (`price_…`); first-time integrators routinely paste the wrong one. The `STRIPE_PRICE_ID_CREDIT_PACK_*` env vars must be **price** IDs — `prod_…` values get rejected with `"No such price: 'prod_…'"` on the first checkout. Bit me on 2026-05-05 cutover.
+**How to apply:** Sanity-check every `STRIPE_PRICE_ID_*` env var starts with `price_`, not `prod_`. The Stripe two-tier model (one Product, multiple Prices) is intentional — Prices are immutable for audit trail; Products are mutable for catalog.
+
 ### Do not bypass the "one pending rate-limit request per user" guard
 **Why:** Without it, users can flood the admin queue with duplicate requests.
 **How to apply:** App-layer check is the minimum. If the guard becomes load-bearing, add a DB-level partial unique index.
@@ -175,6 +187,34 @@ Read this before any non-trivial change to a listed area. The structure mirrors 
 ### Do not allow the frontend to call the scanner directly
 **Why:** Projection builds are minutes-long, GPU-bound jobs. They belong on the queue, not on a request thread.
 **How to apply:** Builds are triggered via the admin jobs queue (`scanner_jobs`). There is no HTTP endpoint that starts a scanner subprocess.
+
+## Schema isolation (public vs private)
+
+### Do not widen the API role's `search_path` to include `private`
+**Why:** The whole point of putting user/payment tables in the `private` schema (migration 0042) is structural enforcement of the privacy boundary. The role `sw` is configured with `search_path = public` precisely so an unqualified `FROM users` raises a hard error instead of silently picking up `private.users`. Widening `search_path` re-creates the "did the engineer remember to qualify" problem we paid the migration cost to eliminate.
+**How to apply:** Always write `private.users`, `private.credit_ledger`, etc. in SQL — both in TypeScript route handlers and in Python workers. Never alias to a bare `users`. If you find an unqualified reference, fix it; don't widen `search_path` to make it work.
+
+### Do not put new user-data tables in the `public` schema
+**Why:** The public dump (`cli/sovpro db public-dump` → `pg_dump --schema=public`) is the redistribution artifact. Anything in `public` is — by definition, no exceptions — safe to publish. A new table holding emails / sessions / payment metadata / user-submitted content in `public` is a privacy bug waiting to ship.
+**How to apply:** New migrations creating user-account, session, payment, or user-submitted-content tables write `CREATE TABLE private.X`, not `CREATE TABLE X`. The dump script's manifest guardrail catches one of the 10 known table-name patterns showing up in `public`, but it does not catch a *novel* PII table; the rule above is what catches that.
+
+### Do not add a `user_id` / `created_by_user_id` column on a public-schema table
+**Why:** Same reason. Even if the FK target lives in `private`, the column itself in `public` carries the link to a person and would ship in the public dump.
+**How to apply:** If you need to associate a user with a public artifact, put the linking row in `private` (e.g. `private.user_actions(user_id, public_artifact_id)`) and join from there.
+
+## Public distribution
+
+### Do not remove `limit_conn` / `limit_rate` from the `/datasets/` location
+**Why:** This is the rate cliff between "anyone can grab the dump" and "the box's home upstream saturates and everything else lags." The 2-concurrent / 50 MB/s cap was set deliberately because there is no CDN in front; pulling the cap means the next viral Hacker News link makes the API and the docs site unresponsive too.
+**How to apply:** If the cap is genuinely too tight (a legitimate user complaint, not a hypothetical), measure sustained traffic via `/var/log/nginx/datasets.access.log` first and raise the rate, don't remove it. If you ever need to lift the cap entirely, add a CDN (Cloudflare / Bunny / similar) in front rather than pointing strangers at the home upstream raw.
+
+### Do not put `/datasets/` behind authentication
+**Why:** The whole point of this surface is anonymous bulk download — journalists, civic-tech orgs, foreign researchers, the next Wikipedia editor. Adding auth re-creates the same friction we built `/datasets/` to escape, and conflicts with the open-data brand. Auth-gated bulk export is a separate, paid product (public dev API horizon).
+**How to apply:** Keep `/datasets/` open + rate-limited. If a future "premium tier" ships, it gets a different URL (`/api/public/v1/bulk/...`) backed by API-key auth, not a flag on `/datasets/`.
+
+### Do not couple a third-party mirror upload into `make-public-dump.sh`
+**Why:** An earlier rclone+Proton Drive integration was reverted on 2026-05-04 after Proton's anti-abuse system soft-locked the account on first contact (their reverse-engineered backend trips fraud signals). Even with graceful-degrade gating, an in-script mirror creates an operator-confusion surface: a "succeeded" cron run that quietly ships a stale mirror is worse than no mirror at all. Mirrors are operator-driven now (manual upload).
+**How to apply:** If a future mirror needs automation, write it as a separate script invoked *after* `make-public-dump.sh` lands a verified artifact, with its own cron entry, its own logs, and its own failure mode. Do not re-couple the publish path to the mirror upload path.
 
 ## Cross-cutting
 

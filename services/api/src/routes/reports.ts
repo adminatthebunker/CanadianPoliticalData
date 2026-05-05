@@ -7,8 +7,9 @@ import { requireCsrf } from "../lib/csrf.js";
 import {
   countRecentReportJobs,
   dailyReportCapForTier,
-  estimateReportCost,
-  getPoliticianHeader,
+  estimateAnalysisCost,
+  priceAnalysis,
+  type AnalysisCostEstimate,
 } from "../lib/reports.js";
 import { getBalance, holdCredits } from "../lib/credits.js";
 
@@ -34,12 +35,56 @@ import { getBalance, holdCredits } from "../lib/credits.js";
  * ready.
  */
 
-const estimateBody = z.object({
+// Per-kind input shapes. The discriminated union forces every code path
+// downstream to handle every kind explicitly — adding a new kind without
+// the corresponding case in the dispatcher fails type-check.
+//
+// search_synthesis and stance_map share the same input shape (chunk_ids
+// from the frontend's current search). Both have a per-kind cap of 500
+// matching maxChunksFor() — the zod max is the boundary that rejects
+// oversized request bodies before any DB work.
+
+const fullReportInputs = z.object({
+  kind: z.literal("full_report"),
   politician_id: z.string().uuid(),
   query: z.string().trim().min(2).max(500),
 });
 
-const submitBody = estimateBody;
+const searchAnalysisInputsBase = {
+  chunk_ids: z.array(z.string().uuid()).min(1).max(500),
+  query: z.string().trim().min(1).max(500),
+  filter_payload: z.record(z.unknown()).optional(),
+};
+
+const searchSynthesisInputs = z.object({
+  kind: z.literal("search_synthesis"),
+  ...searchAnalysisInputsBase,
+});
+
+const stanceMapInputs = z.object({
+  kind: z.literal("stance_map"),
+  ...searchAnalysisInputsBase,
+});
+
+// Back-compat: bodies missing `kind` default to 'full_report' so existing
+// frontend callers continue to work unchanged. Once the frontend always
+// sends kind explicitly, the preprocess wrapper can be dropped.
+const analysisBody = z.preprocess(
+  (input) => {
+    if (
+      input &&
+      typeof input === "object" &&
+      !Array.isArray(input) &&
+      !("kind" in (input as Record<string, unknown>))
+    ) {
+      return { ...(input as Record<string, unknown>), kind: "full_report" };
+    }
+    return input;
+  },
+  z.discriminatedUnion("kind", [fullReportInputs, searchSynthesisInputs, stanceMapInputs])
+);
+
+type AnalysisBody = z.infer<typeof analysisBody>;
 
 const bugReportBody = z.object({
   message: z.string().trim().min(10).max(2000),
@@ -48,6 +93,60 @@ const bugReportBody = z.object({
 interface PoliticianRow {
   id: string;
   name: string | null;
+}
+
+/** Sentinel for "politician_id from the body doesn't resolve". */
+class PoliticianNotFoundError extends Error {
+  constructor() {
+    super("politician not found");
+    this.name = "PoliticianNotFoundError";
+  }
+}
+
+interface EstimateResult {
+  est: AnalysisCostEstimate;
+  politician: PoliticianRow | null;
+  query: string;
+  /**
+   * For chunk-driven kinds (search_synthesis / stance_map): the subset
+   * of submitted chunk_ids that actually exist in speech_chunks. Cost
+   * is priced against this count, not the raw submission, so users
+   * don't pay for fabricated UUIDs. NULL for full_report (chunks are
+   * resolved later by the worker via HNSW).
+   */
+  validChunkIds: string[] | null;
+}
+
+/**
+ * Compute everything needed to render a cost preview OR to enqueue a
+ * job for an analysis body. Single source of truth for "what does this
+ * request cost?" — POST /estimate calls it for the modal; POST / calls
+ * it again server-side before placing the hold (never trust client
+ * numbers).
+ */
+async function estimateForBody(body: AnalysisBody): Promise<EstimateResult> {
+  if (body.kind === "full_report") {
+    const politician = await queryOne<PoliticianRow>(
+      `SELECT id, name FROM politicians WHERE id = $1`,
+      [body.politician_id]
+    );
+    if (!politician) throw new PoliticianNotFoundError();
+    const est = await estimateAnalysisCost({
+      kind: "full_report",
+      politician_id: body.politician_id,
+      query: body.query,
+    });
+    return { est, politician, query: body.query, validChunkIds: null };
+  }
+  // search_synthesis | stance_map. Validate chunk_ids exist before
+  // pricing so fabricated UUIDs don't inflate the user's bill.
+  const validRows = await query<{ id: string }>(
+    `SELECT id FROM speech_chunks WHERE id = ANY($1::uuid[])`,
+    [body.chunk_ids]
+  );
+  const validIds = validRows.map((r) => r.id);
+  const est = priceAnalysis(body.kind, validIds.length);
+  return { est, politician: null, query: body.query, validChunkIds: validIds };
 }
 
 export default async function reportsRoutes(app: FastifyInstance) {
@@ -64,6 +163,12 @@ export default async function reportsRoutes(app: FastifyInstance) {
   });
 
   // ── POST /estimate ───────────────────────────────────────────
+  // Dispatches on `kind`:
+  //   full_report      → embed query, HNSW count, price.
+  //   search_synthesis → validate chunk_ids exist, price by valid count.
+  //   stance_map       → same as search_synthesis (different formula).
+  // Response shape is kind-aware: `politician` is populated only for
+  // full_report (back-compat); a `kind` field is always present.
   app.post(
     "/estimate",
     { preHandler: [requireUser, requireCsrf] },
@@ -71,41 +176,37 @@ export default async function reportsRoutes(app: FastifyInstance) {
       if (!config.reports.enabled) {
         return reply.code(503).send({ error: "Premium reports not configured" });
       }
-      const parsed = estimateBody.safeParse(req.body);
+      const parsed = analysisBody.safeParse(req.body);
       if (!parsed.success) {
         return reply.code(400).send({ error: "invalid body", details: parsed.error.flatten() });
       }
-      const { politician_id, query: topic } = parsed.data;
-
-      const politician = await queryOne<PoliticianRow>(
-        `SELECT id, name FROM politicians WHERE id = $1`,
-        [politician_id]
-      );
-      if (!politician) {
-        return reply.code(404).send({ error: "politician not found" });
-      }
-
       const userId = getUser(req)!.sub;
 
-      let est;
+      let result: { est: AnalysisCostEstimate; politician: PoliticianRow | null; query: string };
       try {
-        est = await estimateReportCost({ politicianId: politician_id, query: topic });
+        result = await estimateForBody(parsed.data);
       } catch (err) {
-        req.log.error({ err, politician_id }, "[reports] estimate failed");
+        if (err instanceof PoliticianNotFoundError) {
+          return reply.code(404).send({ error: "politician not found" });
+        }
+        req.log.error({ err, kind: parsed.data.kind }, "[reports] estimate failed");
         return reply.code(502).send({ error: "Failed to estimate report cost" });
       }
 
       const balance = await getBalance(userId);
 
       return reply.send({
-        politician: { id: politician.id, name: politician.name },
-        query: topic,
-        estimated_chunks: est.estimated_chunks,
-        candidate_chunks: est.candidate_chunks,
-        estimated_credits: est.estimated_credits,
-        capped: est.capped,
+        kind: parsed.data.kind,
+        politician: result.politician
+          ? { id: result.politician.id, name: result.politician.name }
+          : null,
+        query: result.query,
+        estimated_chunks: result.est.estimated_chunks,
+        candidate_chunks: result.est.candidate_chunks,
+        estimated_credits: result.est.estimated_credits,
+        capped: result.est.capped,
         balance,
-        sufficient: balance >= est.estimated_credits,
+        sufficient: balance >= result.est.estimated_credits,
       });
     }
   );
@@ -127,27 +228,20 @@ export default async function reportsRoutes(app: FastifyInstance) {
       if (!config.reports.enabled) {
         return reply.code(503).send({ error: "Premium reports not configured" });
       }
-      const parsed = submitBody.safeParse(req.body);
+      const parsed = analysisBody.safeParse(req.body);
       if (!parsed.success) {
         return reply.code(400).send({ error: "invalid body", details: parsed.error.flatten() });
       }
-      const { politician_id, query: topic } = parsed.data;
+      const body = parsed.data;
       const userId = getUser(req)!.sub;
       const tierRow = await queryOne<{ rate_limit_tier: string }>(
-        `SELECT rate_limit_tier FROM users WHERE id = $1`,
+        `SELECT rate_limit_tier FROM private.users WHERE id = $1`,
         [userId]
       );
       const tier = tierRow?.rate_limit_tier ?? "default";
 
-      const politician = await queryOne<PoliticianRow>(
-        `SELECT id, name FROM politicians WHERE id = $1`,
-        [politician_id]
-      );
-      if (!politician) {
-        return reply.code(404).send({ error: "politician not found" });
-      }
-
-      // Tier daily cap.
+      // Tier daily cap. Shared across all kinds — one paid-AI cap per
+      // user per day, not per-kind caps that users would have to track.
       const cap = dailyReportCapForTier(tier);
       if (cap !== null) {
         const recent = await countRecentReportJobs(userId);
@@ -162,16 +256,23 @@ export default async function reportsRoutes(app: FastifyInstance) {
       }
 
       // Re-estimate server-side. Never trust the client's numbers.
-      let est;
+      let estResult: EstimateResult;
       try {
-        est = await estimateReportCost({ politicianId: politician_id, query: topic });
+        estResult = await estimateForBody(body);
       } catch (err) {
-        req.log.error({ err, politician_id }, "[reports] estimate failed");
+        if (err instanceof PoliticianNotFoundError) {
+          return reply.code(404).send({ error: "politician not found" });
+        }
+        req.log.error({ err, kind: body.kind }, "[reports] estimate failed");
         return reply.code(502).send({ error: "Failed to estimate report cost" });
       }
+      const est = estResult.est;
       if (est.estimated_chunks < 1) {
         return reply.code(400).send({
-          error: "no matching quotes for this politician + query",
+          error:
+            body.kind === "full_report"
+              ? "no matching quotes for this politician + query"
+              : "no matching speech chunks for the supplied chunk_ids",
         });
       }
 
@@ -189,6 +290,25 @@ export default async function reportsRoutes(app: FastifyInstance) {
         });
       }
 
+      // Build the kind-specific INSERT shape. full_report keeps the
+      // existing (politician_id, query) columns; new kinds park their
+      // chunk_ids + filter_payload in the `inputs` JSONB. Both shapes
+      // share kind / estimated_chunks / estimated_credits.
+      const inputsPayload =
+        body.kind === "full_report"
+          ? {}
+          : {
+              chunk_ids: estResult.validChunkIds ?? [],
+              query: body.query,
+              filter_payload: body.filter_payload ?? null,
+            };
+      // politician_id is full_report-only (the new kinds aren't anchored
+      // to one politician). query lives on the dedicated column for ALL
+      // kinds, which keeps the /me/reports SELECT and the viewer's query
+      // display single-source — no COALESCE with inputs->>'query'.
+      const politicianIdForRow = body.kind === "full_report" ? body.politician_id : null;
+      const queryForRow = body.query;
+
       // Atomic enqueue + hold. If anything throws inside the
       // transaction (incl. the holdCredits insert hitting the unique
       // index, which would only happen on duplicate submit retries
@@ -197,11 +317,19 @@ export default async function reportsRoutes(app: FastifyInstance) {
       try {
         await client.query("BEGIN");
         const jobRes = await client.query<{ id: string }>(
-          `INSERT INTO report_jobs
-               (user_id, politician_id, query, estimated_chunks, estimated_credits)
-             VALUES ($1, $2, $3, $4, $5)
+          `INSERT INTO private.report_jobs
+               (user_id, kind, politician_id, query, inputs, estimated_chunks, estimated_credits)
+             VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7)
              RETURNING id`,
-          [userId, politician_id, topic, est.estimated_chunks, est.estimated_credits]
+          [
+            userId,
+            body.kind,
+            politicianIdForRow,
+            queryForRow,
+            JSON.stringify(inputsPayload),
+            est.estimated_chunks,
+            est.estimated_credits,
+          ]
         );
         const jobId = jobRes.rows[0]?.id;
         if (!jobId) throw new Error("report_jobs insert returned no id");
@@ -215,7 +343,7 @@ export default async function reportsRoutes(app: FastifyInstance) {
         });
 
         await client.query(
-          `UPDATE report_jobs SET hold_ledger_id = $1 WHERE id = $2`,
+          `UPDATE private.report_jobs SET hold_ledger_id = $1 WHERE id = $2`,
           [holdLedgerId, jobId]
         );
         await client.query("COMMIT");
@@ -223,12 +351,13 @@ export default async function reportsRoutes(app: FastifyInstance) {
         const balanceAfter = await getBalance(userId);
         return reply.code(201).send({
           id: jobId,
+          kind: body.kind,
           estimated_credits: est.estimated_credits,
           balance_after: balanceAfter,
         });
       } catch (err) {
         await client.query("ROLLBACK").catch(() => {});
-        req.log.error({ err, userId, politician_id }, "[reports] enqueue failed");
+        req.log.error({ err, userId, kind: body.kind }, "[reports] enqueue failed");
         return reply.code(500).send({ error: "Failed to enqueue report" });
       } finally {
         client.release();
@@ -246,10 +375,11 @@ export default async function reportsRoutes(app: FastifyInstance) {
     if (!params.success) return reply.code(404).send({ error: "not found" });
     const row = await queryOne<{
       id: string;
-      politician_id: string;
+      kind: string;
+      politician_id: string | null;
       politician_name: string | null;
       politician_party: string | null;
-      query: string;
+      query: string | null;
       status: string;
       html: string | null;
       summary: string | null;
@@ -262,6 +392,7 @@ export default async function reportsRoutes(app: FastifyInstance) {
       finished_at: Date | null;
     }>(
       `SELECT rj.id,
+              rj.kind,
               rj.politician_id,
               p.name  AS politician_name,
               p.party AS politician_party,
@@ -276,8 +407,8 @@ export default async function reportsRoutes(app: FastifyInstance) {
               rj.error,
               rj.created_at,
               rj.finished_at
-         FROM report_jobs rj
-         JOIN politicians p ON p.id = rj.politician_id
+         FROM private.report_jobs rj
+         LEFT JOIN public.politicians p ON p.id = rj.politician_id
         WHERE rj.id = $1
           AND rj.is_public = true
           AND rj.status = 'succeeded'`,
@@ -296,10 +427,11 @@ export async function meReportsRoutes(app: FastifyInstance) {
       const userId = getUser(req)!.sub;
       const rows = await query<{
         id: string;
-        politician_id: string;
+        kind: string;
+        politician_id: string | null;
         politician_name: string | null;
         politician_party: string | null;
-        query: string;
+        query: string | null;
         status: string;
         summary: string | null;
         estimated_credits: number;
@@ -312,6 +444,7 @@ export async function meReportsRoutes(app: FastifyInstance) {
         error: string | null;
       }>(
         `SELECT rj.id,
+                rj.kind,
                 rj.politician_id,
                 p.name  AS politician_name,
                 p.party AS politician_party,
@@ -336,8 +469,8 @@ export async function meReportsRoutes(app: FastifyInstance) {
                 rj.created_at,
                 rj.finished_at,
                 rj.error
-           FROM report_jobs rj
-           JOIN politicians p ON p.id = rj.politician_id
+           FROM private.report_jobs rj
+           LEFT JOIN public.politicians p ON p.id = rj.politician_id
           WHERE rj.user_id = $1
           ORDER BY rj.created_at DESC
           LIMIT 50`,
@@ -361,10 +494,11 @@ export async function meReportsRoutes(app: FastifyInstance) {
       const row = await queryOne<{
         id: string;
         user_id: string;
-        politician_id: string;
+        kind: string;
+        politician_id: string | null;
         politician_name: string | null;
         politician_party: string | null;
-        query: string;
+        query: string | null;
         status: string;
         html: string | null;
         summary: string | null;
@@ -377,6 +511,7 @@ export async function meReportsRoutes(app: FastifyInstance) {
         finished_at: Date | null;
       }>(
         `SELECT rj.id, rj.user_id,
+                rj.kind,
                 rj.politician_id,
                 p.name AS politician_name,
                 p.party AS politician_party,
@@ -391,8 +526,8 @@ export async function meReportsRoutes(app: FastifyInstance) {
                 rj.error,
                 rj.created_at,
                 rj.finished_at
-           FROM report_jobs rj
-           JOIN politicians p ON p.id = rj.politician_id
+           FROM private.report_jobs rj
+           LEFT JOIN public.politicians p ON p.id = rj.politician_id
           WHERE rj.id = $1`,
         [params.data.id]
       );
@@ -419,7 +554,7 @@ export async function meReportsRoutes(app: FastifyInstance) {
       }
       const userId = getUser(req)!.sub;
       const owner = await queryOne<{ user_id: string }>(
-        `SELECT user_id FROM report_jobs WHERE id = $1`,
+        `SELECT user_id FROM private.report_jobs WHERE id = $1`,
         [params.data.id]
       );
       // 404 for non-owner: same id-enumeration discipline.
@@ -427,7 +562,7 @@ export async function meReportsRoutes(app: FastifyInstance) {
         return reply.code(404).send({ error: "report not found" });
       }
       const inserted = await queryOne<{ id: string }>(
-        `INSERT INTO report_bug_reports (report_id, user_id, message)
+        `INSERT INTO private.report_bug_reports (report_id, user_id, message)
               VALUES ($1, $2, $3)
               RETURNING id`,
         [params.data.id, userId, parsed.data.message]
@@ -451,7 +586,7 @@ export async function meReportsRoutes(app: FastifyInstance) {
       }
       const userId = getUser(req)!.sub;
       const owner = await queryOne<{ user_id: string; status: string }>(
-        `SELECT user_id, status FROM report_jobs WHERE id = $1`,
+        `SELECT user_id, status FROM private.report_jobs WHERE id = $1`,
         [params.data.id]
       );
       if (!owner || owner.user_id !== userId) {
@@ -463,7 +598,7 @@ export async function meReportsRoutes(app: FastifyInstance) {
         return reply.code(409).send({ error: "report is not in a shareable state" });
       }
       await query(
-        `UPDATE report_jobs SET is_public = $1 WHERE id = $2`,
+        `UPDATE private.report_jobs SET is_public = $1 WHERE id = $2`,
         [parsed.data.is_public, params.data.id]
       );
       return reply.send({ id: params.data.id, is_public: parsed.data.is_public });

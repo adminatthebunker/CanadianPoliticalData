@@ -69,7 +69,7 @@ into a substantial branch.
 
 - For citing data you found through the site, link to the speech /
   bill / politician page directly. Each page URL is stable.
-- For bulk reuse via the dataset download (when published), see the
-  [licence notes](data-download.md#licence-planned).
+- For bulk reuse via the dataset download, see the
+  [licence notes](data-download.md#licence).
 - For UI screenshots in publications, no permission needed — credit
   *canadianpoliticaldata.org*.

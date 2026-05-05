@@ -1169,6 +1169,16 @@ export default async function searchRoutes(app: FastifyInstance) {
     const parsed = baseFilterSchema.safeParse(req.query);
     if (!parsed.success) return reply.badRequest(parsed.error.message);
     const { q } = parsed.data;
+    // Optional `limit` knob: how many of the top-ranked candidates the
+    // tiles aggregate over. Bounded [10, 500] — the upper bound is
+    // shared with the analysis CTA's chunk_ids cap (max input to a
+    // paid search analysis is 500 chunks; same number).
+    const limitRaw = (req.query as Record<string, unknown>)?.limit;
+    const ANALYSIS_LIMIT = (() => {
+      const n = Number(limitRaw);
+      if (!Number.isFinite(n)) return 200;
+      return Math.max(10, Math.min(500, Math.floor(n)));
+    })();
 
     if (
       !q &&
@@ -1205,9 +1215,8 @@ export default async function searchRoutes(app: FastifyInstance) {
     const effectiveMin = parsed.data.min_similarity ?? 0.5;
     const applyThreshold = hasVector && effectiveMin > 0;
 
-    // Top-N CTE: 200 semantic-ranked rows when a vector is available
-    // (text query OR anchor chunk), else most-recent fallback.
-    const ANALYSIS_LIMIT = 200;
+    // Top-N CTE: ANALYSIS_LIMIT semantic-ranked rows when a vector is
+    // available (text query OR anchor chunk), else most-recent fallback.
     let topCte: string;
     let vectorParamIndex: number | null = null;
     if (resolved) {
@@ -1259,6 +1268,10 @@ export default async function searchRoutes(app: FastifyInstance) {
       WITH top AS (${topCte})
       SELECT
         (SELECT COUNT(*)::int FROM top)                                 AS analyzed_count,
+        COALESCE(
+          (SELECT jsonb_agg(t.id ORDER BY t.dist NULLS LAST, t.id) FROM top t),
+          '[]'::jsonb
+        )                                                                AS chunk_ids,
         COALESCE((
           SELECT jsonb_agg(row_to_json(x))
             FROM (
@@ -1307,6 +1320,7 @@ export default async function searchRoutes(app: FastifyInstance) {
 
     interface FacetsRow {
       analyzed_count: number;
+      chunk_ids: string[];
       by_party: Array<{ party: string | null; count: number; avg_similarity: number }>;
       by_politician: Array<{
         politician_id: string | null;
@@ -1329,7 +1343,10 @@ export default async function searchRoutes(app: FastifyInstance) {
     let row: FacetsRow | null = null;
     try {
       await client.query("BEGIN");
-      await client.query("SET LOCAL hnsw.ef_search = 300");
+      // ef_search must be ≥ LIMIT or HNSW returns fewer rows than asked.
+      // With LIMIT bounded at 500 we set 700 (modest headroom; below
+      // pgvector's 1000 ceiling).
+      await client.query("SET LOCAL hnsw.ef_search = 700");
       try {
         const res = await client.query(sql, params as unknown as unknown[]);
         row = (res.rows[0] as FacetsRow) ?? null;
@@ -1355,6 +1372,7 @@ export default async function searchRoutes(app: FastifyInstance) {
     return {
       analyzed_count: row?.analyzed_count ?? 0,
       analysis_limit: ANALYSIS_LIMIT,
+      chunk_ids: row?.chunk_ids ?? [],
       by_party: row?.by_party ?? [],
       by_politician: (row?.by_politician ?? []).map((r) => ({
         politician: r.politician_id

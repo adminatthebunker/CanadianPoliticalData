@@ -124,9 +124,9 @@ export default async function creditsRoutes(app: FastifyInstance) {
               cp.created_at               AS purchase_created_at,
               u.email                     AS user_email,
               u.display_name              AS user_display_name
-         FROM credit_ledger cl
-         JOIN credit_purchases cp ON cp.ledger_entry_id = cl.id
-         JOIN users u             ON u.id = cl.user_id
+         FROM private.credit_ledger cl
+         JOIN private.credit_purchases cp ON cp.ledger_entry_id = cl.id
+         JOIN private.users u             ON u.id = cl.user_id
         WHERE cl.id = $1
           AND cl.user_id = $2
           AND cl.kind = 'stripe_purchase'`,
@@ -207,7 +207,7 @@ export default async function creditsRoutes(app: FastifyInstance) {
       // of truth on the user row (handles edge cases like email
       // change mid-session).
       const row = await queryOne<UserEmailRow>(
-        `SELECT email FROM users WHERE id = $1`,
+        `SELECT email FROM private.users WHERE id = $1`,
         [claims.sub]
       );
       if (!row) return reply.code(404).send({ error: "user not found" });

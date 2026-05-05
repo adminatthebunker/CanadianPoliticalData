@@ -129,7 +129,8 @@ export function Layout() {
           <span>
             Open data from <a href="https://represent.opennorth.ca" target="_blank" rel="noopener noreferrer">Open North</a>
             {" and "}<a href="https://openparliament.ca" target="_blank" rel="noopener noreferrer">openparliament.ca</a>
-            {" · Geolocation via MaxMind GeoLite2 · Released under the MIT license"}
+            {" · Geolocation via MaxMind GeoLite2 · Source-available under "}
+            <a href="https://github.com/adminatthebunker/CanadianPoliticalData/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">PolyForm Noncommercial 1.0.0</a>
           </span>
         </div>
       </footer>

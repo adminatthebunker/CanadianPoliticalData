@@ -476,6 +476,38 @@ COMMANDS: dict[str, dict[str, Any]] = {
              "help": "Seconds between per-bill detail fetches (be polite to openparliament.ca)."},
         ],
     },
+    "fetch-qc-bill-introduced-dates": {
+        "description": "Fetch QC bill detail pages and extract introduction-sitting dates from the <h3>Introduction</h3> block. Inserts bill_events first_reading rows, then rolls up onto bills.introduced_date. Sibling of fetch-qc-bill-sponsors. Idempotent.",
+        "cli": "fetch-qc-bill-introduced-dates", "category": "bills",
+        "args": [
+            {"name": "limit", "type": "int", "required": False,
+             "help": "Cap bills scanned this run (default: every undated bill)."},
+            {"name": "delay", "type": "float", "required": False, "default": 1.5,
+             "help": "Seconds between HTTP requests (be polite to assnat.qc.ca)."},
+        ],
+    },
+    "ingest-federal-bill-events": {
+        "description": "Federal bill stage events from parl.ca/LegisInfo XML. One HTTP GET per session yields ~7 milestone timestamps per bill (1st/2nd/3rd reading in House + Senate + royal assent). FK via bills.raw->>'legisinfo_id'. Idempotent. Run after ingest-federal-bills.",
+        "cli": "ingest-federal-bill-events", "category": "bills",
+        "args": [
+            {"name": "parliament", "type": "int", "required": False,
+             "help": "Parliament number (default: current)."},
+            {"name": "session", "type": "int", "required": False,
+             "help": "Session number (default: current)."},
+            {"name": "all_sessions", "type": "bool", "required": False,
+             "help": "Walk every federal session in legislative_sessions."},
+        ],
+    },
+    "relink-bill-introduced-dates": {
+        "description": "Pure-SQL backfill of bills.introduced_date from bill_events first_reading rows. Cross-jurisdictional, idempotent. Closes denormalisation gaps where events exist but the column is null (e.g. MB, NS).",
+        "cli": "relink-bill-introduced-dates", "category": "bills",
+        "args": [
+            {"name": "levels", "type": "str", "required": False,
+             "help": "Comma-separated levels (e.g. 'provincial,federal'). Default: all."},
+            {"name": "provinces", "type": "str", "required": False,
+             "help": "Comma-separated province codes (e.g. 'MB,NS'). Default: all."},
+        ],
+    },
     "ingest-bc-bills": {
         "description": "British Columbia bills via LIMS JSON endpoint.",
         "cli": "ingest-bc-bills", "category": "bills",
@@ -894,6 +926,86 @@ COMMANDS: dict[str, dict[str, Any]] = {
              "help": "Max sites this run."},
             {"name": "stale_hours", "type": "int", "required": False, "default": 6,
              "help": "Re-scan sites whose last scan is older than this many hours."},
+        ],
+    },
+    "gc-usage-metrics": {
+        "description": "Drop old rows from private.gpu_samples / tei_samples (90d) and search_request_log (30d). Drives the admin /usage page retention.",
+        "cli": "gc-usage-metrics", "category": "maintenance", "args": [],
+    },
+
+    # ── Municipal — eScribe (Calgary, Edmonton) ────────────────────
+    "ingest-escribe-meetings": {
+        "description": "Stage 1 — discover Calgary/Edmonton council + committee meetings from eScribe. One GET of MeetingsCalendarView.aspx per city. Idempotent on (source_system, source_meeting_id).",
+        "cli": "ingest-escribe-meetings", "category": "bills",
+        "args": [
+            {"name": "city", "type": "enum", "required": False, "default": "all",
+             "choices": ["calgary", "edmonton", "all"],
+             "help": "Which city (or all)."},
+            {"name": "limit", "type": "int", "required": False,
+             "help": "Cap meetings ingested per city."},
+        ],
+    },
+    "fetch-escribe-meeting-pages": {
+        "description": "Stage 2 — populate meetings.raw_html for unfetched rows. Pace at --delay seconds between GETs.",
+        "cli": "fetch-escribe-meeting-pages", "category": "bills",
+        "args": [
+            {"name": "city", "type": "enum", "required": False, "default": "all",
+             "choices": ["calgary", "edmonton", "all"]},
+            {"name": "limit", "type": "int", "required": False},
+            {"name": "force", "type": "bool", "required": False, "default": False,
+             "help": "Re-fetch already-cached pages."},
+            {"name": "delay", "type": "float", "required": False, "default": 1.0,
+             "help": "Seconds between per-meeting GETs."},
+        ],
+    },
+    "parse-escribe-meeting-pages": {
+        "description": "Stage 3 — parse cached eScribe meeting HTML into bills/votes rows. No HTTP; idempotent. Re-runnable after parser fixes.",
+        "cli": "parse-escribe-meeting-pages", "category": "bills",
+        "args": [
+            {"name": "city", "type": "enum", "required": False, "default": "all",
+             "choices": ["calgary", "edmonton", "all"]},
+            {"name": "limit", "type": "int", "required": False},
+        ],
+    },
+    "resolve-escribe-motion-movers": {
+        "description": "Stage 4 — name-fuzz match bill_sponsors.politician_id for municipal motions (mover + seconder). Scoped to the city's Open North roster.",
+        "cli": "resolve-escribe-motion-movers", "category": "bills",
+        "args": [
+            {"name": "city", "type": "enum", "required": False, "default": "all",
+             "choices": ["calgary", "edmonton", "all"]},
+        ],
+    },
+    "match-meetings-to-youtube": {
+        "description": "Stage 5 — list city's official YouTube channel via yt-dlp; match each meeting to a video by date proximity + body name. Sets meetings.video_url.",
+        "cli": "match-meetings-to-youtube", "category": "hansard",
+        "args": [
+            {"name": "city", "type": "enum", "required": False, "default": "all",
+             "choices": ["calgary", "edmonton", "all"]},
+            {"name": "limit", "type": "int", "required": False},
+            {"name": "max_channel_videos", "type": "int", "required": False, "default": 200,
+             "help": "Newest N videos to consider per channel."},
+            {"name": "max_date_drift_days", "type": "int", "required": False, "default": 3,
+             "help": "Max delta between meeting date and video upload date for a match."},
+        ],
+    },
+    "fetch-meeting-captions": {
+        "description": "Stage 6 — yt-dlp auto-captions VTT → speeches rows (level=municipal). Slow + rate-limit-sensitive; default --limit 3 per run.",
+        "cli": "fetch-meeting-captions", "category": "hansard",
+        "args": [
+            {"name": "city", "type": "enum", "required": False, "default": "all",
+             "choices": ["calgary", "edmonton", "all"]},
+            {"name": "limit", "type": "int", "required": False, "default": 3,
+             "help": "Cap meetings per city per run."},
+            {"name": "delay", "type": "float", "required": False, "default": 30.0,
+             "help": "Seconds between yt-dlp invocations to avoid throttling."},
+        ],
+    },
+    "resolve-meeting-caption-speakers": {
+        "description": "Stage 7 — best-effort speaker FK on caption-derived speeches. Mayor heuristic + surname match against Open North roster.",
+        "cli": "resolve-meeting-caption-speakers", "category": "hansard",
+        "args": [
+            {"name": "city", "type": "enum", "required": False, "default": "all",
+             "choices": ["calgary", "edmonton", "all"]},
         ],
     },
 }

@@ -35,24 +35,140 @@ import { callJsonObjectModel } from "./openrouter.js";
 // Cost
 // ────────────────────────────────────────────────────────────
 
-export interface ReportCostEstimate {
+/**
+ * The set of paid-analysis kinds. Database `private.report_jobs.kind`
+ * CHECK constraint mirrors this exactly — adding a new kind requires
+ * (a) updating the migration's CHECK enum, (b) adding cost knobs here,
+ * (c) adding a handler in the Python worker's KIND_HANDLERS dispatcher.
+ * Drop any of those three and the job will fail closed at the boundary.
+ */
+export type AnalysisKind =
+  | "full_report"
+  | "search_synthesis"
+  | "stance_map"
+  | "topic_pulse"
+  | "narrative_timeline"
+  | "voting_audit"
+  | "compare_politicians";
+
+/**
+ * Cost knobs per kind. The shape — base + (capped chunks / bucketSize)
+ * × perBucket — is uniform across kinds because the underlying cost
+ * driver is uniform: tokens-into-the-LLM scale linearly with input
+ * chunks until the cap, then go asymptotic. Tuning is per-knob, not
+ * per-formula.
+ *
+ * full_report's knobs come from env vars (config.reports.*) so the
+ * existing operator-tunable knobs keep working unchanged. New kinds
+ * are hard-coded here; they're tunable by editing this file. If a new
+ * kind ever needs operator tunability, lift its knobs into config.
+ */
+function knobsFor(kind: AnalysisKind): {
+  base: number;
+  bucketSize: number;
+  perBucket: number;
+  cap: number;
+} {
+  switch (kind) {
+    case "full_report":
+      return {
+        base: config.reports.baseCostCredits,
+        bucketSize: config.reports.bucketSize,
+        perBucket: config.reports.perChunkBucketCost,
+        cap: config.reports.maxChunks,
+      };
+    case "search_synthesis":
+      return { base: 5, bucketSize: 10, perBucket: 1, cap: 500 };
+    case "stance_map":
+      return { base: 10, bucketSize: 10, perBucket: 1, cap: 500 };
+    case "topic_pulse":
+      return { base: 7, bucketSize: 5, perBucket: 1, cap: 30 };
+    case "narrative_timeline":
+      return { base: 7, bucketSize: 10, perBucket: 1, cap: 150 };
+    case "voting_audit":
+      return { base: 8, bucketSize: 5, perBucket: 1, cap: 50 };
+    case "compare_politicians":
+      return { base: 10, bucketSize: 10, perBucket: 1, cap: 500 };
+  }
+}
+
+/**
+ * Maximum input chunks for a kind. Surfaced separately from the cost
+ * formula so the API zod validator can reject oversized request bodies
+ * before doing any work. Same number, different boundary.
+ */
+export function maxChunksFor(kind: AnalysisKind): number {
+  return knobsFor(kind).cap;
+}
+
+export interface AnalysisCostEstimate {
+  kind: AnalysisKind;
   estimated_chunks: number;
   candidate_chunks: number;
   estimated_credits: number;
   capped: boolean;
 }
 
+/** Back-compat alias; same shape as before. */
+export type ReportCostEstimate = AnalysisCostEstimate;
+
 /**
- * Compute the credit cost for a (politician, query) pair without
- * placing a hold. Embeds the query via TEI, runs an HNSW count of
- * candidates, applies the REPORT_MAX_CHUNKS cap, and computes the
- * formula. Read-only.
+ * Pure: given a raw candidate count and a kind, compute the price.
+ * Both the API (cost preview before hold) and the worker (post-job
+ * cost re-check, if ever needed) call this; centralising the math
+ * means both views agree.
  */
-export async function estimateReportCost(args: {
-  politicianId: string;
-  query: string;
-}): Promise<ReportCostEstimate> {
-  const vec = await encodeQuery(args.query);
+export function priceAnalysis(kind: AnalysisKind, candidateCount: number): AnalysisCostEstimate {
+  const k = knobsFor(kind);
+  const used = Math.min(candidateCount, k.cap);
+  const buckets = Math.ceil(used / k.bucketSize);
+  return {
+    kind,
+    estimated_chunks: used,
+    candidate_chunks: candidateCount,
+    estimated_credits: k.base + buckets * k.perBucket,
+    capped: candidateCount > k.cap,
+  };
+}
+
+/**
+ * Per-kind input shape for cost estimation. The discriminated union
+ * means TypeScript catches "passing search_synthesis inputs to a
+ * full_report estimate" at compile time — same trick as the
+ * AnalysisKind enum on the database side, just for the input args.
+ */
+export type AnalysisEstimateInputs =
+  | { kind: "full_report"; politician_id: string; query: string }
+  | { kind: "search_synthesis"; chunk_ids: string[] }
+  | { kind: "stance_map"; chunk_ids: string[] };
+
+/**
+ * Compute the credit cost without placing a hold. Read-only.
+ *
+ * full_report: embeds the query via TEI, runs an HNSW count of
+ *   candidates ≤ the cap, prices the result. Same logic that shipped
+ *   in phase 1b — preserved bit-for-bit.
+ *
+ * search_synthesis / stance_map: candidates come directly from the
+ *   request body's chunk_ids array. No embedding call, no DB count —
+ *   the frontend already ran the search and supplied the top-K. The
+ *   cost preview is essentially free.
+ */
+export async function estimateAnalysisCost(
+  inputs: AnalysisEstimateInputs
+): Promise<AnalysisCostEstimate> {
+  if (inputs.kind === "full_report") {
+    return estimateFullReportCost(inputs.politician_id, inputs.query);
+  }
+  // search_synthesis / stance_map: chunk_ids are supplied directly.
+  return priceAnalysis(inputs.kind, inputs.chunk_ids.length);
+}
+
+async function estimateFullReportCost(
+  politicianId: string,
+  query: string
+): Promise<AnalysisCostEstimate> {
+  const vec = await encodeQuery(query);
   const vecLiteral = toPgVector(vec);
 
   // The `candidate_chunks` value is the number of chunks the worker
@@ -63,7 +179,7 @@ export async function estimateReportCost(args: {
   // (1 - MIN_SIMILARITY=0.45 in routes/search.ts) so the candidate
   // pool is shaped the same way.
   const MAX_DISTANCE = 0.55;
-  const cap = config.reports.maxChunks;
+  const cap = maxChunksFor("full_report");
 
   const client = await pool.connect();
   let candidateCount: number;
@@ -81,7 +197,7 @@ export async function estimateReportCost(args: {
           LIMIT $4
        )
        SELECT count(*)::text AS n FROM cand`,
-      [args.politicianId, vecLiteral, MAX_DISTANCE, cap]
+      [politicianId, vecLiteral, MAX_DISTANCE, cap]
     );
     await client.query("COMMIT");
     candidateCount = Number(res.rows[0]?.n ?? 0);
@@ -92,17 +208,23 @@ export async function estimateReportCost(args: {
     client.release();
   }
 
-  const usedChunks = Math.min(candidateCount, cap);
-  const buckets = Math.ceil(usedChunks / config.reports.bucketSize);
-  const estimated_credits =
-    config.reports.baseCostCredits + buckets * config.reports.perChunkBucketCost;
+  return priceAnalysis("full_report", candidateCount);
+}
 
-  return {
-    estimated_chunks: usedChunks,
-    candidate_chunks: candidateCount,
-    estimated_credits,
-    capped: candidateCount > cap,
-  };
+/**
+ * Back-compat shim. Existing callers passed {politicianId, query}
+ * positional-style; new code should call estimateAnalysisCost with the
+ * discriminated union.
+ */
+export async function estimateReportCost(args: {
+  politicianId: string;
+  query: string;
+}): Promise<AnalysisCostEstimate> {
+  return estimateAnalysisCost({
+    kind: "full_report",
+    politician_id: args.politicianId,
+    query: args.query,
+  });
 }
 
 // ────────────────────────────────────────────────────────────
@@ -283,8 +405,13 @@ export function buildReducePrompt(args: {
 // ────────────────────────────────────────────────────────────
 
 const SANITIZE_OPTIONS: sanitizeHtml.IOptions = {
-  allowedTags: ["p", "h2", "h3", "ul", "ol", "li", "blockquote", "em", "strong", "a"],
-  allowedAttributes: { a: ["href"] },
+  allowedTags: [
+    "p", "h2", "h3", "ul", "ol", "li", "blockquote", "em", "strong", "a",
+    // Table tags for the chunk-driven kinds' aggregation summary block.
+    // Mirror in services/scanner/src/reports_worker.py:ALLOWED_TAGS.
+    "table", "thead", "tbody", "tr", "th", "td",
+  ],
+  allowedAttributes: { a: ["href"], table: ["class"], th: ["scope"] },
   // Internal links only. The reduce prompt instructs the model to emit
   // CHUNK:<id> tokens which we rewrite below; anything else surviving
   // sanitisation must be a valid /speeches/... path. URL schemes like
@@ -458,7 +585,7 @@ export function dailyReportCapForTier(tier: string): number | null {
 export async function countRecentReportJobs(userId: string): Promise<number> {
   const row = await queryOne<{ n: string }>(
     `SELECT count(*)::text AS n
-       FROM report_jobs
+       FROM private.report_jobs
       WHERE user_id = $1
         AND created_at > now() - interval '24 hours'
         AND status NOT IN ('cancelled','refunded')`,

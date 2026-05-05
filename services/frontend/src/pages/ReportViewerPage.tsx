@@ -4,10 +4,22 @@ import {
   userFetch,
   UserUnauthorizedError,
   UserAuthDisabledError,
+  type AnalysisKind,
   type ReportDetail,
 } from "../api";
 import { useUserAuth } from "../hooks/useUserAuth";
 import "../styles/reports.css";
+
+/** Title for chunk-driven kinds where there's no politician_name to display. */
+const VIEWER_KIND_TITLE: Record<AnalysisKind, string> = {
+  full_report: "Report",
+  search_synthesis: "Search synthesis",
+  stance_map: "Stance map",
+  topic_pulse: "Topic pulse",
+  narrative_timeline: "Narrative timeline",
+  voting_audit: "Voting audit",
+  compare_politicians: "Comparison",
+};
 
 function buildCitation(report: ReportDetail, url: string): string {
   const year = (report.finished_at ? new Date(report.finished_at) : new Date(report.created_at)).getFullYear();
@@ -277,14 +289,22 @@ export default function ReportViewerPage() {
           <p className="cpd-report-viewer__toggle-error" role="alert">{toggleError}</p>
         )}
         <h1>
-          {report.politician_name ?? "Unknown politician"}
-          {report.politician_party && (
-            <span className="cpd-report-viewer__party"> ({report.politician_party})</span>
+          {report.politician_name ? (
+            <>
+              {report.politician_name}
+              {report.politician_party && (
+                <span className="cpd-report-viewer__party"> ({report.politician_party})</span>
+              )}
+            </>
+          ) : (
+            VIEWER_KIND_TITLE[report.kind ?? "full_report"]
           )}
         </h1>
-        <p className="cpd-report-viewer__topic">
-          on <em>"{report.query}"</em>
-        </p>
+        {report.query && (
+          <p className="cpd-report-viewer__topic">
+            on <em>"{report.query}"</em>
+          </p>
+        )}
         <div className="cpd-report-viewer__meta">
           {report.chunk_count_actual !== null && (
             <span>{report.chunk_count_actual} quotes analysed</span>

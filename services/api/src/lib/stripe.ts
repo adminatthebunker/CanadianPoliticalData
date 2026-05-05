@@ -115,7 +115,7 @@ export function getPackBySku(sku: string): CreditPack | null {
  */
 export async function getOrCreateCustomer(userId: string, email: string): Promise<string> {
   const existing = await queryOne<{ stripe_customer_id: string | null }>(
-    `SELECT stripe_customer_id FROM users WHERE id = $1`,
+    `SELECT stripe_customer_id FROM private.users WHERE id = $1`,
     [userId]
   );
   if (existing?.stripe_customer_id) {
@@ -128,7 +128,7 @@ export async function getOrCreateCustomer(userId: string, email: string): Promis
   });
 
   await query(
-    `UPDATE users SET stripe_customer_id = $1 WHERE id = $2 AND stripe_customer_id IS NULL`,
+    `UPDATE private.users SET stripe_customer_id = $1 WHERE id = $2 AND stripe_customer_id IS NULL`,
     [customer.id, userId]
   );
 
@@ -137,7 +137,7 @@ export async function getOrCreateCustomer(userId: string, email: string): Promis
   // Re-read to return the winning id — the losing Stripe customer is
   // orphaned but harmless (no charges until a checkout uses it).
   const winner = await queryOne<{ stripe_customer_id: string | null }>(
-    `SELECT stripe_customer_id FROM users WHERE id = $1`,
+    `SELECT stripe_customer_id FROM private.users WHERE id = $1`,
     [userId]
   );
   return winner?.stripe_customer_id ?? customer.id;

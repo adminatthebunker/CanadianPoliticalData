@@ -49,7 +49,7 @@ function verifyFeedToken(token: string, savedSearchId: string): boolean {
  */
 async function findSavedSearchByFeedToken(token: string): Promise<string | null> {
   if (!config.jwtSecret) return null;
-  const rows = await query<{ id: string }>(`SELECT id FROM saved_searches`);
+  const rows = await query<{ id: string }>(`SELECT id FROM private.saved_searches`);
   for (const row of rows) {
     if (verifyFeedToken(token, row.id)) return row.id;
   }
@@ -246,7 +246,7 @@ export default async function feedRoutes(app: FastifyInstance) {
                      THEN query_embedding::text
                      ELSE NULL END AS query_embedding,
                 created_at, updated_at
-           FROM saved_searches WHERE id = $1`,
+           FROM private.saved_searches WHERE id = $1`,
         [savedSearchId]
       );
       if (!ss) return reply.code(404).send({ error: "feed not found" });

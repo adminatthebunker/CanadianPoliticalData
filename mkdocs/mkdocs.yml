@@ -147,6 +147,9 @@ nav:
       - getting-started/index.md
       - Create an account: getting-started/account.md
       - Coverage and data sources: getting-started/coverage.md
+  - Install:
+      - Local installation: contributors/local-install.md
+      - Dataset download: contributors/data-download.md
   - Searching Hansard:
       - searching/index.md
       - How search works: searching/how-it-works.md
@@ -165,11 +168,10 @@ nav:
       - Generating a report: reports/generate.md
   - Contributors:
       - contributors/index.md
-      - Dataset download: contributors/data-download.md
-      - Local installation: contributors/local-install.md
   - Blog:
       - blog/index.md
   - About:
       - about/index.md
+      - Pricing: about/pricing.md
       - Privacy: about/privacy.md
       - Contact: about/contact.md

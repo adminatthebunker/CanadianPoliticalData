@@ -106,7 +106,7 @@ export default async function authRoutes(app: FastifyInstance) {
       // trivially spam a single mailbox by rotating source IPs.
       const recent = await queryOne<{ n: string }>(
         `SELECT count(*)::text AS n
-           FROM login_tokens
+           FROM private.login_tokens
           WHERE email = $1
             AND created_at > now() - interval '1 hour'`,
         [email]
@@ -124,7 +124,7 @@ export default async function authRoutes(app: FastifyInstance) {
       const requestedIp = req.ip ?? null;
 
       await query(
-        `INSERT INTO login_tokens (email, token_hash, expires_at, requested_ip)
+        `INSERT INTO private.login_tokens (email, token_hash, expires_at, requested_ip)
          VALUES ($1, $2, now() + ($3 || ' minutes')::interval, $4)`,
         [email, tokenHash as unknown as string, String(LINK_TTL_MINUTES), requestedIp as unknown as string]
       );
@@ -184,7 +184,7 @@ export default async function authRoutes(app: FastifyInstance) {
         // manual hash compare would. Still guard with consumed_at.
         const tokRows = await client.query<TokenRow>(
           `SELECT id, email, expires_at, consumed_at
-             FROM login_tokens
+             FROM private.login_tokens
             WHERE token_hash = $1
             FOR UPDATE`,
           [tokenHash]
@@ -207,7 +207,7 @@ export default async function authRoutes(app: FastifyInstance) {
         // briefly for audit. A periodic cleanup job can purge old
         // consumed/expired rows if we ever care.
         await client.query(
-          `UPDATE login_tokens SET consumed_at = now() WHERE id = $1`,
+          `UPDATE private.login_tokens SET consumed_at = now() WHERE id = $1`,
           [tok.id]
         );
 
@@ -218,7 +218,7 @@ export default async function authRoutes(app: FastifyInstance) {
         // have reached the user otherwise), so the alerts-worker can
         // resume sending for this user from the next tick.
         const userRows = await client.query<UserRow>(
-          `INSERT INTO users (email, last_login_at)
+          `INSERT INTO private.users (email, last_login_at)
            VALUES ($1, now())
            ON CONFLICT (email) DO UPDATE
              SET last_login_at = EXCLUDED.last_login_at,

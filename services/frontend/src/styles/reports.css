@@ -246,6 +246,39 @@
   color: #cbd5e1;
 }
 
+/* Stats tables emitted by the chunk-driven kinds (search_synthesis,
+   stance_map). The class is a marker the worker's prompt instructs
+   the model to use; bleach permits class on <table>. */
+.cpd-report-viewer__body table.report-stats {
+  border-collapse: collapse;
+  margin: 0.75rem 0 1.5rem;
+  font-size: 0.9rem;
+  min-width: 60%;
+}
+.cpd-report-viewer__body table.report-stats th,
+.cpd-report-viewer__body table.report-stats td {
+  text-align: left;
+  padding: 0.4rem 0.85rem;
+  border-bottom: 1px solid var(--border);
+}
+.cpd-report-viewer__body table.report-stats th {
+  color: var(--ink-muted);
+  font-weight: 600;
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.cpd-report-viewer__body table.report-stats tbody tr:last-child td {
+  border-bottom: none;
+}
+.cpd-report-viewer__body table.report-stats td:nth-child(2),
+.cpd-report-viewer__body table.report-stats td:nth-child(3) {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent);
+  font-weight: 600;
+}
+
 .cpd-report-viewer__body blockquote {
   border-left: 3px solid var(--border);
   padding: 0.4rem 0 0.4rem 1.4rem;
@@ -530,6 +563,26 @@
 .cpd-reports-list__head strong {
   color: #f1f5f9;
 }
+.cpd-reports-list__kind {
+  display: inline-block;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  background: color-mix(in srgb, var(--accent) 20%, var(--panel-2));
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.cpd-reports-list__kind--search_synthesis,
+.cpd-reports-list__kind--stance_map,
+.cpd-reports-list__kind--topic_pulse,
+.cpd-reports-list__kind--narrative_timeline {
+  background: color-mix(in srgb, #06b6d4 18%, var(--panel-2));
+  color: #06b6d4;
+  border-color: color-mix(in srgb, #06b6d4 35%, transparent);
+}
 .cpd-reports-list__party {
   color: var(--ink-muted);
   font-size: 0.9rem;
@@ -703,6 +756,125 @@
   color: var(--ink-muted);
   border-color: var(--border);
   cursor: not-allowed;
+}
+
+/* Compact variant for the timeline-summary CTA row — same colours,
+   tighter padding so it fits on one line above the result list. */
+.ai-analysis__trigger--compact {
+  padding: 0.32rem 0.7rem;
+  font-size: 0.85rem;
+}
+
+/* ── Search-set analysis CTA row (Synthesize + Stance map) ────── */
+
+.search-set-analysis {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.85rem 1rem;
+  margin: 0 0 1rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: var(--panel-2);
+}
+
+.search-set-analysis--compact {
+  padding: 0.5rem 0.75rem;
+  margin: 0.25rem 0 0.75rem;
+  font-size: 0.9rem;
+}
+
+.search-set-analysis__label {
+  color: var(--ink);
+  font-weight: 500;
+  margin-right: 0.25rem;
+}
+
+.search-set-analysis--compact .search-set-analysis__label {
+  font-size: 0.85rem;
+  color: var(--ink-muted);
+}
+
+.search-set-analysis__limit {
+  display: inline-block;
+  padding: 0.18rem 0.4rem;
+  margin: 0 0.15rem;
+  background: var(--panel);
+  color: var(--ink);
+  border: 1px solid var(--border);
+  border-radius: 0.35rem;
+  font-size: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.search-set-analysis__limit:hover {
+  border-color: var(--accent);
+}
+.search-set-analysis__limit:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Custom-N dialog: slider + number input combo. */
+.analysis-limit-dialog__inputs {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin: 1.25rem 0;
+}
+.analysis-limit-dialog__slider {
+  flex: 1;
+  height: 4px;
+  appearance: none;
+  -webkit-appearance: none;
+  background: var(--border);
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+}
+.analysis-limit-dialog__slider::-webkit-slider-thumb {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 18px;
+  height: 18px;
+  background: var(--accent);
+  border-radius: 50%;
+  cursor: pointer;
+}
+.analysis-limit-dialog__slider::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  background: var(--accent);
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+}
+.analysis-limit-dialog__number {
+  width: 5rem;
+  padding: 0.45rem 0.6rem;
+  background: var(--panel);
+  color: var(--ink);
+  border: 1px solid var(--border);
+  border-radius: 0.35rem;
+  font-size: 1rem;
+  font-weight: 600;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.analysis-limit-dialog__number:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+@media (max-width: 700px) {
+  .search-set-analysis {
+    align-items: stretch;
+  }
+  .search-set-analysis__label {
+    width: 100%;
+    margin-bottom: 0.35rem;
+  }
 }
 
 /* ── Upsell card at the bottom of free contradictions output ── */

@@ -155,8 +155,20 @@ export interface ReportsMeta {
   per_chunk_bucket_cost: number;
 }
 
+export type AnalysisKind =
+  | "full_report"
+  | "search_synthesis"
+  | "stance_map"
+  | "topic_pulse"
+  | "narrative_timeline"
+  | "voting_audit"
+  | "compare_politicians";
+
 export interface ReportEstimate {
-  politician: { id: string; name: string | null };
+  /** Defaults to 'full_report' if the server omits it (back-compat). */
+  kind?: AnalysisKind;
+  /** Null for chunk-driven kinds (search_synthesis, stance_map). */
+  politician: { id: string; name: string | null } | null;
   query: string;
   estimated_chunks: number;
   candidate_chunks: number;
@@ -165,6 +177,9 @@ export interface ReportEstimate {
   balance: number;
   sufficient: boolean;
 }
+
+/** Back-compat alias; new code should use AnalysisEstimate. */
+export type AnalysisEstimate = ReportEstimate;
 
 export type ReportStatus =
   | "queued"
@@ -176,10 +191,14 @@ export type ReportStatus =
 
 export interface ReportListEntry {
   id: string;
-  politician_id: string;
+  /** Defaults to 'full_report' if the server omits it (back-compat). */
+  kind?: AnalysisKind;
+  /** Null for chunk-driven kinds (search_synthesis, stance_map). */
+  politician_id: string | null;
   politician_name: string | null;
   politician_party: string | null;
-  query: string;
+  /** Null for chunk-driven kinds (topic comes from inputs.query, not surfaced here). */
+  query: string | null;
   status: ReportStatus;
   summary: string | null;
   estimated_credits: number;
@@ -194,10 +213,11 @@ export interface ReportListEntry {
 
 export interface ReportDetail {
   id: string;
-  politician_id: string;
+  kind?: AnalysisKind;
+  politician_id: string | null;
   politician_name: string | null;
   politician_party: string | null;
-  query: string;
+  query: string | null;
   status: ReportStatus;
   html: string | null;
   summary: string | null;

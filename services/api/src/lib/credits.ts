@@ -51,7 +51,7 @@ export interface LedgerEntry {
 export async function getBalance(userId: string): Promise<number> {
   const row = await queryOne<{ balance: string | null }>(
     `SELECT COALESCE(SUM(delta), 0)::text AS balance
-       FROM credit_ledger
+       FROM private.credit_ledger
       WHERE user_id = $1
         AND state IN ('committed','held')`,
     [userId]
@@ -69,7 +69,7 @@ export async function listLedgerEntries(
 ): Promise<LedgerEntry[]> {
   return query<LedgerEntry>(
     `SELECT id, delta, state, kind, reference_id, reason, created_at
-       FROM credit_ledger
+       FROM private.credit_ledger
       WHERE user_id = $1
       ORDER BY created_at DESC
       LIMIT $2`,
@@ -99,7 +99,7 @@ export async function grantStripePurchase(params: {
     await client.query("BEGIN");
 
     const ledgerRes = await client.query<{ id: string }>(
-      `INSERT INTO credit_ledger
+      `INSERT INTO private.credit_ledger
            (user_id, delta, state, kind, reference_id, reason)
          VALUES ($1, $2, 'committed', 'stripe_purchase', $3, NULL)
          RETURNING id`,
@@ -109,7 +109,7 @@ export async function grantStripePurchase(params: {
     if (!ledgerEntry) throw new Error("ledger insert returned no row");
 
     const purchaseRes = await client.query<{ id: string }>(
-      `INSERT INTO credit_purchases
+      `INSERT INTO private.credit_purchases
            (user_id, stripe_checkout_id, stripe_payment_intent_id,
             amount_cents, currency, credits_granted, ledger_entry_id,
             status, raw_webhook)
@@ -170,7 +170,7 @@ export async function grantCorrectionReward(
   const exec = client ?? pool;
   try {
     const res = await exec.query<{ id: string }>(
-      `INSERT INTO credit_ledger
+      `INSERT INTO private.credit_ledger
            (user_id, delta, state, kind, reference_id, reason)
          VALUES ($1, $2, 'committed', 'correction_reward', $3, $4)
          RETURNING id`,
@@ -206,7 +206,7 @@ export async function grantAdminCredit(params: {
     throw new Error("admin credit amount must be positive");
   }
   const row = await queryOne<{ id: string }>(
-    `INSERT INTO credit_ledger
+    `INSERT INTO private.credit_ledger
          (user_id, delta, state, kind, reason, created_by_admin_id)
        VALUES ($1, $2, 'committed', 'admin_credit', $3, $4)
        RETURNING id`,
@@ -236,7 +236,7 @@ export async function holdCredits(params: {
     throw new Error("hold amount must be positive");
   }
   const row = await queryOne<{ id: string }>(
-    `INSERT INTO credit_ledger
+    `INSERT INTO private.credit_ledger
          (user_id, delta, state, kind, reference_id)
        VALUES ($1, $2, 'held', 'report_hold', $3)
        RETURNING id`,
@@ -252,7 +252,7 @@ export async function holdCredits(params: {
  */
 export async function commitHold(holdLedgerId: string): Promise<void> {
   await query(
-    `UPDATE credit_ledger
+    `UPDATE private.credit_ledger
         SET state = 'committed'
       WHERE id = $1
         AND state = 'held'
@@ -271,7 +271,7 @@ export async function releaseHold(
   reason: string
 ): Promise<void> {
   await query(
-    `UPDATE credit_ledger
+    `UPDATE private.credit_ledger
         SET state = 'refunded',
             reason = $2
       WHERE id = $1

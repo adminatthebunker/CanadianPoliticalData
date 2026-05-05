@@ -166,7 +166,14 @@ can view that ranked list three different ways:
   questions.
 - **Analysis** — a chart dashboard showing who, what, and when across the
   result set: top speakers, party split, year-by-year timeline, language
-  split.
+  split. Also the home of the **paid AI analyses** — "Synthesize this
+  search" turns the top-N matches into a one-paragraph + five-bullet
+  brief with citations; "Map stances" groups speakers by where they sit
+  on the topic (for / against / conditional). Both costs preview before
+  you commit. See the [reports section](../reports/index.md) for how
+  credits work.
+- **Map** — a 3D semantic mind-map of the result set, useful for
+  exploring how the matched chunks cluster topically.
 
 In each result snippet, you'll see the words from your query shown in
 **bold**. That bolding is added by Postgres's `ts_headline` function on

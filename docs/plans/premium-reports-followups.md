@@ -82,15 +82,20 @@ Status legend: `planned` · `in-progress` · `shipped` · `deferred`
 
 ## 4. One-click "report this search" from /search
 
-**Status:** planned
+**Status:** shipped 2026-05-05 — broader scope than originally planned.
 
-**Why.** The current path is: search page → find a politician → click their card → "Full report" button. Three clicks where one would do. Removes friction at the moment the user is most likely to want the report.
+**What actually shipped (vs the original plan).** The original plan was a frontend-only button that pre-filled the existing `FullReportConfirmModal` for a single-politician + query case. What landed instead is a generic **analysis-jobs substrate** — `report_jobs` is now `kind`-discriminated (migration 0045), with two new search-result-set kinds (`search_synthesis` + `stance_map`) that don't require a single-politician anchor. The "report this search" affordance is a CTA row on `/search` that works regardless of how many politicians are in the result set, with a user-controllable "analyse top N" picker (25/50/100/200/500/Other…) that drives both the dashboard tile aggregations and the analysis input.
 
-**Scope sketch.**
-- Frontend-only. From `/search` (`HansardSearchPage.tsx`), when the active filters resolve to a single politician + meaningful query string, render a "Generate full report on these results" button that opens the existing `FullReportConfirmModal` pre-filled.
-- No API change. The cost-estimation endpoint and the report-create endpoint are already there; this is just a different button location.
+**Why broader.** The original frame was an ergonomics fix (3 clicks → 1) for the existing single-politician flow. As we got into design, the more-interesting affordance was *analysing the result set itself* — what does the corpus collectively say about this query? — rather than "what does politician X say." That demanded a new kind, which demanded the kind discriminator, which then meant adding `stance_map` (a different kind on the same substrate) was nearly free. The substrate-first approach also unblocks the deferred items: `compare_politicians` (#2) is now a prompt + handler away.
 
-**Smallest possible scope.** Honestly half a day's work. Worth doing as a quick win between bigger features.
+**Scope sketch (what shipped).**
+- DB: migration 0045 adds `kind` (CHECK enumerating `full_report | search_synthesis | stance_map | topic_pulse | narrative_timeline | voting_audit | compare_politicians`) + `inputs` JSONB + relaxes `politician_id`/`query` to nullable. Index `idx_report_jobs_user_kind_time` for per-user-per-kind list views.
+- API: `POST /reports/{,/estimate}` accepts `{kind, ...inputs}` via zod discriminated union. `KIND_COST_FORMULA` registry in `services/api/src/lib/reports.ts:knobsFor`. `/facets` extended with `chunk_ids` field + `?limit=` param so the dashboard tiles + the analysis CTA share one fetch.
+- Worker: `KIND_HANDLERS` dispatcher in `reports_worker.py` with shared `run_map_reduce_pipeline` skeleton; `handle_full_report` lifted unchanged; `handle_search_synthesis` and `handle_stance_map` share `_handle_chunk_driven_kind`. Concurrency 2 → 4 to keep K=500 round-trip under ~3min. Aggregations computed server-side from the chunks list and passed to the reduce prompt; reduce prompts emit a `<table class="report-stats">` of dashboard-shape stats at the top of the HTML.
+- Frontend: generic `AnalysisButton` + `AnalysisConfirmModal` + `useAnalysisSubmit`. `AIFullReportButton`, `FullReportConfirmModal`, `useFullReportSubmit` slimmed to thin shims. `<SearchSetAnalysisRow>` on `HansardSearchPage` renders both CTAs on the Analysis tab + Timeline view. "Analyse top N" picker with "Other…" custom-N modal (slider + number input + live cost preview, persisted to localStorage). Kind chips on `/me/reports` list; viewer tolerates null politician with kind-aware fallback titles.
+- Cap: 500 (was 200). Cost formula: `search_synthesis` 5+⌈K/10⌉, `stance_map` 10+⌈K/10⌉. Validated end-to-end at K=500 (217s wall time, 169K input + 39K output tokens, ~$1.10 model cost vs 55-credit charge).
+
+**Plan + design history:** `/home/bunker-admin/.claude/plans/slick-help-me-now-merry-stonebraker.md` is the as-built record (decisions locked in, pricing math, model-context ceiling analysis).
 
 ---
 

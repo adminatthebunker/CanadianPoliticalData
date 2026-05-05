@@ -580,6 +580,143 @@ async def fetch_qc_bill_sponsors(
 
 
 # ─────────────────────────────────────────────────────────────────────
+# Phase 4b — per-bill detail page (introduced_date)
+# ─────────────────────────────────────────────────────────────────────
+#
+# Sibling of fetch_qc_bill_sponsors. Same per-bill HTTP cost, different
+# extraction target: the `<h3>Introduction</h3>` block at the top of the
+# detail page lists `Sitting held on <date>` for the introduction event.
+# This is the only authoritative source for the intro date on historical
+# bills (the donneesquebec CSV is current+previous only, the RSS only
+# covers current-session bills, and bills imported via discover_qc_bills_html
+# are minimal stubs with no dates).
+#
+# We keep this as a separate function (not folded into fetch_qc_bill_sponsors)
+# because the sponsor flow intentionally skips bills that already have a
+# sponsor row — the date flow needs to iterate ALL undated bills regardless
+# of sponsor state.
+
+# Match the link text "Sitting held on November 12, 2009" (or the French
+# equivalent on /fr/ pages, but we hit /en/ exclusively). The link sits
+# inside `<h3>Introduction</h3>...<ul class="ListeLien">...<li>...<a>`,
+# but we anchor on the leading "Sitting held on" string rather than the
+# enclosing tags — assnat.qc.ca's markup wiggles version to version, the
+# anchor text is stable.
+_INTRO_SITTING_RE = re.compile(
+    r"Sitting\s+held\s+on\s+([A-Za-z]+\s+\d{1,2},\s*\d{4})",
+    re.IGNORECASE,
+)
+_INTRO_SECTION_RE = re.compile(
+    r"<h3[^>]*>\s*Introduction\s*</h3>(?P<body>.*?)(?:<h3|</article|</main|\Z)",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _parse_qc_intro_date(html: str) -> Optional[date]:
+    """Extract the intro date from a QC bill detail page.
+
+    Looks inside the `<h3>Introduction</h3>` section first (lower false-
+    positive risk) and falls back to a global match if the section
+    boundary regex doesn't lock on. Returns the date for the first
+    "Sitting held on …" occurrence or None.
+    """
+    section = _INTRO_SECTION_RE.search(html)
+    haystack = section.group("body") if section else html
+    m = _INTRO_SITTING_RE.search(haystack)
+    if not m:
+        return None
+    raw = m.group(1).strip()
+    for fmt in ("%B %d, %Y", "%b %d, %Y"):
+        try:
+            return datetime.strptime(raw, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+async def fetch_qc_bill_introduced_dates(
+    db: Database, *,
+    limit: Optional[int] = None,
+    delay_seconds: float = 1.5,
+) -> dict[str, int]:
+    """Fetch QC bill detail pages and write `bill_events` first_reading rows.
+
+    Iterates every bill where `introduced_date IS NULL`, GETs the detail
+    page, extracts the date from the `<h3>Introduction</h3>` block, and
+    inserts a `bill_events` row. After the loop, calls
+    `derive_qc_introduced_dates` to roll the new events up onto
+    `bills.introduced_date` in a single SQL pass.
+
+    Idempotent: re-running on a bill that already has the event is a
+    no-op via `bill_events_uniq ON CONFLICT DO NOTHING`. Bills that
+    already have introduced_date set are filtered out at SELECT time.
+    """
+    rows = await db.fetch(
+        """
+        SELECT b.id, b.source_url, b.bill_number
+          FROM bills b
+         WHERE b.level = 'provincial'
+           AND b.province_territory = 'QC'
+           AND b.introduced_date IS NULL
+           AND b.source_url LIKE 'https://www.assnat.qc.ca/%'
+         ORDER BY length(b.bill_number), b.bill_number
+        """ + (f" LIMIT {int(limit)}" if limit else ""),
+    )
+    stats = {
+        "scanned": len(rows), "pages_fetched": 0,
+        "events_inserted": 0, "no_date_found": 0,
+        "not_found": 0, "errors": 0, "rolled_up": 0,
+    }
+
+    async with httpx.AsyncClient(headers=HEADERS, follow_redirects=True,
+                                  timeout=REQUEST_TIMEOUT) as client:
+        for i, row in enumerate(rows):
+            if i > 0 and delay_seconds > 0:
+                await asyncio.sleep(delay_seconds)
+            url = row["source_url"]
+            try:
+                resp = await client.get(url)
+                if resp.status_code == 404:
+                    stats["not_found"] += 1
+                    continue
+                resp.raise_for_status()
+            except httpx.HTTPError as e:
+                log.warning("fetch_qc_bill_introduced_dates: %s: %s", url, e)
+                stats["errors"] += 1
+                continue
+            stats["pages_fetched"] += 1
+
+            d = _parse_qc_intro_date(resp.text)
+            if d is None:
+                stats["no_date_found"] += 1
+                continue
+
+            await db.execute(
+                """
+                INSERT INTO bill_events (
+                    bill_id, stage, stage_label, event_date, raw
+                )
+                VALUES ($1, 'first_reading', 'Présentation', $2,
+                        $3::jsonb)
+                ON CONFLICT ON CONSTRAINT bill_events_uniq DO NOTHING
+                """,
+                str(row["id"]), d,
+                orjson.dumps({
+                    "source": "qc-detail-intro",
+                    "source_url": url,
+                    "bill_number": row["bill_number"],
+                }).decode(),
+            )
+            stats["events_inserted"] += 1
+
+    if stats["events_inserted"] > 0:
+        stats["rolled_up"] = await derive_qc_introduced_dates(db)
+
+    log.info("fetch_qc_bill_introduced_dates: %s", stats)
+    return stats
+
+
+# ─────────────────────────────────────────────────────────────────────
 # Phase 5 — historical bills via assnat.qc.ca session index pages
 # ─────────────────────────────────────────────────────────────────────
 #

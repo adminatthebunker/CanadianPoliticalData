@@ -5,10 +5,26 @@ description: Spend credits to generate evidence-cited AI reports on a politician
 
 # Reports and credits
 
-A **report** is an AI-assisted, evidence-cited summary of what a particular
-politician has said about a particular topic across the Hansard speeches
-we have on record. Every claim in a report links back to a specific speech
-chunk, so you can verify it in one click.
+A **report** is an AI-assisted, evidence-cited summary of what
+parliamentarians have said in the chamber, with every claim linking back
+to a specific speech chunk so you can verify it in one click.
+
+There are three kinds of report you can ask for today, each priced
+proportionally to how much material the system reads:
+
+- **Full report on a politician + topic** (the original) — generated from
+  a politician's profile or from a specific search result. Reads every
+  matching speech for that politician and produces a multi-section brief.
+- **Synthesize this search** — generated from the Analysis tab or
+  Timeline view of `/search`. Reads the top N matches across **all**
+  speakers in the result set and produces a one-paragraph summary plus
+  five bullet findings, each citing source quotes. Useful when you want
+  to know what the corpus collectively says about a topic, not what one
+  politician said.
+- **Stance map for this search** — same trigger surface as Synthesize.
+  Groups speakers in the result set by stance (for / against /
+  conditional), with one exemplar quote per group. Useful for journalists
+  building a "who's on which side" frame.
 
 Reports cost **credits**, which you buy in packs (or earn by submitting
 [accepted corrections](../politicians/corrections.md)).
@@ -34,13 +50,19 @@ We charge per report, not per month. This means:
 
 ## What a report contains
 
-- A **plain-language summary** of the politician's stated positions on
-  the topic, derived from the speeches we found.
+The exact shape depends on the kind, but every report includes:
+
+- A **plain-language summary** of what the underlying speeches collectively
+  say on the topic.
 - **Direct quotes**, with each quote linking back to the originating
   speech.
-- **Tensions or contradictions** if the speeches disagree with each
-  other over time, with the dates so you can see the shift.
-- A **footer of every speech consulted**, with date and link.
+- **Citations on every claim** — pulled from the actual chamber transcript.
+
+A **full report on a politician** also flags tensions or contradictions
+across time. A **synthesize-this-search** opens with a stats table
+(party / top speakers / time range) before the bullet findings, and a
+**stance map** structures the body as for / against / conditional groups
+with an exemplar quote per speaker.
 
 What a report does **not** contain:
 

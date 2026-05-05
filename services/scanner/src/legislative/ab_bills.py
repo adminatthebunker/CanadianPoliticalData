@@ -149,7 +149,9 @@ _DOC_HREF_RE = re.compile(
 # Dates render as "Oct 23, 2025", often wrapped in an anchor. Strip tags
 # and parse.
 _TAG_RE = re.compile(r"<[^>]+>")
-_AM_PM_RE = re.compile(r"\s+(am|pm)\b", re.IGNORECASE)
+# Sitting-time suffix on AB date cells. Historical (pre-Leg 30) pages also
+# emit `eve` for evening sittings; current pages only use am/pm.
+_AM_PM_RE = re.compile(r"\s+(am|pm|eve)\b", re.IGNORECASE)
 
 
 def _text(html: str) -> str:

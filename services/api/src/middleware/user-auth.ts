@@ -61,7 +61,7 @@ export async function requireUser(req: FastifyRequest, reply: FastifyReply) {
   // call is cheap at the traffic levels this project runs at; when
   // that changes, cache with a 30-second TTL.
   const tierRow = await queryOne<{ rate_limit_tier: string }>(
-    `SELECT rate_limit_tier FROM users WHERE id = $1`,
+    `SELECT rate_limit_tier FROM private.users WHERE id = $1`,
     [claims.sub]
   );
   if (tierRow?.rate_limit_tier === "suspended") {
@@ -107,7 +107,7 @@ export async function requireAdmin(req: FastifyRequest, reply: FastifyReply) {
   if (!claims) return; // requireUser already replied
 
   const row = await queryOne<{ is_admin: boolean; email: string }>(
-    `SELECT is_admin, email FROM users WHERE id = $1`,
+    `SELECT is_admin, email FROM private.users WHERE id = $1`,
     [claims.sub]
   );
   if (!row || !row.is_admin) {

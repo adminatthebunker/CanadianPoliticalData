@@ -12,8 +12,10 @@ import {
   useSpeechSearchMeta,
   type PoliticianSort,
   type SpeechSearchFilter,
+  type SpeechSearchItem,
   type SpeechType,
 } from "../hooks/useSpeechSearch";
+import type { ReportsMeta } from "../api";
 import { MapleLeafLoader } from "../components/MapleLeafLoader";
 import { SpeechFilters } from "../components/SpeechFilters";
 import { SpeechResultCard } from "../components/SpeechResultCard";
@@ -27,8 +29,11 @@ import { AIContradictionAnalysis } from "../components/AIContradictionAnalysis";
 import { AnchorChunkBanner } from "../components/AnchorChunkBanner";
 import { SearchMapView } from "../components/SearchMapView";
 import { AIFullReportButton } from "../components/AIFullReportButton";
+import { AnalysisButton } from "../components/AnalysisButton";
+import { AnalysisLimitDialog } from "../components/AnalysisLimitDialog";
 import { useAIAnalyzeMeta } from "../hooks/useAIAnalyzeMeta";
 import { useReportsMeta } from "../hooks/useReportsMeta";
+import { useSpeechFacets, type FacetsResponse } from "../hooks/useSpeechFacets";
 import { useUserAuth } from "../hooks/useUserAuth";
 import "../styles/hansard-search.css";
 
@@ -41,6 +46,10 @@ function readView(params: URLSearchParams): ViewMode {
   if (v === "map") return "map";
   return "timeline";
 }
+
+/** Options for the "Analyse top N" picker. The 500 ceiling matches the
+ *  paid-analysis CTAs' max-K and the API's facets endpoint cap. */
+const ANALYSIS_LIMIT_OPTIONS = [25, 50, 100, 200, 500] as const;
 
 const POLITICIAN_SORTS: readonly PoliticianSort[] = [
   "mentions",
@@ -197,6 +206,145 @@ const SORT_DESCRIPTORS: Record<PoliticianSort, string> = {
   keyword_hits: "ranked by exact keyword hits",
 };
 
+/**
+ * Paid-analysis CTAs for the search result set. Two siblings: a
+ * "Synthesize" brief and a "Stance map" speaker classification. Both
+ * take the top-200 chunk_ids from the current Timeline result list,
+ * the user's query, and a stripped filter payload (presentation-only
+ * fields like page/sort omitted — those don't affect what the model
+ * sees).
+ *
+ * Rendered on the Analysis tab (default variant) and atop the Timeline
+ * results (compact variant). Hidden when the result set is too small
+ * (< 5 items) to make synthesis meaningful, or when no query is set.
+ */
+function SearchSetAnalysisRow({
+  timelineItems,
+  facets,
+  query,
+  filter,
+  reportsMeta,
+  variant,
+  analysisLimit,
+  onAnalysisLimitChange,
+  onRequestCustomLimit,
+}: {
+  /** Used as a fallback for the compact variant when facets hasn't
+   *  loaded yet. Once facets is present, both variants prefer it. */
+  timelineItems: SpeechSearchItem[];
+  /** Top-N chunk_ids the analysis CTA feeds into the worker. Same
+   *  set the Analysis-tab dashboard tiles aggregate over. Capped at
+   *  200 server-side; sliced to analysisLimit client-side. */
+  facets: FacetsResponse | null;
+  query: string;
+  filter: SpeechSearchFilter;
+  reportsMeta: ReportsMeta | null;
+  variant: "default" | "compact";
+  /** User-selected "analyse top N" knob. Drives both variants. */
+  analysisLimit: number;
+  onAnalysisLimitChange: (n: number) => void;
+  /** Open the page-level "custom N" dialog. Triggered when the user
+   *  picks "Other…" from the dropdown. */
+  onRequestCustomLimit: () => void;
+}) {
+  const trimmedQuery = query.trim();
+
+  // Source the chunk_ids: prefer the facets payload (top-N most-
+  // relevant of all matches, capped at 500), fall back to the
+  // currently-visible timeline page only when facets hasn't loaded
+  // yet. Both variants prefer facets so the analysis covers the
+  // same set regardless of pagination state.
+  const chunkIds: string[] = facets?.chunk_ids
+    ? facets.chunk_ids.slice(0, analysisLimit)
+    : timelineItems.slice(0, analysisLimit).map((i) => i.chunk_id);
+
+  // Hide when the result set is too thin or no query — synthesis on
+  // 1-2 chunks isn't useful, and an empty query gives the model
+  // nothing to ground against.
+  if (chunkIds.length < 5 || !trimmedQuery) return null;
+  // Strip cursor/presentation fields; the worker prompt only cares
+  // about content filters.
+  const filterPayload = {
+    level: filter.level,
+    province_territory: filter.province_territory,
+    party: filter.party,
+    from: filter.from,
+    to: filter.to,
+    parliament_number: filter.parliament_number,
+    session_number: filter.session_number,
+    speech_types: filter.speech_types,
+    lang: filter.lang === "any" ? undefined : filter.lang,
+  };
+  const inputs = {
+    chunk_ids: chunkIds,
+    query: trimmedQuery,
+    filter_payload: filterPayload,
+  };
+
+  return (
+    <div
+      className={
+        variant === "compact"
+          ? "search-set-analysis search-set-analysis--compact"
+          : "search-set-analysis"
+      }
+    >
+      <span className="search-set-analysis__label">
+        Analyse top{" "}
+        <select
+          className="search-set-analysis__limit"
+          // When the current value isn't in the preset list, render it
+          // as a "(custom)" option pinned to the dropdown so the
+          // selected state is correct without coercing back to a preset.
+          value={
+            (ANALYSIS_LIMIT_OPTIONS as readonly number[]).includes(analysisLimit)
+              ? String(analysisLimit)
+              : "__custom__"
+          }
+          onChange={(e) => {
+            const raw = e.target.value;
+            if (raw === "__other__") {
+              onRequestCustomLimit();
+              return;
+            }
+            // "__custom__" can't be selected (it's the disabled current-
+            // value placeholder), but guard anyway.
+            if (raw === "__custom__") return;
+            onAnalysisLimitChange(Number(raw));
+          }}
+          aria-label="Number of top results to analyse"
+          title="Larger sets give richer synthesis but cost more credits"
+        >
+          {ANALYSIS_LIMIT_OPTIONS.map((n) => (
+            <option key={n} value={n}>
+              {n}
+            </option>
+          ))}
+          {!(ANALYSIS_LIMIT_OPTIONS as readonly number[]).includes(analysisLimit) && (
+            <option value="__custom__">{analysisLimit} (custom)</option>
+          )}
+          <option value="__other__">Other…</option>
+        </select>{" "}
+        results:
+      </span>
+      <AnalysisButton
+        kind="search_synthesis"
+        inputs={inputs}
+        label={variant === "compact" ? "Synthesize" : "Synthesize this search"}
+        meta={reportsMeta}
+        variant={variant}
+      />
+      <AnalysisButton
+        kind="stance_map"
+        inputs={inputs}
+        label={variant === "compact" ? "Stance map" : "Map stances"}
+        meta={reportsMeta}
+        variant={variant}
+      />
+    </div>
+  );
+}
+
 export default function HansardSearchPage() {
   useDocumentTitle("Hansard Search");
   const [searchParams, setSearchParams] = useSearchParams();
@@ -342,6 +490,45 @@ export default function HansardSearchPage() {
   // calls. Only gets used on the politician view.
   const { meta: aiMeta } = useAIAnalyzeMeta();
   const { meta: reportsMeta } = useReportsMeta();
+  // User-controllable "analyse top N" knob. Drives both the dashboard
+  // tile aggregations on the Analysis tab AND the chunk_ids fed into
+  // the paid analysis CTAs. Default 50 — cheap to analyse, often
+  // sufficient signal for journalistic synthesis. Persisted in
+  // localStorage so the user's preference sticks across sessions.
+  const [analysisLimit, setAnalysisLimitState] = useState<number>(() => {
+    const stored = typeof window !== "undefined" ? window.localStorage?.getItem("cpd_analysis_limit") : null;
+    const n = stored ? parseInt(stored, 10) : NaN;
+    // Accept any integer in the valid range, not just the preset list —
+    // the user can have set a custom value via the "Other…" dialog.
+    return Number.isFinite(n) && n >= 5 && n <= 500 ? n : 50;
+  });
+  const setAnalysisLimit = (n: number) => {
+    setAnalysisLimitState(n);
+    try {
+      window.localStorage.setItem("cpd_analysis_limit", String(n));
+    } catch {
+      // localStorage may be unavailable (private browsing, quota); fail silent.
+    }
+  };
+  const [showLimitDialog, setShowLimitDialog] = useState(false);
+  // Hoist facets fetch so the Analysis tab dashboard AND the
+  // "Analyse these results" CTA share one network round-trip
+  // (otherwise both fire the same expensive HNSW query). The
+  // analysisLimit knob feeds the API's `limit` param so the dashboard
+  // tiles + analysis CTA chunk_ids redraw whenever the user changes
+  // the picker.
+  //
+  // Enabled on both `analysis` and `timeline` views: the CTA renders
+  // on both, and pulling chunk_ids from facets (capped at 200)
+  // decouples analysis input size from the timeline's pagination
+  // (which caps at ~50 server-side). On the `timeline` view the
+  // dashboard isn't shown, but the CTA still needs the facets data.
+  const facetsState = useSpeechFacets(
+    appliedFilter,
+    enabled
+      && (readView(searchParams) === "analysis" || readView(searchParams) === "timeline"),
+    analysisLimit,
+  );
   // Auth state drives the anon "sign in to expand" banner above the
   // politician-grouped results, plus the per-card expand affordance
   // inside PoliticianResultGroup itself. `disabled` is true when the
@@ -614,12 +801,26 @@ export default function HansardSearchPage() {
       </div>
 
       {view === "analysis" && (
-        <SearchDashboard
-          filter={appliedFilter}
-          enabled={enabled}
-          totalMatches={dashboardTotal}
-          defaultOpen
-        />
+        <>
+          <SearchSetAnalysisRow
+            timelineItems={timeline?.items ?? []}
+            facets={facetsState.data}
+            query={appliedFilter.q ?? ""}
+            filter={appliedFilter}
+            reportsMeta={reportsMeta}
+            variant="default"
+            analysisLimit={analysisLimit}
+            onAnalysisLimitChange={setAnalysisLimit}
+            onRequestCustomLimit={() => setShowLimitDialog(true)}
+          />
+          <SearchDashboard
+            filter={appliedFilter}
+            enabled={enabled}
+            totalMatches={dashboardTotal}
+            defaultOpen
+            facets={facetsState}
+          />
+        </>
       )}
 
       {view === "map" && (
@@ -688,6 +889,17 @@ export default function HansardSearchPage() {
 
         {view === "timeline" && timeline && timeline.items.length > 0 && (
           <>
+            <SearchSetAnalysisRow
+              timelineItems={timeline.items}
+              facets={facetsState.data}
+              query={appliedFilter.q ?? ""}
+              filter={appliedFilter}
+              reportsMeta={reportsMeta}
+              variant="compact"
+              analysisLimit={analysisLimit}
+              onAnalysisLimitChange={setAnalysisLimit}
+              onRequestCustomLimit={() => setShowLimitDialog(true)}
+            />
             <ol className="hansard-search__list" aria-label="Search results">
               {timeline.items.map((item) => (
                 <li key={item.chunk_id} className="hansard-search__item">
@@ -837,6 +1049,16 @@ export default function HansardSearchPage() {
         )}
       </div>
       <SearchScrollFab />
+      {showLimitDialog && (
+        <AnalysisLimitDialog
+          initialValue={analysisLimit}
+          onApply={(n) => {
+            setAnalysisLimit(n);
+            setShowLimitDialog(false);
+          }}
+          onCancel={() => setShowLimitDialog(false)}
+        />
+      )}
     </section>
   );
 }

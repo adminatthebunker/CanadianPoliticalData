@@ -82,7 +82,7 @@ export default async function stripeWebhookRoutes(app: FastifyInstance) {
     // already seen this event — return 200 without reprocessing.
     try {
       await query(
-        `INSERT INTO stripe_webhook_events (id, type, raw_payload)
+        `INSERT INTO private.stripe_webhook_events (id, type, raw_payload)
              VALUES ($1, $2, $3)`,
         [event.id, event.type, JSON.stringify(event)]
       );
@@ -100,7 +100,7 @@ export default async function stripeWebhookRoutes(app: FastifyInstance) {
     try {
       await dispatchEvent(req, event);
       await query(
-        `UPDATE stripe_webhook_events SET processed_at = now() WHERE id = $1`,
+        `UPDATE private.stripe_webhook_events SET processed_at = now() WHERE id = $1`,
         [event.id]
       );
       return reply.send({ received: true });
@@ -111,7 +111,7 @@ export default async function stripeWebhookRoutes(app: FastifyInstance) {
       // recover after a transient DB / upstream failure.
       const message = err instanceof Error ? err.message : String(err);
       await query(
-        `UPDATE stripe_webhook_events SET error_message = $2 WHERE id = $1`,
+        `UPDATE private.stripe_webhook_events SET error_message = $2 WHERE id = $1`,
         [event.id, message.slice(0, 1000)]
       );
       req.log.error({ err, event_id: event.id, type: event.type }, "[stripe-webhook] handler failed");

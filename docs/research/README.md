@@ -29,6 +29,22 @@ For the cross-cutting context — schema migrations, scanner-module conventions,
 - [Northwest Territories](./northwest-territories.md) — ✅ **Bills live** via ntassembly.ca Drupal 9. Consensus government — no sponsors by design.
 - [Nunavut](./nunavut.md) — ✅ **Bills live** via Drupal 9 single-page view. Consensus government — no sponsors by design.
 
+### Cities (tier-1, research only as of 2026-05-05)
+
+Municipal-level dossiers live under [`cities/`](./cities/). Cross-cutting context (system fingerprints, family clusters, schema implications, probe hierarchy adapted for municipalities) lives in [`cities/overview.md`](./cities/overview.md). Tier-1 = ten cities by population × civic salience; ingest is a *Later*-horizon workstream per [`../timeline.md`](../timeline.md).
+
+- [Cities overview](./cities/overview.md) — coverage matrix, system-fingerprint families (open-data API / eScribe / bespoke), priority ordering.
+- [Toronto](./cities/toronto.md) — 🚧 research. CKAN at open.toronto.ca (15 council datasets); TMMIS Akamai-walled.
+- [Montréal](./cities/montreal.md) — 🚧 research. ★ CKAN `sous-titrage-conseil-municipal` is the strongest municipal-Hansard-equivalent in Canada (real-time captions, 2018+).
+- [Vancouver](./cities/vancouver.md) — 🚧 research. Opendatasoft v2.1 alternative to Cloudflare-walled council.vancouver.ca.
+- [Calgary](./cities/calgary.md) — ⏸️ parked. Pipeline scaffold landed; eScribe past-meetings AJAX opaque to server-side callers; **no YouTube channel** for council (video lives only inside eScribe). Promotion needs Socrata republish probe or Playwright.
+- [Edmonton](./cities/edmonton.md) — ⏸️ parked. Same eScribe block as Calgary, **but** does maintain a YouTube channel — captions path becomes tractable once the correct handle is found.
+- [Ottawa](./cities/ottawa.md) — 🚧 research. eScribe (bilingual EN/FR) + ArcGIS Hub.
+- [Mississauga](./cities/mississauga.md) — 🚧 research. eScribe + Peel Regional intersection.
+- [Hamilton](./cities/hamilton.md) — 🚧 research. eScribe + General Issues Committee quirk.
+- [Winnipeg](./cities/winnipeg.md) — 🚧 research. DMIS bespoke + Socrata; needs reachability re-probe.
+- [Québec](./cities/quebec.md) — 🚧 research. Bespoke IIS/ASP.NET; six arrondissements add scope; FR primary.
+
 ## Status legend
 
 - ✅ **Live** — production ingestion running; data in `bills` / `bill_events` / `bill_sponsors`.

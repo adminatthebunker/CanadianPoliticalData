@@ -4,28 +4,52 @@
 
 **Legislature:** Legislative Assembly of Saskatchewan | **Website:** https://www.legassembly.sk.ca | **Seats:** 61 | **Next election:** By 2028-10
 
-**Status snapshot (2026-04-19):** ⏸️ **Deferred (PDF-only).** Probing on 2026-04-15 found primary bill artifact is `progress-of-bills.pdf` with no per-bill HTML URLs. Re-rated to difficulty 4. Unlike most provinces, Hansard is **lower difficulty** than bills here (well-indexed back to 1996). No `ca_sk` scraper in opencivicdata.
+**Status snapshot (2026-05-05, end-of-day):** ✅ **Hansard live, bills partial.** Full coverage column shipped in a single cycle: MLA roster (61 30L MLAs via speaker index) → HTML pipeline → PDF parser (29L1S–29L3S all-PDF era) → presiding-speaker resolver → bills ingester (`progress-of-bills.pdf`). 50,948 speeches across 360 sittings (29L1S → 30L2S, Dec 2020 → present); 367 bills across 28L3S → 30L2S; 165 SK politicians with `sk_assembly_slug`. `hansard_status='live'`, `bills_status='partial'` (367 < 500 live threshold; reaching `live` needs the yearly-span 1998-2017 PDFs which use a different table shape).
 
 ---
 
 ## Bills & Legislation
 
-- **Source URL(s):** https://www.legassembly.sk.ca/legislative-business/bills/
-- **Format:** HTML, by Legislature and session. **Primary bill artifact is `progress-of-bills.pdf`.** Probing didn't find per-bill HTML URLs; likely PDF-only metadata.
-- **Fields captured upstream:** Bill title, status, process info (First Reading, Specified Bills, Regulations).
+- **Source URL(s):**
+  - Discovery surface: https://www.legassembly.sk.ca/legislative-business/bills/ (HTML page with `<a href="/media/{slug}/...progress-of-bills*.pdf">` links)
+  - Per-session PDF pattern: `https://www.legassembly.sk.ca/media/{opaque-cms-slug}/progress-of-bills*.pdf` (slugs are CMS-hash style for current/recent sessions; older yearly-span PDFs use `/media/{integer}/progress-of-bills-YYYY-YYYY.pdf`)
+- **Format:** Single tabular PDF per session. Columns: `No. | EN | * | Title | Member | 1st Reading | Royal Rec. | Comm. | 2nd Reading | Comm. | Amend Date | 3rd Reading | Royal Assent | Comes Into Force On`. Section banners (`Government Bills` / `Private Members' Bills` / `Private Bills`) carry `bill_type`.
+- **Fields captured downstream:** bill_number, title (multi-line + bilingual `/ Loi …` shapes), sponsor (`Lastname, Firstname`), all stage dates (first/royal-recommendation/committee-first/second-reading/committee-second/amend-date/third-reading/royal-assent), force-on code (`A` / `OC` / `SD` / `A-SD` etc., kept as `bills.raw->>'force_code'`), committee-acronym hints (`CCA`, `ECO`, `IAJ`, etc.).
 - **Terms/Licensing:** Crown copyright.
 - **Rate limits / auth:** None documented.
-- **Difficulty (1–5):** **4** (re-rated up from 3 after CMS fingerprint pass — Bootstrap 5 static site on Azure, no `?_format=json` support).
-- **Notes:** Alternative legislation source: freelaws.gov.sk.ca (bills and acts text, not procedural data).
+- **Difficulty (1–5):** **3** (re-rated down from 4 after the parser shipped — `pdftotext -layout` + per-page header detection works cleanly for the 28L3S+ era; yearly-span 1998–2017 PDFs are a different table shape and stay deferred).
+- **Status (2026-05-05):** 🟢 **Live**. Module: `services/scanner/src/legislative/sk_bills.py`. Click cmd: `ingest-sk-bills` (with `--all-sessions`, `--url`, `--dry-run`, `--selftest`). Daily 21:45 UTC schedule. **Outcomes:** 367 bills across 28L3S–30L2S, 1,214 stage events, 100% sponsor FK on current session / 70% across historical (older sessions need 28L MLA roster ingest to close). `bills_status='partial'` until yearly-span PDFs land or current corpus crosses 500.
+- **Notes:** Alternative legislation source: freelaws.gov.sk.ca (bills and acts text, not procedural data) — separate slice if/when full bill text is needed.
 
 ## Hansard / Debates
 
-- **Source URL(s):** https://www.legassembly.sk.ca/legislative-business/debates-hansard/ ; https://docs.legassembly.sk.ca
-- **Format:** HTML + PDF; digitized back to 1947.
+- **Source URL(s):**
+  - Discovery surface: https://www.legassembly.sk.ca/legislative-business/archive/ (paginated; lists every sitting URL — Assembly Debates AND Committee Debates)
+  - Sitting transcript pattern: `https://docs.legassembly.sk.ca/legdocs/Assembly/Debates/{N}L{S}S/{YYYYMMDD}DebatesHTML.htm`
+    - `N` = parliament number (e.g. `30`), `S` = session number (e.g. `2`), `YYYYMMDD` = sitting date.
+    - Both `Debates.pdf` and `DebatesHTML.htm` artifacts exist per sitting.
+    - Confirmed live for 30L1S (Nov-Dec 2024), 30L2S (Oct 2025-current); per-day, not all dates exist.
+  - Indexes: `https://docs.legassembly.sk.ca/legdocs/Assembly/Debates/Indexes/{N}/{N}L-SP-full.html` (speaker), `{N}L-SU-full.html` (subject)
+    - Note path is `Indexes/{N}/`, not `Indexes/{N}L/` (dossier had this wrong).
+    - Modern era is parliament-level (`30L-SP-full.html`); older eras are per-session (`25L3S-SP-full.html`).
+- **Format:** HTML + PDF for modern (30th-leg confirmed). Older eras (≤24th leg) need a probe — Indexes exist back to 23rd-leg (1995-) but daily HTML transcripts may not.
+- **Encoding:** windows-1252 (CRLF line terminators). Generated by Microsoft Word 15 — `<p class=MsoNormal>` paragraphs, `<b>` for speaker names (split across newlines), `mso-bookmark` spans wrap multi-paragraph blocks. Linked client-side via `<script src="…/InsertHansard.js">` which injects CSS + analytics at runtime; underlying server-rendered HTML is sufficient for scraping.
 - **Granularity:** Daily.
-- **Speaker identification:** Yes; subject + speaker indexes for 1996 forward.
-- **Difficulty (1–5):** 2.
-- **Notes:** Contact: hansard@legassembly.sk.ca, 306-787-1175. Downloadable indexes are a major asset — would let us link speeches to MLAs without name-fuzz.
+- **Speaker identification:** Excellent. Speaker index lists each MLA as `Lastname, [Hon. ]Firstname (Party, Constituency) <i>s.X</i>: Cabinet Role` — directly parseable to a roster. Cross-references Speaker → "Speaker" entry. Session participation flagged with `s.1, 2`.
+- **Difficulty (1–5):** **2** (confirmed). Was rated 2 in the dossier; the dossier's "PDF-only" warning applied to bills, not Hansard.
+- **Sittings discovery:** Walk archive pagination at `/legislative-business/archive/?page=N` — pages list explicit `Debates.pdf` + `DebatesHTML.htm` URLs. No need to brute-force date ranges.
+- **Era boundary (probed + reconned 2026-05-05):** Full archive walk surfaced 514 Assembly Hansard URLs spanning 29L1S (Dec 2020) to current. Breakdown:
+  - **29L1S** 38 URLs — 0 HTML, 34 PDF, 4 AM/EVE supplementary PDFs
+  - **29L2S** 66 URLs — 0 HTML, 58 PDF, 8 AM/EVE
+  - **29L3S** 78 URLs — 0 HTML, 72 PDF, 6 AM/EVE
+  - **29L4S** 126 URLs — 56 HTML, 66 PDF, 4 AM/EVE (HTML adoption mid-session)
+  - **30L1S** 86 URLs — 40 HTML + 40 PDF + 6 AM/EVE
+  - **30L2S** 120 URLs — 58 HTML + 58 PDF + 4 AM/EVE
+  - Total HTML: **154** (matches our ingest)
+  - Total PDF (excluding AM/EVE): **328**, AM PDFs: **5**, EVE PDFs: **27**
+  - **Pre-29L (1995-2020 / 23L-28L) does NOT appear in this archive** — likely lives at a different URL pattern, in paper-only form, or in the legassembly.sk.ca standalone /debates-hansard/ list instead. Speakers for those eras are stub-seeded in `politicians` (Hagel/Osika/Kowalsky/Toth/D'Autremont/Tochor) so a future PDF-era ingester just needs the parser; the FK targets exist.
+- **PDF-only era — ✅ shipped 2026-05-05** (commit `2a8c99a`). `sk_hansard_pdf_parse.py` mirrors the AB Hansard pattern via Poppler's `pdftotext` (no new dep — `pdf_utils.pdftotext` was already in the codebase). Discovery dedupes HTML-over-PDF on `(parl, sess, ymd, time_of_day)` tuple so the same date never produces two ingests; AM/EVE supplementary sittings are stored as distinct rows since they're separate procedurally. Parser uses regex-only (no BeautifulSoup) per project convention. Backfill outcome: 154 → 360 sittings, **24,461 → 50,948 speeches**, hansard_status `partial` → `live`.
+- **Notes:** Contact: hansard@legassembly.sk.ca, 306-787-1175. Speaker index is the load-bearing roster source — first fetch produces 61 current MLAs without name-fuzz on cabinet positions and constituencies.
 
 ## Voting Records / Divisions
 
@@ -49,12 +73,30 @@
 - **opencivicdata/scrapers-ca:** **No `ca_sk` module currently active** (disabled or never built).
 - Other: freelaws.gov.sk.ca (acts + bills text, not procedural).
 
+## MLAs Roster
+
+- **Source URL(s):**
+  - Current: https://www.legassembly.sk.ca/mlas/ — 61 current MLAs, alphabetical HTML table with Member / Standing (caucus) / Constituency columns.
+  - Detail page pattern: `/mlas/member-details?first=Firstname&last=Lastname` (query-string, no stable ID exposed).
+  - Speaker index 30L-SP-full.html — cleanest source: every current MLA listed with `(Party, Constituency)` and cabinet role.
+- **Stable per-MLA ID:** **None exposed.** Detail-page URL is name-based; no member_id or slug in the page source. We synthesize a slug as `firstname-lastname` lowercased + dashes, persisted as `politicians.sk_assembly_slug`. (CLAUDE.md convention #1 still applies — synthetic ID is necessary to avoid name-fuzz on speaker resolution.)
+- **Former MLAs:** Not on legassembly.sk.ca. Linked externally to Saskatchewan Archives (out of scope for MVP).
+- **Photo URL pattern:** `/media/{alphanumeric-id}/{firstname-lastname-or-similar}.jpg` (opaque alphanumeric IDs).
+
 ## Status
 
-- [x] Research complete
-- [ ] Schema drafted
-- [ ] Ingestion prototyped
-- [ ] Production ingestion live
+- [x] Research complete (2026-05-05)
+- [x] Schema drafted — migration `0044` adds `politicians.sk_assembly_slug`
+- [x] Ingestion prototyped (2026-05-05 morning)
+- [x] **Production ingestion live (2026-05-05).** Daily chain: 21:45 SK bills → 22:00 SK MLA roster → 22:15 SK Hansard → 22:30 SK presiding-resolver → 23:30 cross-jurisdictional inline-presiding-officers.
+
+## Open follow-ups
+
+- **SK 28L MLA roster** — would lift bills sponsor FK rate from 70% → 90%+ (256 of 367 attributed today; the 30% miss is mostly older MLAs not in the roster).
+- **SK votes (Journals)** — session-aggregated PDFs at `/legislative-business/journals` with per-MLA roll-call tables. Different parser shape (per-MLA tabular voting). Largest remaining SK workstream; deferred.
+- **Yearly-span 1998–2017 progress-of-bills PDFs** — different table shape than 28L+ era; needs separate parser variant. Closes the gap to `bills_status='live'` (>500 threshold).
+- **Pre-29L Hansard** — 23rd–28th legislatures don't appear in the archive walker surface. Likely PDF-only / paper-only / different URL pattern. Discovery problem; the 6 stub Speaker politicians (Hagel/Osika/Kowalsky/Toth/D'Autremont/Tochor) are seeded so the FK targets exist when a parser ships.
+- **Tier-2 attribution gap** — 29L4S "The Deputy Speaker" / "The Chair" / "The Deputy Chair" turns (~2,200 SK speeches) need a deputy-speaker / chair roster to attribute. Cross-jurisdictional Tier-2 Pass 2 work; not SK-specific.
 
 ## Research-handoff items (Bills + Hansard)
 

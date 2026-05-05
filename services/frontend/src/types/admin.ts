@@ -72,3 +72,79 @@ export interface AdminStats {
     error: string | null;
   }>;
 }
+
+export interface UsageGpuSample {
+  sampled_at: string;
+  mem_used_mb: number;
+  mem_total_mb: number;
+  util_gpu_pct: number;
+  util_mem_pct: number;
+  temperature_c: number | null;
+  power_w: number | null;
+}
+
+export interface UsageTeiSample {
+  sampled_at: string;
+  queue_size: number | null;
+  request_count_total: string | null;
+  request_failure_total: string | null;
+  request_duration_p50_ms: string | null;
+  request_duration_p95_ms: string | null;
+  request_duration_p99_ms: string | null;
+  batch_next_size_avg: string | null;
+}
+
+export interface UsageSearchCounts {
+  searches_5m: number;
+  searches_60m: number;
+  searches_24h: number;
+  p50_60m: number | null;
+  p95_60m: number | null;
+  errors_60m: number;
+}
+
+export interface UsageSnapshot {
+  gpu: UsageGpuSample | null;
+  tei: UsageTeiSample | null;
+  search: UsageSearchCounts;
+}
+
+export type UsageMetric =
+  | "vram_used_mb"
+  | "vram_pct"
+  | "gpu_util_pct"
+  | "tei_queue"
+  | "tei_p95_ms"
+  | "search_p95_ms"
+  | "search_count";
+
+export interface UsageTimeseriesPoint {
+  t: string;
+  v: number | null;
+}
+
+export interface UsageTimeseries {
+  metric: UsageMetric;
+  minutes: number;
+  bucket_seconds: number;
+  points: UsageTimeseriesPoint[];
+}
+
+export interface SlowSearchRow {
+  created_at: string;
+  endpoint: string;
+  total_ms: number;
+  tei_ms: number | null;
+  sql_ms: number | null;
+  result_count: number | null;
+  was_anchor_query: boolean;
+  was_authenticated: boolean;
+  tier: string | null;
+  status_code: number;
+  cached_embedding: boolean;
+  has_filters: boolean;
+}
+
+export interface SlowSearchesResponse {
+  rows: SlowSearchRow[];
+}

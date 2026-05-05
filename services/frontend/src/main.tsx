@@ -33,6 +33,7 @@ import AdminSocialsReview from "./pages/admin/AdminSocialsReview";
 import AdminCorrections from "./pages/admin/AdminCorrections";
 import AdminUsers from "./pages/admin/AdminUsers";
 import AdminReports from "./pages/admin/AdminReports";
+import AdminUsage from "./pages/admin/AdminUsage";
 
 // Legacy /politician/:id → /politicians/:id, preserving any #hash (e.g. #socials)
 // so existing deep-links keep the right tab open after the redirect.
@@ -81,6 +82,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
             <Route path="corrections" element={<AdminCorrections />} />
             <Route path="users" element={<AdminUsers />} />
             <Route path="reports" element={<AdminReports />} />
+            <Route path="usage" element={<AdminUsage />} />
           </Route>
         </Route>
         </Routes>

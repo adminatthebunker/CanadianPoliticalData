@@ -167,11 +167,17 @@ services:
       timeout: 3s
       retries: 3
       start_period: 120s
-    # `on-failure` (capped at 5) instead of `unless-stopped`: when the
-    # GPU wedges and TEI panics on every CUDA init, we want a bounded
-    # restart loop that eventually stops, not infinite CPU-fallback
-    # bouncing that masks the underlying problem.
-    restart: on-failure:5
+    # `unless-stopped` so TEI comes back after host reboot. The earlier
+    # `on-failure:5` cap (2026-04-28) was reverted on 2026-05-04 after a
+    # reboot left TEI stopped indefinitely — Docker's on-failure policy
+    # ignores clean SIGTERM exits (code 0), so a graceful shutdown during
+    # host shutdown was treated as "not a failure" and never restarted.
+    # The wedged-driver bounce-loop concern that motivated the cap is
+    # already covered by (a) the device-aware healthcheck below, which
+    # marks CPU-fallback as unhealthy, and (b) the scanner-side embed
+    # client's preflight + retry + abort-on-5-consecutive-failures guard
+    # in services/scanner/src/legislative/speech_embedder.py.
+    restart: unless-stopped
     networks: [sw]
     deploy:
       resources:
@@ -182,6 +188,36 @@ services:
               capabilities: [gpu]
         limits:
           memory: ${TEI_MEMORY:-6g}
+
+  # ── GPU sampler (operator observability) ──────────────────────────
+  # Tiny side-car that polls NVML every SAMPLE_INTERVAL_SECONDS and
+  # scrapes TEI's native /metrics endpoint, writing to private.gpu_samples
+  # and private.tei_samples. Only the second service with a GPU attach;
+  # NVML is read-only and creates no CUDA context, so this adds ~0 VRAM
+  # pressure beside TEI. Powers the admin /usage page.
+  gpu-sampler:
+    build:
+      context: ./services/gpu-sampler
+      dockerfile: Dockerfile
+    container_name: sw-gpu-sampler
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://sw:${DB_PASSWORD}@db:5432/sovereignwatch
+      TEI_URL: ${EMBED_URL:-http://tei:80}
+      SAMPLE_INTERVAL_SECONDS: ${USAGE_SAMPLE_INTERVAL:-30}
+      NVIDIA_VISIBLE_DEVICES: ${EMBED_CUDA_DEVICES:-all}
+      NVIDIA_DRIVER_CAPABILITIES: utility
+    restart: unless-stopped
+    networks: [sw]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: ${EMBED_GPU_COUNT:-all}
+              capabilities: [gpu]
 
   # ── Scanner (run-on-demand) ───────────────────────────────────────
   scanner:
@@ -421,6 +457,10 @@ services:
       # Missing on a fresh checkout — the docs vhost will 404 cleanly until
       # the first build is run. See nginx/conf.d/docs.conf.
       - ./mkdocs/site:/var/www/docs:ro
+      # Public dataset downloads. Mounted RO; populated weekly by
+      # scripts/make-public-dump.sh on the host. See /datasets/ block in
+      # nginx/conf.d/default.conf for rate-limit + autoindex config.
+      - /media/bunker-admin/Internal/canadian-political-data-backups/public-dumps:/srv/datasets:ro
     depends_on: [api, frontend]
     restart: unless-stopped
     networks: [sw]

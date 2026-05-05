@@ -1,6 +1,16 @@
 import { Navigate, NavLink, Outlet, useLocation } from "react-router-dom";
 import { useUserAuth } from "../hooks/useUserAuth";
+import { useAdminFetch } from "../hooks/useAdminFetch";
 import "../styles/admin.css";
+
+interface CorrectionsStats {
+  pending: number;
+  triaged: number;
+  applied: number;
+  rejected: number;
+  duplicate: number;
+  spam: number;
+}
 
 /**
  * Admin shell. Access = "signed-in user with is_admin=true". Unauthed
@@ -11,6 +21,14 @@ import "../styles/admin.css";
 export function AdminLayout() {
   const { user, loading, logout } = useUserAuth();
   const loc = useLocation();
+  // Surface a pending-corrections badge in the nav so the admin notices
+  // new submissions without clicking through. Polls only when signed in
+  // as an admin (the path is null until that's true).
+  const correctionsStats = useAdminFetch<CorrectionsStats>(
+    user?.is_admin ? "/corrections/stats" : null,
+    { pollMs: 30000 },
+  );
+  const pendingCorrections = correctionsStats.data?.pending ?? 0;
 
   if (loading) {
     return <section className="admin admin--login"><p>Checking session…</p></section>;
@@ -61,12 +79,24 @@ export function AdminLayout() {
           </NavLink>
           <NavLink to="/admin/corrections" className={({ isActive }) => (isActive ? "active" : "")}>
             Corrections
+            {pendingCorrections > 0 && (
+              <span
+                className="admin__nav-badge"
+                aria-label={`${pendingCorrections} pending corrections`}
+                title={`${pendingCorrections} pending`}
+              >
+                {pendingCorrections > 99 ? "99+" : pendingCorrections}
+              </span>
+            )}
           </NavLink>
           <NavLink to="/admin/users" className={({ isActive }) => (isActive ? "active" : "")}>
             Users
           </NavLink>
           <NavLink to="/admin/reports" className={({ isActive }) => (isActive ? "active" : "")}>
             Reports
+          </NavLink>
+          <NavLink to="/admin/usage" className={({ isActive }) => (isActive ? "active" : "")}>
+            Usage
           </NavLink>
           <button className="admin__logout" onClick={() => logout()}>Sign out</button>
         </nav>

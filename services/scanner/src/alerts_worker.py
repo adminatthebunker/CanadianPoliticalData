@@ -306,8 +306,8 @@ async def process_due_searches(db: Database) -> int:
         """
         SELECT s.id, s.user_id, s.name, s.filter_payload, s.query_embedding,
                s.alert_cadence, s.last_checked_at, u.email
-          FROM saved_searches s
-          JOIN users u ON u.id = s.user_id
+          FROM private.saved_searches s
+          JOIN private.users u ON u.id = s.user_id
          WHERE s.alert_cadence <> 'none'
            AND u.email_bounced_at IS NULL
            AND (
@@ -340,7 +340,7 @@ async def process_due_searches(db: Database) -> int:
             filter_payload.get(k) for k in ("level", "province_territory", "politician_id", "party")
         ):
             await db.execute(
-                "UPDATE saved_searches SET last_checked_at = now() WHERE id = $1",
+                "UPDATE private.saved_searches SET last_checked_at = now() WHERE id = $1",
                 row["id"],
             )
             continue
@@ -363,7 +363,7 @@ async def process_due_searches(db: Database) -> int:
                 await _deliver_digest(row["email"], row["name"], matches, str(row["id"]))
                 sent += 1
                 await db.execute(
-                    """UPDATE saved_searches
+                    """UPDATE private.saved_searches
                           SET last_checked_at = now(),
                               last_notified_at = now()
                         WHERE id = $1""",
@@ -383,11 +383,11 @@ async def process_due_searches(db: Database) -> int:
                     row["email"], row["id"], e,
                 )
                 await db.execute(
-                    "UPDATE users SET email_bounced_at = now() WHERE id = $1",
+                    "UPDATE private.users SET email_bounced_at = now() WHERE id = $1",
                     row["user_id"],
                 )
                 await db.execute(
-                    "UPDATE saved_searches SET last_checked_at = now() WHERE id = $1",
+                    "UPDATE private.saved_searches SET last_checked_at = now() WHERE id = $1",
                     row["id"],
                 )
             except smtplib.SMTPResponseException as e:
@@ -399,11 +399,11 @@ async def process_due_searches(db: Database) -> int:
                         e.smtp_code, row["email"], row["id"],
                     )
                     await db.execute(
-                        "UPDATE users SET email_bounced_at = now() WHERE id = $1",
+                        "UPDATE private.users SET email_bounced_at = now() WHERE id = $1",
                         row["user_id"],
                     )
                     await db.execute(
-                        "UPDATE saved_searches SET last_checked_at = now() WHERE id = $1",
+                        "UPDATE private.saved_searches SET last_checked_at = now() WHERE id = $1",
                         row["id"],
                     )
                 else:
@@ -417,7 +417,7 @@ async def process_due_searches(db: Database) -> int:
                 # Do NOT advance watermark — we want to retry.
         else:
             await db.execute(
-                "UPDATE saved_searches SET last_checked_at = now() WHERE id = $1",
+                "UPDATE private.saved_searches SET last_checked_at = now() WHERE id = $1",
                 row["id"],
             )
     return sent

@@ -1,82 +1,137 @@
 ---
 title: Dataset download
-description: Direct download of the Canadian Political Data dataset — coming soon.
+description: Download a redistributable snapshot of the Canadian Political Data corpus.
 ---
 
 # Dataset download
 
-!!! warning "Coming soon"
+A redistributable snapshot of the Canadian Political Data corpus is
+published every week. The snapshot covers the public legislative dataset
+— politicians, speeches with embeddings, bills, votes, infrastructure
+scans, and projections — and **by construction excludes** user accounts,
+authentication tokens, saved searches, billing data, and reports. Those
+tables live in a separate database schema that the dump command never
+touches.
 
-    A direct download of the Canadian Political Data dataset is **not
-    yet available**. We're working through the privacy and data-scrubbing
-    review needed to publish a snapshot that excludes user accounts,
-    saved searches, billing data, and other non-public artifacts.
+## Download
 
-    This page will be updated with the download link, full schema notes,
-    and load instructions when the snapshot is published.
+The canonical download URL is <https://canadianpoliticaldata.org/datasets/>
+— an nginx autoindex listing of every weekly snapshot. Pick the most
+recent `cpd-public-*.pgcustom` file.
 
-## What you'll get when it ships
+Each weekly artifact ships with two sidecar files in the same directory:
 
-When the snapshot is published, this page will document:
+- `cpd-public-<timestamp>-<git-sha>.manifest.tsv` — table-by-table row counts at dump time.
+- `cpd-public-<timestamp>-<git-sha>.sha256` — integrity check.
 
-- A direct-download URL for the latest snapshot.
-- The dump format — currently planned as one or more **gzipped
-  PostgreSQL dumps** (the same shape as `sovpro db backup`, i.e.
-  `pg_dump | gzip` plain-SQL, restorable via `gunzip -c | psql`).
-- Step-by-step load instructions for Postgres 16 with PostGIS,
-  pgvector, and unaccent.
-- The list of tables included (politicians, speeches with embeddings,
-  bills, ridings, infrastructure scans) and the list excluded (user
-  accounts, auth tokens, saved searches, reports, billing).
+## Format
 
-## Refresh cadence (planned)
+The dump is a PostgreSQL **custom-format** archive (`pg_dump --format=custom`)
+compressed with **zstd**. Format details:
 
-Once shipped, the dataset will be refreshed **approximately weekly**,
-after each significant ingest pass. The download URL will always point
-at the latest snapshot. If you need a frozen point-in-time copy, mirror
-the snapshot you used and cite the date you downloaded.
+- One file (not a directory) — easy to mirror, hash, and host.
+- Compressible: a 199 GB on-disk database compresses to ~33 GB on the wire.
+- Parallel-restore friendly: `pg_restore -j N` reads multiple table data
+  segments concurrently.
+- Postgres 16 native (zstd custom-format dumps require a 16+ client).
 
-## Licence (planned)
+## Restore
 
-The published dataset will be released under a **Canadian-friendly,
-non-commercial licence** — most likely
+You'll need PostgreSQL 16 with extensions:
+
+- **pgvector** ≥ 0.5 (provides the `vector` type for the embedding column)
+- **PostGIS** ≥ 3.4 (riding boundaries, infrastructure-scan geography)
+- **unaccent** (search normalization)
+
+Restore is a single command:
+
+```bash
+createdb cpd
+
+# Verify integrity first
+sha256sum -c cpd-public-<timestamp>-<git-sha>.sha256
+
+# Restore — adjust -j to taste (4 is a sane default on consumer hardware)
+pg_restore --no-owner --no-privileges -d cpd -j 4 \
+    cpd-public-<timestamp>-<git-sha>.pgcustom
+```
+
+The restore process **rebuilds the HNSW vector index** on
+`speech_chunks.embedding` from scratch. On a 4M-row 1024-dim corpus that
+takes 30-60 minutes of CPU on the consumer's machine. The dump file
+itself decompresses fast; the index build is the long pole.
+
+## Refresh cadence
+
+The snapshot is regenerated **every Sunday at 02:00 America/Edmonton**
+by the production system's cron. The autoindex listing shows all
+weekly snapshots — pick the most recent for the freshest data, or pin
+to a specific timestamp if you need a frozen point-in-time copy and
+want to cite the exact version.
+
+## What's in the dump
+
+The manifest TSV tells you live row counts at dump time. As of the
+latest snapshot the corpus includes:
+
+- **Politicians** — federal MPs and provincial / territorial members,
+  with terms, committees, offices, and social handles.
+- **Hansard** — speech rows + chunked / embedded `speech_chunks` for
+  semantic search. Federal plus 9 provincial / territorial pipelines.
+- **Bills** — federal + provincial, with sponsor links, events, and
+  raw HTML text.
+- **Votes** — federal (with full vote_positions per MP) and 8
+  provincial pipelines (consensus-shape, no per-member positions).
+- **Infrastructure scans** — hosting / DNS / TLS observations for
+  legislative web properties (`websites`, `infrastructure_scans`).
+- **Constituency boundaries** — temporal riding geometries.
+- **Semantic projections** — UMAP-3D / UMAP-2D coords + HDBSCAN
+  cluster labels backing the `/explore` mind-map view.
+
+Tables explicitly **not** in the dump: `users`, `login_tokens`,
+`saved_searches`, `correction_submissions`, `credit_ledger`,
+`credit_purchases`, `stripe_webhook_events`, `rate_limit_increase_requests`,
+`report_jobs`, `report_bug_reports`. These hold private operator and
+end-user data and live in a separate database schema (`private`) that
+`pg_dump --schema=public` does not touch.
+
+## Licence
+
+The exact licence terms will be locked in and published alongside the
+download — most likely
 [Creative Commons Attribution-NonCommercial 4.0 (CC BY-NC 4.0)](https://creativecommons.org/licenses/by-nc/4.0/),
 which is widely understood internationally and works under Canadian
-law. The exact terms will be locked in and published alongside the
-download.
+law.
 
 In short: free for journalism, research, education, and civic-tech
 projects, with attribution. Commercial reuse requires a separate
 arrangement — [contact us](../about/contact.md).
 
-## In the meantime: bootstrap your own copy
+Source attribution: the underlying Hansard transcripts, bills, and vote
+records come from public legislative websites (parl.ca, ola.org,
+assnat.qc.ca, leg.bc.ca, and per-jurisdiction equivalents). Every
+`speeches` and `bills` row carries a `source_url` pointing back to the
+upstream record.
 
-Until the snapshot is published, the working alternative is to **run
-the ingestion pipeline locally** and let it build the corpus from the
-upstream sources we ourselves ingest from. This is exactly what the
-production system does — just on your hardware.
+## Alternative: build your own corpus
 
-The full how-to is on the [Local installation](local-install.md) page,
-specifically the
+If you'd rather have **continuously fresh data** instead of weekly
+snapshots, run the ingestion pipeline locally — see
+[Local installation](local-install.md) and specifically the
 [Bootstrapping the dataset](local-install.md#bootstrapping-the-dataset)
-section.
+section. The scanner + embedding service do the same work the
+production system does, on your hardware. Useful if you're tracking
+ongoing legislative activity in real time, or if you need to scope
+ingestion to specific jurisdictions and skip the rest.
 
-In one paragraph: you bring up the Docker Compose stack, run the seed
-and ingest commands (federal MPs, provincial rosters, then per-
-jurisdiction Hansard), and the scanner + embedding service do the rest
-on a continuous loop. Building a complete current-session corpus from
-cold takes hours; building a complete historical corpus across every
-covered jurisdiction takes considerably longer — but you can scope to
-just the jurisdictions you care about and skip the rest.
+## Bandwidth notes
 
-This route also gives you **continuously fresh data** instead of weekly
-snapshots, which matters if you're tracking ongoing legislative
-activity in real time.
-
-## Want early access?
-
-If you have a research, journalism, or civic-tech use case that would
-benefit from an early snapshot — even one with rougher edges than the
-public version will have — [contact us](../about/contact.md). We're
-happy to share what we have under a short reuse agreement while the
-public version comes together.
+The download is hosted from a single self-hosted node — not a CDN.
+Per-IP rate limits are enabled to protect the upstream from a single
+client (or a viral inbound link) saturating the connection: two
+simultaneous downloads per IP, 50 MB/s each. That's plenty for one
+operator pulling the snapshot, but means you shouldn't expect CDN-grade
+parallelism. If the primary path is unreachable or saturated, see the
+[Bootstrap your own copy](#alternative-build-your-own-corpus) section
+below for the run-locally path that doesn't depend on this download
+URL at all.

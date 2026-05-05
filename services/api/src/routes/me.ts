@@ -78,7 +78,7 @@ export default async function meRoutes(app: FastifyInstance) {
 
     const row = await queryOne<UserRow>(
       `SELECT id, email, display_name, created_at, last_login_at, is_admin
-         FROM users WHERE id = $1`,
+         FROM private.users WHERE id = $1`,
       [claims.sub]
     );
     if (!row) {
@@ -102,7 +102,7 @@ export default async function meRoutes(app: FastifyInstance) {
     const { display_name } = parsed.data;
 
     const rows = await query<UserRow>(
-      `UPDATE users SET display_name = $1 WHERE id = $2
+      `UPDATE private.users SET display_name = $1 WHERE id = $2
        RETURNING id, email, display_name, created_at, last_login_at, is_admin`,
       [display_name ?? null, claims.sub]
     );
@@ -129,7 +129,7 @@ export default async function meRoutes(app: FastifyInstance) {
       `SELECT id, user_id, name, filter_payload, alert_cadence,
               last_checked_at, last_notified_at, created_at, updated_at,
               (query_embedding IS NOT NULL) AS has_embedding
-         FROM saved_searches
+         FROM private.saved_searches
         WHERE user_id = $1
         ORDER BY created_at DESC`,
       [claims.sub]
@@ -149,7 +149,7 @@ export default async function meRoutes(app: FastifyInstance) {
         `SELECT id, user_id, name, filter_payload, alert_cadence,
                 last_checked_at, last_notified_at, created_at, updated_at,
                 (query_embedding IS NOT NULL) AS has_embedding
-           FROM saved_searches
+           FROM private.saved_searches
           WHERE id = $1 AND user_id = $2`,
         [req.params.id, claims.sub]
       );
@@ -190,7 +190,7 @@ export default async function meRoutes(app: FastifyInstance) {
       }
 
       const rows = await query<SavedSearchRow>(
-        `INSERT INTO saved_searches
+        `INSERT INTO private.saved_searches
             (user_id, name, filter_payload, query_embedding, alert_cadence)
          VALUES ($1, $2, $3::jsonb, $4::vector, $5)
          RETURNING id, user_id, name, filter_payload, alert_cadence,
@@ -235,7 +235,7 @@ export default async function meRoutes(app: FastifyInstance) {
       let newEmbeddingLiteral: string | null = null;
       if (filter_payload !== undefined) {
         const existing = await queryOne<{ filter_payload: z.infer<typeof baseFilterSchema> }>(
-          `SELECT filter_payload FROM saved_searches WHERE id = $1 AND user_id = $2`,
+          `SELECT filter_payload FROM private.saved_searches WHERE id = $1 AND user_id = $2`,
           [req.params.id, claims.sub]
         );
         if (!existing) return reply.code(404).send({ error: "not found" });
@@ -290,7 +290,7 @@ export default async function meRoutes(app: FastifyInstance) {
       params.push(claims.sub);
 
       const rows = await query<SavedSearchRow>(
-        `UPDATE saved_searches SET ${sets.join(", ")}
+        `UPDATE private.saved_searches SET ${sets.join(", ")}
           WHERE id = $${params.length - 1} AND user_id = $${params.length}
          RETURNING id, user_id, name, filter_payload, alert_cadence,
                    last_checked_at, last_notified_at, created_at, updated_at,
@@ -311,7 +311,7 @@ export default async function meRoutes(app: FastifyInstance) {
       if (!claims) return reply.code(401).send({ error: "not signed in" });
 
       const res = await query<{ id: string }>(
-        `DELETE FROM saved_searches WHERE id = $1 AND user_id = $2 RETURNING id`,
+        `DELETE FROM private.saved_searches WHERE id = $1 AND user_id = $2 RETURNING id`,
         [req.params.id, claims.sub]
       );
       if (res.length === 0) return reply.code(404).send({ error: "not found" });

@@ -114,10 +114,10 @@ https://ipinfo.io/<ip>`}</pre>
     ),
   },
   {
-    q: "Is this open source?",
+    q: "Is the code public?",
     a: (
       <>
-        <p>Yes. The whole stack is MIT-licensed: <a href="https://github.com/adminatthebunker/CanadianPoliticalData" target="_blank" rel="noopener">github.com/adminatthebunker/CanadianPoliticalData</a>. Pull requests, dataset corrections, and additional municipal scrapers welcome.</p>
+        <p>The full stack is source-available on GitHub: <a href="https://github.com/adminatthebunker/CanadianPoliticalData" target="_blank" rel="noopener">github.com/adminatthebunker/CanadianPoliticalData</a>, released under <a href="https://github.com/adminatthebunker/CanadianPoliticalData/blob/main/LICENSE" target="_blank" rel="noopener">PolyForm Noncommercial 1.0.0</a> — free for personal, research, educational, and other noncommercial use. Commercial use requires a separate licence; <a href="mailto:admin@thebunkerops.ca">get in touch</a>. Pull requests, dataset corrections, and additional municipal scrapers welcome.</p>
       </>
     ),
   },
