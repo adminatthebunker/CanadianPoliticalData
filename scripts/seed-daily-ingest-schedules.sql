@@ -16,9 +16,12 @@
 --
 -- Slot map (UTC):
 --   08:00 chunk + embed (02:00 Mountain, post-ingest, cross-jurisdictional)
---   11:00 federal  | 12:00 NS (existing) | 14:00 BC | 15:00 AB | 16:00 QC
---   17:00 MB       | 18:00 ON           | 19:00 NB | 20:00 NL
---   21:00 NT bills + Hansard chain | 21:15 NU bills (Hansard pending)
+--   11:00 federal  | 12:00 NS (existing) | 13:50 NS votes | 14:00 BC
+--   15:00 AB       | 16:00 QC            | 17:00 MB       | 18:00 ON
+--   19:00 NB       | 20:00 NL            | 21:00 NT bills + Hansard chain
+--   21:15 NU bills (Hansard pending)
+-- Per-province votes extraction at :50 of the Hansard hour (ON at :55 to
+-- avoid collision with the ON presiding-speaker resolver).
 
 BEGIN;
 
@@ -41,7 +44,21 @@ INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) V
  '15 11 * * *', true, 'daily-ingest-rollout'),
 ('Federal votes extraction',
  'extract-federal-votes', '{}'::jsonb,
- '30 11 * * *', true, 'daily-ingest-rollout');
+ '30 11 * * *', true, 'daily-ingest-rollout'),
+('Federal bill events from LEGISinfo XML',
+ 'ingest-federal-bill-events', '{}'::jsonb,
+ '45 11 * * *', true, 'daily-ingest-rollout');
+
+-- ─── NS votes (13:50 UTC) ───────────────────────────────────────────
+-- NS bills/hansard/resolver schedules pre-date this seed and live on legacy
+-- 12:00 / 13:00 / 13:30 UTC slots that we intentionally don't touch. Adding
+-- the votes extractor as a new sibling row here (created_by='daily-ingest-
+-- rollout') puts it in the rollup-managed group while leaving the legacy
+-- rows untouched. :50 13 sits right after the legacy 13:30 NS Hansard.
+INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) VALUES
+('NS votes extraction',
+ 'extract-ns-votes', '{}'::jsonb,
+ '50 13 * * *', true, 'daily-ingest-rollout');
 
 -- ─── BC (14:00 UTC) ─────────────────────────────────────────────────
 INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) VALUES
@@ -56,7 +73,10 @@ INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) V
  '30 14 * * *', true, 'daily-ingest-rollout'),
 ('BC presiding speaker resolver',
  'resolve-presiding-speakers', '{"province": "BC"}'::jsonb,
- '45 14 * * *', true, 'daily-ingest-rollout');
+ '45 14 * * *', true, 'daily-ingest-rollout'),
+('BC votes extraction',
+ 'extract-bc-votes', '{}'::jsonb,
+ '50 14 * * *', true, 'daily-ingest-rollout');
 
 -- ─── AB (15:00 UTC) ─────────────────────────────────────────────────
 INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) VALUES
@@ -71,7 +91,10 @@ INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) V
  '30 15 * * *', true, 'daily-ingest-rollout'),
 ('AB presiding speaker resolver',
  'resolve-presiding-speakers', '{"province": "AB"}'::jsonb,
- '45 15 * * *', true, 'daily-ingest-rollout');
+ '45 15 * * *', true, 'daily-ingest-rollout'),
+('AB votes extraction',
+ 'extract-ab-votes', '{}'::jsonb,
+ '50 15 * * *', true, 'daily-ingest-rollout');
 
 -- ─── QC (16:00 UTC) ─────────────────────────────────────────────────
 INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) VALUES
@@ -89,7 +112,16 @@ INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) V
  '30 16 * * *', true, 'daily-ingest-rollout'),
 ('QC presiding speaker resolver',
  'resolve-presiding-speakers', '{"province": "QC"}'::jsonb,
- '45 16 * * *', true, 'daily-ingest-rollout');
+ '45 16 * * *', true, 'daily-ingest-rollout'),
+-- QC introduced_date fetcher: rolls up the <h3>Introduction</h3> sitting
+-- date from each bill detail page onto bills.introduced_date. Steady-state
+-- runs touch only newly-discovered undated bills, so this is cheap.
+('QC bill introduced-dates fetcher',
+ 'fetch-qc-bill-introduced-dates', '{}'::jsonb,
+ '35 16 * * *', true, 'daily-ingest-rollout'),
+('QC votes extraction',
+ 'extract-qc-votes', '{}'::jsonb,
+ '50 16 * * *', true, 'daily-ingest-rollout');
 
 -- ─── MB (17:00 UTC) ─────────────────────────────────────────────────
 -- MB has the longest chain — bills (HTML index), then PDF download,
@@ -118,7 +150,10 @@ INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) V
  '35 17 * * *', true, 'daily-ingest-rollout'),
 ('MB presiding speaker resolver',
  'resolve-presiding-speakers', '{"province": "MB"}'::jsonb,
- '45 17 * * *', true, 'daily-ingest-rollout');
+ '45 17 * * *', true, 'daily-ingest-rollout'),
+('MB votes extraction',
+ 'extract-mb-votes', '{}'::jsonb,
+ '50 17 * * *', true, 'daily-ingest-rollout');
 
 -- ─── ON (18:00 UTC) ─────────────────────────────────────────────────
 -- ON bills: 3-step chain (discover → fetch HTML pages → parse them),
@@ -142,7 +177,11 @@ INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) V
  '35 18 * * *', true, 'daily-ingest-rollout'),
 ('ON presiding speaker resolver',
  'resolve-presiding-speakers', '{"province": "ON"}'::jsonb,
- '50 18 * * *', true, 'daily-ingest-rollout');
+ '50 18 * * *', true, 'daily-ingest-rollout'),
+-- :50 18 collides with the presiding-speaker resolver above; bump votes to :55.
+('ON votes extraction',
+ 'extract-on-votes', '{}'::jsonb,
+ '55 18 * * *', true, 'daily-ingest-rollout');
 
 -- ─── NB (19:00 UTC) ─────────────────────────────────────────────────
 INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) VALUES
@@ -157,7 +196,10 @@ INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) V
  '30 19 * * *', true, 'daily-ingest-rollout'),
 ('NB presiding speaker resolver',
  'resolve-presiding-speakers', '{"province": "NB"}'::jsonb,
- '45 19 * * *', true, 'daily-ingest-rollout');
+ '45 19 * * *', true, 'daily-ingest-rollout'),
+('NB votes extraction',
+ 'extract-nb-votes', '{}'::jsonb,
+ '50 19 * * *', true, 'daily-ingest-rollout');
 
 -- ─── NL (20:00 UTC) ─────────────────────────────────────────────────
 INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) VALUES
@@ -172,7 +214,10 @@ INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) V
  '30 20 * * *', true, 'daily-ingest-rollout'),
 ('NL presiding speaker resolver',
  'resolve-presiding-speakers', '{"province": "NL"}'::jsonb,
- '45 20 * * *', true, 'daily-ingest-rollout');
+ '45 20 * * *', true, 'daily-ingest-rollout'),
+('NL votes extraction',
+ 'extract-nl-votes', '{}'::jsonb,
+ '50 20 * * *', true, 'daily-ingest-rollout');
 
 -- ─── NT + NU (21:00 UTC) ────────────────────────────────────────────
 -- Consensus-government legislatures. NT Hansard live since 2026-04-29
@@ -210,7 +255,14 @@ INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) V
 INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) VALUES
 ('Chunk + embed speeches (daily)',
  'chunk-and-embed-speeches', '{}'::jsonb,
- '0 8 * * *', true, 'daily-ingest-rollout');
+ '0 8 * * *', true, 'daily-ingest-rollout'),
+-- Pure-SQL backfill of bills.introduced_date from bill_events first_reading
+-- rows. Cheap (single CTE pass), cross-jurisdictional, idempotent. Runs at
+-- 07:55 UTC just before the chunk+embed step, after the previous day's
+-- bills chains have all completed.
+('Backfill bill introduced_date from events (daily)',
+ 'relink-bill-introduced-dates', '{}'::jsonb,
+ '55 7 * * *', true, 'daily-ingest-rollout');
 
 -- next_run_at is computed by the worker the first time it polls; leave
 -- it NULL here so croniter advances it correctly on the worker tick.
