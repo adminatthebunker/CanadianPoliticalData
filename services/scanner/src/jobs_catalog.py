@@ -785,6 +785,14 @@ COMMANDS: dict[str, dict[str, Any]] = {
         "description": "Seed NB historical MLA roster (58th-60th Legislatures, 2014-2024) from a hand-curated Python literal sourced from per-Legislature Wikipedia articles. Name-matches existing current 61L MLAs before inserting; new rows keyed on a wikipedia:nb-legislature source_id. Per-Legislature term windows with mid-Leg overrides for resignations/by-elections. Prereq for Pass 4 surname resolution on pre-2024 NB Hansard.",
         "cli": "ingest-nb-former-mlas", "category": "enrichment", "args": [],
     },
+    "ingest-ns-former-mlas": {
+        "description": "Seed NS historical MLA roster (62nd-64th General Assemblies, 2013-2024) from a hand-curated Python literal sourced from per-Assembly Wikipedia articles. Name-matches existing current 65L MLAs before inserting; new rows keyed on a wikipedia:ns-assembly source_id. Per-Assembly term windows with mid-Assembly overrides for resignations/by-elections/deaths/floor-crossings. Prereq for Pass 4 surname resolution on pre-2024 NS Hansard.",
+        "cli": "ingest-ns-former-mlas", "category": "enrichment", "args": [],
+    },
+    "ingest-nl-former-mlas": {
+        "description": "Seed NL historical MHA roster (50th General Assembly, 2021-2025) from a hand-curated Python literal sourced from Wikipedia. Name-matches existing current 51L MHAs before inserting; new rows keyed on a wikipedia:nl-assembly source_id. Mid-Assembly overrides for resignations/by-elections/deaths. Prereq for Pass 4 initial-prefix-style surname resolution on NL Hansard 2022-2025.",
+        "cli": "ingest-nl-former-mlas", "category": "enrichment", "args": [],
+    },
     "ingest-on-former-mpps": {
         "description": "Backfill historical ON MPPs from ola.org/en/members/parliament-{N} (N=1..44, 1867-present). Fetches per-member JSON for stable field_member_id; name-matches existing ON rows before inserting so Open North current-roster entries get stamped rather than duplicated. Prereq for pre-current-Parliament ON Hansard backfill.",
         "cli": "ingest-on-former-mpps", "category": "enrichment",

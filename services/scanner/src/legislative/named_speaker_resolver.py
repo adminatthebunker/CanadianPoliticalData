@@ -79,6 +79,20 @@ _NAMED_RE = re.compile(
     re.VERBOSE | re.IGNORECASE,
 )
 
+# NL Hansard uses an initial-prefix label shape (`J. BROWN:`, `A.
+# FUREY:`, `H. CONWAY OTTENHEIMER:`) without honorifics. Handled by
+# this dedicated regex; tried after _NAMED_RE in _extract_name when
+# the standard honorific-bearing form misses.
+_NAMED_INITIAL_RE = re.compile(
+    r"""^
+    \s*
+    (?P<first>[A-ZÀ-Þ])\.                                      # initial letter + period
+    \s+
+    (?P<last>[A-ZÀ-Þ][A-ZÀ-Þ'\-]+(?:[\s\-][A-ZÀ-Þ][A-ZÀ-Þ'\-]+)?)   # ALL-CAPS surname (compound or hyphenated OK)
+    \s*[:.]?\s*$""",
+    re.VERBOSE,
+)
+
 # Pre-filter to skip rows that are vocatives, presiding officers, or
 # parliamentary staff. These should never make it into the FK pipeline.
 _SKIP_RAW_RE = re.compile(
@@ -125,13 +139,16 @@ def _extract_name(raw: str) -> Optional[_Extracted]:
     """Parse the speaker_name_raw into (optional first, surname).
 
     Returns None for vocatives, parliamentary staff, generic placeholders,
-    and rows that don't match the honorific+name shape.
+    and rows that don't match any name shape.
     """
     if not raw:
         return None
     if _SKIP_RAW_RE.match(raw):
         return None
     m = _NAMED_RE.match(raw)
+    if m is None:
+        # Fall back to NL-style initial-prefix shape (`J. BROWN:`).
+        m = _NAMED_INITIAL_RE.match(raw)
     if m is None:
         return None
     last = m.group("last")
@@ -262,6 +279,14 @@ async def resolve_named_speakers(
         idx = await _load_surnames(prov)
         last_key = _norm(ext.last)
         candidates = idx.get(last_key, [])
+        # Compound-surname fallback: NL Hansard's `H. CONWAY OTTENHEIMER:`
+        # captures both words as the surname, but the DB stores
+        # last_name="Ottenheimer" (with first_name="Helen Conway"). When
+        # the full compound returns no candidates, retry against just
+        # the last word.
+        if not candidates and " " in last_key:
+            last_key = last_key.rsplit(" ", 1)[-1]
+            candidates = idx.get(last_key, [])
         if not candidates:
             stats.fk_misses += 1
             if len(stats.misses_sample) < 10:

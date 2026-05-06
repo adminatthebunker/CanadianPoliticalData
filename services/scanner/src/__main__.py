@@ -1508,6 +1508,32 @@ def cmd_ingest_ab_former_mlas(
 
 
 
+@cli.command("ingest-nl-former-mlas")
+@click.pass_context
+def cmd_ingest_nl_former_mlas(ctx: click.Context) -> None:
+    """Seed NL historical-MLA roster (50th General Assembly, 2021-2025).
+
+    Mirror of ingest-nb-former-mlas / ingest-ns-former-mlas. Hand-
+    curated Python literal sourced from Wikipedia. Required for Pass 4
+    surname resolution on NL Hansard 2022-2025 — the existing NL
+    current-roster ingester only knows the sitting 51st GA.
+    """
+    from .legislative.nl_former_mlas import ingest_nl_former_mlas
+
+    async def _wrap(db: Database) -> None:
+        stats = await ingest_nl_former_mlas(db)
+        console.print(
+            f"[green]ingest-nl-former-mlas[/green]: "
+            f"legislatures={stats.legislatures_processed} "
+            f"unique_mlas={stats.unique_mlas} "
+            f"inserted={stats.politicians_inserted} "
+            f"matched={stats.politicians_matched_existing} "
+            f"terms_inserted={stats.terms_inserted} "
+            f"terms_skipped={stats.terms_skipped_existing}"
+        )
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
 @cli.command("ingest-ns-former-mlas")
 @click.pass_context
 def cmd_ingest_ns_former_mlas(ctx: click.Context) -> None:

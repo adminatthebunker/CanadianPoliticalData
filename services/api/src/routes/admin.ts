@@ -402,6 +402,12 @@ const COMMAND_CATALOG = [
   { key: "ingest-nb-former-mlas", category: "enrichment",
     description: "Seed NB historical MLA roster (58th-60th Legislatures, 2014-2024) from a hand-curated Python literal sourced from per-Legislature Wikipedia articles. Name-matches existing current 61L MLAs before inserting; new rows keyed on a wikipedia:nb-legislature source_id. Per-Legislature term windows with mid-Leg overrides for resignations/by-elections. Prereq for Pass 4 surname resolution on pre-2024 NB Hansard.",
     args: [] },
+  { key: "ingest-ns-former-mlas", category: "enrichment",
+    description: "Seed NS historical MLA roster (62nd-64th General Assemblies, 2013-2024). Hand-curated Python literal sourced from per-Assembly Wikipedia articles. Name-matches existing current 65L MLAs before inserting. Per-Assembly term windows with mid-Assembly overrides. Prereq for Pass 4 surname resolution on pre-2024 NS Hansard.",
+    args: [] },
+  { key: "ingest-nl-former-mlas", category: "enrichment",
+    description: "Seed NL historical MHA roster (50th General Assembly, 2021-2025). Hand-curated Python literal sourced from Wikipedia. Name-matches existing current 51L MHAs before inserting. Prereq for Pass 4 initial-prefix-style surname resolution on NL Hansard 2022-2025.",
+    args: [] },
   { key: "ingest-on-former-mpps", category: "enrichment",
     description: "Backfill historical ON MPPs from ola.org/en/members/parliament-{N} (N=1..44, 1867-present). Fetches per-member JSON for stable field_member_id; name-matches existing ON rows so Open North current-roster entries get stamped rather than duplicated. Prereq for pre-current-Parliament ON Hansard backfill.",
     args: [
