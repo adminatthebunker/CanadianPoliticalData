@@ -257,6 +257,71 @@ SPEAKER_ROSTER: dict[str, list[SpeakerTerm]] = {
 SOURCE_TAG = "presiding_officer_seed"
 
 
+# ── Deputy-presiding rosters (Tier-2 Pass 2) ────────────────────────
+#
+# Same shape as SPEAKER_ROSTER but for Deputy Speaker / Vice-Président
+# entries. Used by `inline_presiding_resolver` to disambiguate parens-
+# extracted surnames when multiple candidates share a last name — only
+# the candidate who held a presiding role on the speech date wins.
+#
+# Unlike SPEAKER_ROSTER, windows here may overlap by design: jurisdictions
+# such as QC have multiple simultaneous Vice-Présidents (1er / 2e / 3e),
+# all collapsed by the parser into a single role string. The narrowing
+# step in inline_presiding_resolver only needs *set membership* — "was
+# this politician among the active deputy presiding officers on date d?"
+# — so overlap is the right shape, not a problem to deduplicate.
+#
+# Office is the English canonical 'Deputy Speaker' regardless of source-
+# language label, matching how 'Speaker' covers QC's "Le Président".
+
+DEPUTY_PRESIDING_ROSTER: dict[str, list[SpeakerTerm]] = {
+    # Quebec: Vice-Présidents (1er / 2e / 3e) of the Assemblée nationale,
+    # 37L (2003-06-04) onward — matches SPEAKER_ROSTER["QC"] floor.
+    # Source: French Wikipedia "Vice-président de l'Assemblée nationale
+    # du Québec". Pre-2003 entries deferred (existing QC Hansard ingest
+    # is sparse below the 37L floor).
+    "QC": [
+        # 37L (2003-06-04 → 2007-05-08) — Charest I
+        SpeakerTerm("Christos Sirros",       "Christos",  "Sirros",      date(2003,  6,  4), date(2004,  6, 17)),
+        SpeakerTerm("William Cusano",        "William",   "Cusano",      date(2004, 10, 19), date(2007,  5,  8)),
+        SpeakerTerm("Diane Leblanc",         "Diane",     "Leblanc",     date(2003,  6,  4), date(2007,  5,  8)),
+        SpeakerTerm("François Gendron",      "François",  "Gendron",     date(2003,  6,  4), date(2007,  5,  8)),
+        # 38L+39L (2007-05-08 → 2011/2012) — Charest II minority + III majority
+        SpeakerTerm("Jacques Chagnon",       "Jacques",   "Chagnon",     date(2007,  5,  8), date(2011,  4,  5)),
+        SpeakerTerm("Fatima Houda-Pepin",    "Fatima",    "Houda-Pepin", date(2007,  5,  8), date(2012, 10, 30)),
+        SpeakerTerm("François Gendron",      "François",  "Gendron",     date(2007,  5,  8), date(2012,  9, 19)),
+        SpeakerTerm("François Ouimet",       "François",  "Ouimet",      date(2011,  4,  5), date(2012, 10, 30)),
+        # 40L (2012-10-30 → 2014-05-20) — Marois minority (PQ)
+        SpeakerTerm("Carole Poirier",        "Carole",    "Poirier",     date(2012, 10, 30), date(2014,  5, 20)),
+        SpeakerTerm("Claude Cousineau",      "Claude",    "Cousineau",   date(2012, 10, 30), date(2014,  5, 20)),
+        SpeakerTerm("François Ouimet",       "François",  "Ouimet",      date(2012, 10, 30), date(2014,  5, 20)),
+        # 41L (2014-05-20 → 2018-11-27) — Couillard majority
+        SpeakerTerm("François Ouimet",       "François",  "Ouimet",      date(2014,  5, 20), date(2018, 11, 27)),
+        SpeakerTerm("Maryse Gaudreault",     "Maryse",    "Gaudreault",  date(2014,  5, 20), date(2018, 11, 27)),
+        SpeakerTerm("François Gendron",      "François",  "Gendron",     date(2014,  5, 20), date(2018, 11, 27)),
+        # 42L (2018-11-27 → 2022-11-29) — Legault I (CAQ majority)
+        SpeakerTerm("Marc Picard",           "Marc",      "Picard",      date(2018, 11, 27), date(2022, 11, 29)),
+        SpeakerTerm("Maryse Gaudreault",     "Maryse",    "Gaudreault",  date(2018, 11, 27), date(2022, 11, 29)),
+        SpeakerTerm("François Gendron",      "François",  "Gendron",     date(2018, 11, 27), date(2022, 11, 29)),
+        # 43L (2022-11-29 → present) — Legault II (CAQ majority).
+        # Sylvain Lévesque was 2e VP from session opening; he resigned
+        # 2024-11-06 after an ethics-commissioner finding (Le Devoir,
+        # Radio-Canada). Sylvie D'Amours was elected to the same seat
+        # 2024-11-07. Picard / Soucy / Benjamin run open-ended — Pass-2
+        # narrowing keys on set-membership of active deputies, not on
+        # which numbered VP rank, so 1er/2e/3e drift is harmless.
+        SpeakerTerm("Marc Picard",           "Marc",      "Picard",      date(2022, 11, 29), None),
+        SpeakerTerm("Chantal Soucy",         "Chantal",   "Soucy",       date(2022, 11, 29), None),
+        SpeakerTerm("Frantz Benjamin",       "Frantz",    "Benjamin",    date(2022, 11, 29), None),
+        SpeakerTerm("Sylvain Lévesque",      "Sylvain",   "Lévesque",    date(2022, 11, 29), date(2024, 11,  6)),
+        SpeakerTerm("Sylvie D'Amours",       "Sylvie",    "D'Amours",    date(2024, 11,  7), None),
+    ],
+}
+
+
+DEPUTY_SOURCE_TAG = "deputy_presiding_seed"
+
+
 # ── Seeding politicians + politician_terms ─────────────────────────
 
 async def _find_politician_id(
@@ -404,6 +469,76 @@ async def ensure_speaker_terms(
     return inserted
 
 
+async def ensure_deputy_presiding_politicians(
+    db: Database, province: str,
+) -> dict[str, str]:
+    """Like `ensure_speaker_politicians`, but for the Deputy Speaker /
+    Vice-Président roster (Tier-2 Pass 2). Returns {full_name: politician_id}.
+    Idempotent: existing politicians are reused; absent ones inserted as
+    minimal stubs with `is_active=false`.
+    """
+    roster = DEPUTY_PRESIDING_ROSTER.get(province, [])
+    out: dict[str, str] = {}
+    inserted = 0
+    for term in roster:
+        if term.full_name in out:
+            continue
+        pid = await _find_politician_id(
+            db, province=province,
+            first_name=term.first_name, last_name=term.last_name,
+        )
+        if pid is None:
+            pid = await _insert_minimal_politician(db, province=province, term=term)
+            inserted += 1
+        out[term.full_name] = pid
+    log.info(
+        "ensure_deputy_presiding_politicians(%s): roster=%d inserted=%d",
+        province, len(roster), inserted,
+    )
+    return out
+
+
+async def ensure_deputy_presiding_terms(
+    db: Database, province: str, *, name_to_id: dict[str, str],
+) -> int:
+    """Upsert Deputy-Speaker rows into `politician_terms` for this province.
+
+    Idempotent: deletes any rows tagged with DEPUTY_SOURCE_TAG for this
+    province+level+office='Deputy Speaker' first, then re-inserts.
+    Distinct from SOURCE_TAG so re-runs don't churn the main Speaker rows.
+    """
+    await db.execute(
+        """
+        DELETE FROM politician_terms
+         WHERE level = 'provincial'
+           AND province_territory = $1
+           AND office = 'Deputy Speaker'
+           AND source = $2
+        """,
+        province, DEPUTY_SOURCE_TAG,
+    )
+    roster = DEPUTY_PRESIDING_ROSTER.get(province, [])
+    inserted = 0
+    for term in roster:
+        pid = name_to_id[term.full_name]
+        await db.execute(
+            """
+            INSERT INTO politician_terms (
+                politician_id, office, level, province_territory,
+                started_at, ended_at, source
+            )
+            VALUES ($1::uuid, 'Deputy Speaker', 'provincial', $2, $3, $4, $5)
+            """,
+            pid,
+            province,
+            term.started_at, term.ended_at,
+            DEPUTY_SOURCE_TAG,
+        )
+        inserted += 1
+    log.info("ensure_deputy_presiding_terms(%s): %d rows", province, inserted)
+    return inserted
+
+
 # ── Resolution ──────────────────────────────────────────────────────
 
 @dataclass
@@ -473,6 +608,120 @@ _SPEAKER_NAME_PATTERNS = (
 
 def _speaker_role_values(province: str) -> tuple[str, ...]:
     return _SPEAKER_ROLE_BY_PROVINCE.get(province, _DEFAULT_SPEAKER_ROLE_VALUES)
+
+
+# ── Role-only presiding rosters (Tier-2 Pass 3) ─────────────────────
+#
+# Some provincial Hansards (notably AB) emit pure role-only speaker
+# labels for non-Speaker presiding officers — e.g., `The Deputy Speaker`
+# with no inline name, where Pass 1 (parens-name) and Pass 2 (parens-
+# name + date narrowing) can't apply. AB alone has ~60K such rows
+# across `The Deputy Speaker` / `The Deputy Chair` / `The Acting
+# Speaker` / `The Chair`.
+#
+# Pass 3 covers the **single-person date-windowed** subset only —
+# offices held by one named MLA per Legislature (Deputy Speaker, Deputy
+# Chair of Committees). Rotating roles (Acting Speaker, generic Chair)
+# need a different mechanism (same-document name propagation or
+# external rotation source) and are out of scope here.
+#
+# Structure: `ROLE_ONLY_PRESIDING_ROSTER[province][office]` → list of
+# SpeakerTerm. `ROLE_ONLY_OFFICE_MAP[province][speaker_role]` → office,
+# linking the parser's role string back to the office key.
+
+ROLE_ONLY_PRESIDING_ROSTER: dict[str, dict[str, list[SpeakerTerm]]] = {
+    # Alberta: Deputy Speaker and Chair of Committees, sourced from the
+    # Hansard's own election announcements (`<Member> is hereby declared
+    # Deputy Speaker and Chair of Committees`). Pre-26L gap (24L+25L,
+    # 2000-2004) acknowledged — those eras' ~2.8K role-only rows stay
+    # unattributed pending separate research.
+    "AB": {
+        "Deputy Speaker": [
+            SpeakerTerm("Richard Marz",   "Richard", "Marz",    date(2005,  3,  1), date(2008,  4, 14)),  # 26L
+            SpeakerTerm("Wayne Cao",      "Wayne",   "Cao",     date(2008,  4, 14), date(2012,  5, 23)),  # 27L
+            SpeakerTerm("George Rogers",  "George",  "Rogers",  date(2012,  5, 23), date(2015,  6, 11)),  # 28L
+            SpeakerTerm("Debbie Jabbour", "Debbie",  "Jabbour", date(2015,  6, 11), date(2019,  5, 21)),  # 29L
+            SpeakerTerm("Angela Pitt",    "Angela",  "Pitt",    date(2019,  5, 21), None),                # 30L+31L
+        ],
+    },
+}
+
+# Per-province map from `speeches.speaker_role` → `politician_terms.office`
+# so the resolver knows which office to look up for each role token.
+ROLE_ONLY_OFFICE_MAP: dict[str, dict[str, str]] = {
+    "AB": {
+        "The Deputy Speaker": "Deputy Speaker",
+    },
+}
+
+ROLE_ONLY_SOURCE_TAG = "role_only_presiding_seed"
+
+
+async def ensure_role_only_presiding_politicians(
+    db: Database, province: str,
+) -> dict[str, str]:
+    """Ensure every politician in `ROLE_ONLY_PRESIDING_ROSTER[province]`
+    exists in `politicians`, across all offices for the province.
+    Returns {full_name: politician_id}.
+    """
+    by_office = ROLE_ONLY_PRESIDING_ROSTER.get(province, {})
+    out: dict[str, str] = {}
+    inserted = 0
+    for terms in by_office.values():
+        for term in terms:
+            if term.full_name in out:
+                continue
+            pid = await _find_politician_id(
+                db, province=province,
+                first_name=term.first_name, last_name=term.last_name,
+            )
+            if pid is None:
+                pid = await _insert_minimal_politician(db, province=province, term=term)
+                inserted += 1
+            out[term.full_name] = pid
+    log.info(
+        "ensure_role_only_presiding_politicians(%s): unique=%d inserted=%d",
+        province, len(out), inserted,
+    )
+    return out
+
+
+async def ensure_role_only_presiding_terms(
+    db: Database, province: str, *, name_to_id: dict[str, str],
+) -> int:
+    """Upsert role-only presiding rows into `politician_terms`. One
+    `politician_terms` row per (politician, office) span. DELETE-then-
+    INSERT keyed on ROLE_ONLY_SOURCE_TAG keeps the audit trail distinct.
+    """
+    await db.execute(
+        """
+        DELETE FROM politician_terms
+         WHERE level = 'provincial'
+           AND province_territory = $1
+           AND source = $2
+        """,
+        province, ROLE_ONLY_SOURCE_TAG,
+    )
+    by_office = ROLE_ONLY_PRESIDING_ROSTER.get(province, {})
+    inserted = 0
+    for office, terms in by_office.items():
+        for term in terms:
+            pid = name_to_id[term.full_name]
+            await db.execute(
+                """
+                INSERT INTO politician_terms (
+                    politician_id, office, level, province_territory,
+                    started_at, ended_at, source
+                )
+                VALUES ($1::uuid, $2, 'provincial', $3, $4, $5, $6)
+                """,
+                pid, office, province,
+                term.started_at, term.ended_at,
+                ROLE_ONLY_SOURCE_TAG,
+            )
+            inserted += 1
+    log.info("ensure_role_only_presiding_terms(%s): %d rows", province, inserted)
+    return inserted
 
 
 async def resolve_speakers(
@@ -612,6 +861,122 @@ async def resolve_speakers(
     log.info(
         "resolve_speakers(%s): scanned=%d resolved=%d no_term_match=%d chunks_updated=%d",
         province, stats.scanned, stats.resolved, stats.no_term_match, stats.chunks_updated,
+    )
+    return stats
+
+
+async def resolve_role_only_presiding(
+    db: Database, province: str, *, limit: Optional[int] = None,
+) -> ResolveStats:
+    """Tier-2 Pass 3 — resolve role-only presiding labels (e.g., AB's
+    `The Deputy Speaker` with no inline name) by looking up the active
+    holder of the corresponding office on the speech date.
+
+    Iterates over every (speaker_role → office) pair in
+    ROLE_ONLY_OFFICE_MAP[province], joining `politician_terms` where
+    source = ROLE_ONLY_SOURCE_TAG. Confidence 0.85 (single-person
+    date-determined attribution; below the chamber parser's name-bearing
+    primary path).
+    """
+    stats = ResolveStats()
+
+    role_map = ROLE_ONLY_OFFICE_MAP.get(province, {})
+    if not role_map:
+        log.info("resolve_role_only_presiding(%s): no role map configured", province)
+        return stats
+
+    # Load all role-only terms for the province in one query, indexed by office.
+    term_rows = await db.fetch(
+        """
+        SELECT office,
+               politician_id::text AS politician_id,
+               started_at::date    AS started_at,
+               ended_at::date      AS ended_at
+          FROM politician_terms
+         WHERE level = 'provincial'
+           AND province_territory = $1
+           AND source = $2
+         ORDER BY office, started_at
+        """,
+        province, ROLE_ONLY_SOURCE_TAG,
+    )
+    terms_by_office: dict[str, list[dict]] = {}
+    for r in term_rows:
+        terms_by_office.setdefault(r["office"], []).append(dict(r))
+
+    def find_holder_for(office: str, d: date) -> Optional[str]:
+        for t in terms_by_office.get(office, []):
+            started = t["started_at"]
+            ended = t["ended_at"]
+            if d >= started and (ended is None or d < ended):
+                return t["politician_id"]
+        return None
+
+    by_politician: dict[str, list[str]] = {}
+
+    for speaker_role, office in role_map.items():
+        if office not in terms_by_office:
+            continue
+        sql = """
+            SELECT s.id::text AS id,
+                   s.spoken_at::date AS spoken_date
+              FROM speeches s
+             WHERE s.level = 'provincial'
+               AND s.province_territory = $1
+               AND s.politician_id IS NULL
+               AND s.speaker_role = $2
+        """
+        params: list = [province, speaker_role]
+        if limit is not None:
+            sql += f" LIMIT {int(limit)}"
+        rows = await db.fetch(sql, *params)
+        stats.scanned += len(rows)
+        for r in rows:
+            d = r["spoken_date"]
+            if d is None:
+                stats.no_term_match += 1
+                continue
+            pid = find_holder_for(office, d)
+            if pid is None:
+                stats.no_term_match += 1
+                continue
+            by_politician.setdefault(pid, []).append(r["id"])
+
+    BATCH = 5000
+    for pid, speech_ids in by_politician.items():
+        for i in range(0, len(speech_ids), BATCH):
+            batch = speech_ids[i : i + BATCH]
+            await db.execute(
+                """
+                UPDATE speeches
+                   SET politician_id = $1::uuid,
+                       confidence    = GREATEST(confidence, 0.85),
+                       updated_at    = now()
+                 WHERE id = ANY($2::uuid[])
+                   AND politician_id IS NULL
+                """,
+                pid, batch,
+            )
+            result = await db.execute(
+                """
+                UPDATE speech_chunks
+                   SET politician_id = $1::uuid
+                 WHERE speech_id = ANY($2::uuid[])
+                   AND politician_id IS DISTINCT FROM $1::uuid
+                """,
+                pid, batch,
+            )
+            stats.resolved += len(batch)
+            try:
+                stats.chunks_updated += int(result.split()[-1])
+            except (ValueError, AttributeError):
+                pass
+
+    log.info(
+        "resolve_role_only_presiding(%s): scanned=%d resolved=%d "
+        "no_term_match=%d chunks_updated=%d",
+        province, stats.scanned, stats.resolved,
+        stats.no_term_match, stats.chunks_updated,
     )
     return stats
 

@@ -3965,8 +3965,24 @@ def cmd_resolve_inline_presiding_officers(
     Cross-jurisdictional, idempotent. Re-runs are no-ops.
     """
     from .legislative.inline_presiding_resolver import resolve_inline_presiding
+    from .legislative.presiding_officer_resolver import (
+        DEPUTY_PRESIDING_ROSTER,
+        ensure_deputy_presiding_politicians,
+        ensure_deputy_presiding_terms,
+    )
 
     async def _wrap(db: Database) -> None:
+        # Seed Deputy-Speaker rosters first — Pass-2 narrowing depends on
+        # politician_terms rows tagged with DEPUTY_SOURCE_TAG. Idempotent;
+        # cheap (a few SQL statements per province in the roster).
+        seed_provinces = (
+            [province] if province and province in DEPUTY_PRESIDING_ROSTER
+            else list(DEPUTY_PRESIDING_ROSTER.keys())
+        )
+        for prov in seed_provinces:
+            name_to_id = await ensure_deputy_presiding_politicians(db, prov)
+            await ensure_deputy_presiding_terms(db, prov, name_to_id=name_to_id)
+
         stats = await resolve_inline_presiding(
             db, province=province, limit=limit,
         )
@@ -3975,6 +3991,7 @@ def cmd_resolve_inline_presiding_officers(
             f"candidates={stats.candidates} "
             f"extracted={stats.extracted} "
             f"fk_hits={stats.fk_hits} "
+            f"fk_hits_pass2={stats.fk_hits_pass2} "
             f"fk_misses={stats.fk_misses} "
             f"speeches_updated={stats.speeches_updated} "
             f"chunks_updated={stats.chunks_updated}"
@@ -3983,6 +4000,53 @@ def cmd_resolve_inline_presiding_officers(
             console.print("[yellow]FK miss samples:[/yellow]")
             for prov, name in stats.misses_sample:
                 console.print(f"  [{prov}] {name!r}")
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
+@cli.command("resolve-role-only-presiding-officers")
+@click.option("--province", type=str, default=None,
+              help="2-letter code (AB/...) to scope the run. Default: all provinces in ROLE_ONLY_PRESIDING_ROSTER.")
+@click.option("--limit", type=int, default=None,
+              help="Cap candidate speeches scanned per role (smoke-test aid).")
+@click.pass_context
+def cmd_resolve_role_only_presiding_officers(
+    ctx: click.Context, province: Optional[str], limit: Optional[int],
+) -> None:
+    """Tier-2 attribution Pass 3 — resolve role-only presiding labels
+    (e.g., AB's `The Deputy Speaker` with no inline name) by date-
+    windowed lookup of the corresponding office holder.
+
+    Single-person date-determined roles only (Deputy Speaker, Deputy
+    Chair of Committees). Rotating roles (Acting Speaker, generic
+    Chair) need a different mechanism and are not handled here.
+
+    Idempotent. Re-runs are no-ops once roster is exhausted.
+    """
+    from .legislative.presiding_officer_resolver import (
+        ROLE_ONLY_PRESIDING_ROSTER,
+        ensure_role_only_presiding_politicians,
+        ensure_role_only_presiding_terms,
+        resolve_role_only_presiding,
+    )
+
+    async def _wrap(db: Database) -> None:
+        provinces = (
+            [province] if province and province in ROLE_ONLY_PRESIDING_ROSTER
+            else list(ROLE_ONLY_PRESIDING_ROSTER.keys())
+        )
+        for prov in provinces:
+            name_to_id = await ensure_role_only_presiding_politicians(db, prov)
+            await ensure_role_only_presiding_terms(db, prov, name_to_id=name_to_id)
+
+        for prov in provinces:
+            stats = await resolve_role_only_presiding(db, prov, limit=limit)
+            console.print(
+                f"[green]resolve-role-only-presiding-officers[/green] [{prov}]: "
+                f"scanned={stats.scanned} "
+                f"resolved={stats.resolved} "
+                f"no_term_match={stats.no_term_match} "
+                f"chunks_updated={stats.chunks_updated}"
+            )
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 
 

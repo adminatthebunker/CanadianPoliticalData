@@ -35,9 +35,11 @@ import logging
 import re
 import unicodedata
 from dataclasses import dataclass, field as dc_field
+from datetime import date as date_type
 from typing import Optional
 
 from ..db import Database
+from .presiding_officer_resolver import DEPUTY_SOURCE_TAG, SOURCE_TAG
 
 log = logging.getLogger(__name__)
 
@@ -122,6 +124,7 @@ class ResolveStats:
     candidates: int = 0
     extracted: int = 0
     fk_hits: int = 0
+    fk_hits_pass2: int = 0
     fk_misses: int = 0
     speeches_updated: int = 0
     chunks_updated: int = 0
@@ -149,7 +152,8 @@ async def resolve_inline_presiding(
     sql = """
         SELECT s.id::text AS id,
                s.province_territory AS prov,
-               s.speaker_name_raw   AS raw
+               s.speaker_name_raw   AS raw,
+               s.spoken_at::date    AS spoken_date
           FROM speeches s
          WHERE s.level = 'provincial'
            AND s.politician_id IS NULL
@@ -191,8 +195,44 @@ async def resolve_inline_presiding(
         cache[prov] = idx
         return idx
 
+    # Per-province cache of presiding-officer terms for Pass-2 date-
+    # windowed narrowing. Each entry is (politician_id, started_at,
+    # ended_at). Loaded lazily once per province.
+    presiding_cache: dict[str, list[tuple[str, date_type, Optional[date_type]]]] = {}
+
+    async def _load_presiding_terms(prov: str) -> list[tuple[str, date_type, Optional[date_type]]]:
+        if prov in presiding_cache:
+            return presiding_cache[prov]
+        trows = await db.fetch(
+            """
+            SELECT politician_id::text AS politician_id,
+                   started_at::date    AS started_at,
+                   ended_at::date      AS ended_at
+              FROM politician_terms
+             WHERE level = 'provincial'
+               AND province_territory = $1
+               AND office IN ('Speaker', 'Deputy Speaker')
+               AND source IN ($2, $3)
+            """,
+            prov, SOURCE_TAG, DEPUTY_SOURCE_TAG,
+        )
+        out = [(r["politician_id"], r["started_at"], r["ended_at"]) for r in trows]
+        presiding_cache[prov] = out
+        return out
+
+    def _presiding_on(terms: list[tuple[str, date_type, Optional[date_type]]],
+                     d: Optional[date_type]) -> set[str]:
+        if d is None:
+            return set()
+        return {pid for (pid, started, ended) in terms
+                if d >= started and (ended is None or d < ended)}
+
     # Bucket speech_ids by resolved politician_id for bulk UPDATE.
+    # Pass-1 hits land at confidence 0.85; Pass-2 (date-windowed
+    # narrowing) hits land at 0.80 — separate buckets to keep the
+    # UPDATE confidence values distinct.
     by_politician: dict[str, list[str]] = {}
+    by_politician_pass2: dict[str, list[str]] = {}
 
     for row in rows:
         raw = row["raw"] or ""
@@ -233,6 +273,7 @@ async def resolve_inline_presiding(
         candidates_pol = prov_idx.get(last_key, [])
 
         pol_id: Optional[str] = None
+        pass2_hit = False
         if len(candidates_pol) == 1:
             pol_id = candidates_pol[0][0]
         elif len(candidates_pol) > 1 and ext.first:
@@ -246,50 +287,77 @@ async def resolve_inline_presiding(
                 if len(exact) == 1:
                     pol_id = exact[0][0]
 
+        # Pass-2 narrowing: when surname/first-name still leaves multiple
+        # candidates, intersect with the set of politicians who held a
+        # Speaker / Deputy-Speaker term on the speech date. QC's parens
+        # labels often carry only an honorific + surname (`M. Lévesque`),
+        # which is ambiguous across QC's full politician history; date-
+        # windowed presiding-role membership disambiguates.
+        if pol_id is None and len(candidates_pol) > 1:
+            terms = await _load_presiding_terms(prov)
+            active = _presiding_on(terms, row["spoken_date"])
+            if active:
+                overlap = [c for c in candidates_pol if c[0] in active]
+                if len(overlap) == 1:
+                    pol_id = overlap[0][0]
+                    pass2_hit = True
+
         if pol_id is None:
             stats.fk_misses += 1
             if len(stats.misses_sample) < 10:
-                stats.misses_sample.append((prov, m.group("name").strip()))
+                stats.misses_sample.append((prov, (m.group("name") if m else bare_match.group("name")).strip()))
             continue
-        stats.fk_hits += 1
-        by_politician.setdefault(pol_id, []).append(row["id"])
+        if pass2_hit:
+            stats.fk_hits_pass2 += 1
+            by_politician_pass2.setdefault(pol_id, []).append(row["id"])
+        else:
+            stats.fk_hits += 1
+            by_politician.setdefault(pol_id, []).append(row["id"])
 
-    # Bulk UPDATE in 5K-row chunks per politician.
-    for pol_id, speech_ids in by_politician.items():
-        for i in range(0, len(speech_ids), 5000):
-            chunk = speech_ids[i : i + 5000]
-            await db.execute(
-                """
-                UPDATE speeches
-                   SET politician_id = $1::uuid,
-                       confidence    = GREATEST(confidence, 0.85),
-                       updated_at    = now()
-                 WHERE id = ANY($2::uuid[])
-                   AND politician_id IS NULL
-                """,
-                pol_id, chunk,
-            )
-            stats.speeches_updated += len(chunk)
-            # Reconcile speech_chunks.politician_id (chunks created
-            # before this resolver ran hold the NULL copy). speech_chunks
-            # has no updated_at column — only set politician_id.
-            await db.execute(
-                """
-                UPDATE speech_chunks sc
-                   SET politician_id = $1::uuid
-                  FROM speeches s
-                 WHERE s.id = sc.speech_id
-                   AND s.id = ANY($2::uuid[])
-                   AND sc.politician_id IS DISTINCT FROM $1::uuid
-                """,
-                pol_id, chunk,
-            )
-            stats.chunks_updated += 1
+    # Bulk UPDATE in 5K-row chunks per politician. Pass-1 hits at 0.85,
+    # Pass-2 (date-windowed) hits at 0.80 — separate UPDATEs so the
+    # confidence floor is correct on each row.
+    async def _apply_updates(buckets: dict[str, list[str]], confidence: float) -> None:
+        for pol_id, speech_ids in buckets.items():
+            for i in range(0, len(speech_ids), 5000):
+                chunk = speech_ids[i : i + 5000]
+                await db.execute(
+                    """
+                    UPDATE speeches
+                       SET politician_id = $1::uuid,
+                           confidence    = GREATEST(confidence, $3::numeric),
+                           updated_at    = now()
+                     WHERE id = ANY($2::uuid[])
+                       AND politician_id IS NULL
+                    """,
+                    pol_id, chunk, confidence,
+                )
+                stats.speeches_updated += len(chunk)
+                # Reconcile speech_chunks.politician_id (chunks created
+                # before this resolver ran hold the NULL copy). speech_chunks
+                # has no updated_at column — only set politician_id.
+                await db.execute(
+                    """
+                    UPDATE speech_chunks sc
+                       SET politician_id = $1::uuid
+                      FROM speeches s
+                     WHERE s.id = sc.speech_id
+                       AND s.id = ANY($2::uuid[])
+                       AND sc.politician_id IS DISTINCT FROM $1::uuid
+                    """,
+                    pol_id, chunk,
+                )
+                stats.chunks_updated += 1
+
+    await _apply_updates(by_politician, 0.85)
+    await _apply_updates(by_politician_pass2, 0.80)
 
     log.info(
         "inline_presiding_resolver: candidates=%d extracted=%d "
-        "fk_hits=%d fk_misses=%d speeches_updated=%d chunks_updated=%d",
-        stats.candidates, stats.extracted, stats.fk_hits, stats.fk_misses,
+        "fk_hits=%d fk_hits_pass2=%d fk_misses=%d "
+        "speeches_updated=%d chunks_updated=%d",
+        stats.candidates, stats.extracted,
+        stats.fk_hits, stats.fk_hits_pass2, stats.fk_misses,
         stats.speeches_updated, stats.chunks_updated,
     )
     return stats
