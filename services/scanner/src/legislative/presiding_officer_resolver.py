@@ -675,6 +675,18 @@ ROLE_ONLY_PRESIDING_ROSTER: dict[str, dict[str, list[SpeakerTerm]]] = {
             SpeakerTerm("Mable Elmore",            "Mable",            "Elmore",  date(2025,  3,  1), None),                 # 43L
         ],
     },
+    # Manitoba: Deputy Speaker. The MB chamber parser only emits the
+    # role-only `The Deputy Speaker` shape for the 43rd Legislature
+    # (2023+); pre-43L Deputy Speaker turns came with inline names
+    # (`Madam Deputy Speaker (NAME)` / `Mr. Deputy Speaker (NAME)`)
+    # already caught by Pass 1. Single-entry roster covers the entire
+    # 43L role-only bucket (~1,027 rows). Source: confirmed via in-
+    # Hansard attributed turns + media reporting on the appointment.
+    "MB": {
+        "Deputy Speaker": [
+            SpeakerTerm("Tyler Blashko", "Tyler", "Blashko", date(2023, 11, 21), None),  # 43L
+        ],
+    },
 }
 
 # Per-province map from `speeches.speaker_role` → `politician_terms.office`
@@ -687,6 +699,10 @@ ROLE_ONLY_OFFICE_MAP: dict[str, dict[str, str]] = {
     "BC": {
         # BC parser emits bare "Deputy Speaker" (no "The" prefix), unlike AB.
         "Deputy Speaker": "Deputy Speaker",
+    },
+    "MB": {
+        # MB parser emits "The Deputy Speaker" (43L+ only).
+        "The Deputy Speaker": "Deputy Speaker",
     },
 }
 
