@@ -4003,6 +4003,48 @@ def cmd_resolve_inline_presiding_officers(
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 
 
+@cli.command("resolve-named-speakers")
+@click.option("--province", type=str, default=None,
+              help="2-letter code (MB/AB/...) to scope the run. Default: all provinces.")
+@click.option("--limit", type=int, default=None,
+              help="Cap candidate speeches scanned (smoke-test aid).")
+@click.pass_context
+def cmd_resolve_named_speakers(
+    ctx: click.Context, province: Optional[str], limit: Optional[int],
+) -> None:
+    """Tier-2 attribution Pass 4 — resolve regular MLA speeches the
+    chamber parser left politician_id NULL on, where the speaker label
+    carries a name (e.g., 'Mrs. Driedger', 'Hon. Erin Selby (Minister
+    of Health)'). Cross-jurisdictional, idempotent.
+
+    Distinct from Pass 1/3 which target presiding-officer turns. Pass 4
+    is for non-presiding labels with NULL/empty speaker_role. Pre-
+    filters out vocatives ('Mr. Speaker'), parliamentary staff (Clerks,
+    Sergeants), and generic ('An Honourable Member') placeholders.
+    """
+    from .legislative.named_speaker_resolver import resolve_named_speakers
+
+    async def _wrap(db: Database) -> None:
+        stats = await resolve_named_speakers(db, province=province, limit=limit)
+        console.print(
+            f"[green]resolve-named-speakers[/green]: "
+            f"candidates={stats.candidates} "
+            f"extracted={stats.extracted} "
+            f"fk_hits_full={stats.fk_hits_full} "
+            f"fk_hits_initial={stats.fk_hits_initial} "
+            f"fk_hits_surname={stats.fk_hits_surname} "
+            f"fk_hits_dated={stats.fk_hits_dated} "
+            f"fk_misses={stats.fk_misses} "
+            f"speeches_updated={stats.speeches_updated} "
+            f"chunks_updated={stats.chunks_updated}"
+        )
+        if stats.misses_sample:
+            console.print("[yellow]FK miss samples:[/yellow]")
+            for prov, raw in stats.misses_sample:
+                console.print(f"  [{prov}] {raw!r}")
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
 @cli.command("resolve-role-only-presiding-officers")
 @click.option("--province", type=str, default=None,
               help="2-letter code (AB/...) to scope the run. Default: all provinces in ROLE_ONLY_PRESIDING_ROSTER.")
