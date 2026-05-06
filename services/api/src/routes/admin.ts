@@ -399,6 +399,9 @@ const COMMAND_CATALOG = [
       { name: "deceased", type: "bool", required: false, default: true, help: "Include the deceased-MLAs bio page." },
       { name: "delay", type: "float", required: false, default: 1.0, help: "Seconds between page fetches." },
     ] },
+  { key: "ingest-nb-former-mlas", category: "enrichment",
+    description: "Seed NB historical MLA roster (58th-60th Legislatures, 2014-2024) from a hand-curated Python literal sourced from per-Legislature Wikipedia articles. Name-matches existing current 61L MLAs before inserting; new rows keyed on a wikipedia:nb-legislature source_id. Per-Legislature term windows with mid-Leg overrides for resignations/by-elections. Prereq for Pass 4 surname resolution on pre-2024 NB Hansard.",
+    args: [] },
   { key: "ingest-on-former-mpps", category: "enrichment",
     description: "Backfill historical ON MPPs from ola.org/en/members/parliament-{N} (N=1..44, 1867-present). Fetches per-member JSON for stable field_member_id; name-matches existing ON rows so Open North current-roster entries get stamped rather than duplicated. Prereq for pre-current-Parliament ON Hansard backfill.",
     args: [
