@@ -221,6 +221,18 @@ _INITIAL_SURNAME_RE = re.compile(
 _TRAILING_COLON_RE = re.compile(r"[:\s ]+$")
 
 
+# Roles that map to parliamentary staff rather than elected politicians.
+# Speeches with these roles are tagged speech_type='staff' so coverage
+# queries can exclude them from the "unattributed politician" denominator.
+_STAFF_ROLES: frozenset[str] = frozenset({
+    "The Clerk",
+    "The Deputy Clerk",
+    "The Clerk Assistant",
+    "The Sergeant-at-Arms",
+    "The Table Officer",
+})
+
+
 @dataclass
 class ParsedAttribution:
     raw: str                            # as extracted from HTML, trailing colon stripped
@@ -566,7 +578,18 @@ def extract_speeches(html_text: str, url: str) -> ParseResult:
             turn_section = None
             return
         spoken_at = _localise(sitting_date, turn_time)
-        speech_type = "group" if turn_attr.is_group else "floor"
+        # Staff roles (Clerk, Sergeant-at-Arms, Table Officer, Deputy
+        # Clerk, Clerk Assistant) are not politicians and shouldn't
+        # count toward "unattributed politician" stats. Tag them as
+        # speech_type='staff' so coverage queries can exclude them.
+        # Group rows (SOME HON. MEMBERS / AN HON. MEMBER) are tagged
+        # 'group' as before.
+        if turn_attr.is_group:
+            speech_type = "group"
+        elif turn_attr.role in _STAFF_ROLES:
+            speech_type = "staff"
+        else:
+            speech_type = "floor"
         speech = ParsedSpeech(
             sequence=len(speeches) + 1,
             speaker_name_raw=turn_name_raw,
