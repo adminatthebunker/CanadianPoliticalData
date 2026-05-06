@@ -54,12 +54,17 @@ log = logging.getLogger(__name__)
 #   "Mr. R. Miller"                          → first="R", last="Miller"  (AB initial)
 #   "Mr. Schow moved"                        → first=None,  last="Schow"  (trailing verb)
 #   "Ms Sigurdson"                          → first=None,  last="Sigurdson" (AB sometimes drops period)
+#   "HON. ZACH CHURCHILL"                    → first="ZACH", last="CHURCHILL" (NS all-caps)
+#   "MR. BAILLIE"                            → first=None, last="BAILLIE"   (NS surname-only all-caps)
 # Not anchored at $ so trailing text after the name doesn't break matching.
+# Case-insensitive: NS Hansard uses ALL-CAPS speaker labels; other
+# provinces use Title Case. The same regex handles both.
 _NAMED_RE = re.compile(
     r"""^
     \s*
-    (?:Hon\.?\s+)?                                           # optional Hon. prefix
-    (?:Mr\.?|Mrs\.?|Ms\.?|Madam|Mme|Mlle|Dr\.?|MLA|Member)\s+ # honorific (required)
+    (?:                                                      # one or more leading honorifics
+       (?:Hon\.?|Mr\.?|Mrs\.?|Ms\.?|Madam|Mme|Mlle|Dr\.?|MLA|Member)\s+
+    )+
     (?:                                                      # optional first name
        (?P<first>
           [A-ZÀ-Þ](?:[a-zà-öø-ÿA-ZÀ-Þ'\-]+|\.)               # first: full name OR single-letter+period
@@ -70,8 +75,8 @@ _NAMED_RE = re.compile(
     (?P<last>[A-ZÀ-Þ][a-zà-öø-ÿA-ZÀ-Þ'\-]+(?:\s+[A-ZÀ-Þ][a-zà-öø-ÿA-ZÀ-Þ'\-]+)?)   # surname (allows compound)
     (?:\s+\([^)]+\))?                                        # optional (Riding) / (Portfolio)
     (?:\s+(?:moved|asked|said|presented|introduced).*)?      # AB-style trailing verb tail
-    \s*$""",
-    re.VERBOSE,
+    \s*[:.]?\s*$""",                                         # NL/NS sometimes trail with colon
+    re.VERBOSE | re.IGNORECASE,
 )
 
 # Pre-filter to skip rows that are vocatives, presiding officers, or
