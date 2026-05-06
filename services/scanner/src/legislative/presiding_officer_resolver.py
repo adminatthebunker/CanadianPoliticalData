@@ -630,18 +630,34 @@ def _speaker_role_values(province: str) -> tuple[str, ...]:
 # linking the parser's role string back to the office key.
 
 ROLE_ONLY_PRESIDING_ROSTER: dict[str, dict[str, list[SpeakerTerm]]] = {
-    # Alberta: Deputy Speaker and Chair of Committees, sourced from the
-    # Hansard's own election announcements (`<Member> is hereby declared
-    # Deputy Speaker and Chair of Committees`). Pre-26L gap (24L+25L,
-    # 2000-2004) acknowledged — those eras' ~2.8K role-only rows stay
-    # unattributed pending separate research.
+    # Alberta: Deputy Speaker and Chair of Committees + Deputy Chair of
+    # Committees. Both are single-person date-determined roles per AB
+    # Standing Orders. Dates mined from `politicians.extras.ab_member_info.offices`
+    # (the assembly.ab.ca structured member records ingested by enrich-
+    # ab-mlas) and cross-checked against in-Hansard election announcements.
+    # Two short Deputy-Chair gaps acknowledged where the role was vacant
+    # between cabinet-promotion of the incumbent and election of a
+    # successor (2016-02-08→2016-03-09, 2022-06-27→2022-11-30).
     "AB": {
         "Deputy Speaker": [
-            SpeakerTerm("Richard Marz",   "Richard", "Marz",    date(2005,  3,  1), date(2008,  4, 14)),  # 26L
-            SpeakerTerm("Wayne Cao",      "Wayne",   "Cao",     date(2008,  4, 14), date(2012,  5, 23)),  # 27L
-            SpeakerTerm("George Rogers",  "George",  "Rogers",  date(2012,  5, 23), date(2015,  6, 11)),  # 28L
-            SpeakerTerm("Debbie Jabbour", "Debbie",  "Jabbour", date(2015,  6, 11), date(2019,  5, 21)),  # 29L
-            SpeakerTerm("Angela Pitt",    "Angela",  "Pitt",    date(2019,  5, 21), None),                # 30L+31L
+            SpeakerTerm("Donald A. Tannas", "Donald A.", "Tannas",  date(1993,  8, 30), date(2005,  3,  1)),  # 23L+24L+25L
+            SpeakerTerm("Richard Marz",     "Richard",   "Marz",    date(2005,  3,  1), date(2008,  4, 14)),  # 26L
+            SpeakerTerm("Wayne Cao",        "Wayne",     "Cao",     date(2008,  4, 14), date(2012,  5, 23)),  # 27L
+            SpeakerTerm("George Rogers",    "George",    "Rogers",  date(2012,  5, 23), date(2015,  6, 11)),  # 28L
+            SpeakerTerm("Debbie Jabbour",   "Debbie",    "Jabbour", date(2015,  6, 11), date(2019,  5, 21)),  # 29L
+            SpeakerTerm("Angela Pitt",      "Angela",    "Pitt",    date(2019,  5, 21), None),                # 30L+31L
+        ],
+        "Deputy Chair of Committees": [
+            SpeakerTerm("Judith D. Gordon",     "Judith",    "Gordon",    date(1997,  4, 14), date(2001,  3, 11)),  # 24L
+            SpeakerTerm("Shiraz Shariff",       "Shiraz",    "Shariff",   date(2001,  4,  9), date(2008,  3,  2)),  # 25L+26L
+            SpeakerTerm("Leonard W. Mitzel",    "Leonard",   "Mitzel",    date(2008,  4, 14), date(2011, 10, 26)),  # 27L early
+            SpeakerTerm("Gene Zwozdesky",       "Gene",      "Zwozdesky", date(2011, 11, 21), date(2012,  4, 22)),  # 27L late (became Speaker for 28L)
+            SpeakerTerm("Mary Anne Jablonski",  "Mary Anne", "Jablonski", date(2012,  5, 23), date(2015,  5,  4)),  # 28L
+            SpeakerTerm("Richard Feehan",       "Richard",   "Feehan",    date(2015,  6, 11), date(2016,  2,  8)),  # 29L early (then cabinet)
+            SpeakerTerm("Heather Sweet",        "Heather",   "Sweet",     date(2016,  3,  9), date(2019,  4, 15)),  # 29L late
+            SpeakerTerm("Nicholas Milliken",    "Nicholas",  "Milliken",  date(2019,  5, 21), date(2022,  6, 27)),  # 30L early (then cabinet)
+            SpeakerTerm("Roger Reid",           "Roger",     "Reid",      date(2022, 11, 30), date(2023,  5, 28)),  # 30L late
+            SpeakerTerm("Glenn van Dijken",     "Glenn",     "van Dijken", date(2023,  6, 20), None),               # 31L
         ],
     },
 }
@@ -651,6 +667,7 @@ ROLE_ONLY_PRESIDING_ROSTER: dict[str, dict[str, list[SpeakerTerm]]] = {
 ROLE_ONLY_OFFICE_MAP: dict[str, dict[str, str]] = {
     "AB": {
         "The Deputy Speaker": "Deputy Speaker",
+        "The Deputy Chair":   "Deputy Chair of Committees",
     },
 }
 
