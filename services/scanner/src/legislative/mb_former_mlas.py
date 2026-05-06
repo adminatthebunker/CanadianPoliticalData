@@ -65,17 +65,37 @@ REQUEST_DELAY_SECONDS = 1.0
 # ── Regexes ─────────────────────────────────────────────────────────
 
 _STRONG_RE = re.compile(r"<strong[^>]*>(.*?)</strong>", re.IGNORECASE | re.DOTALL)
+_STRONG_ITER_RE = re.compile(r"<strong[^>]*>(.*?)</strong>", re.IGNORECASE | re.DOTALL)
 _TAG_RE = re.compile(r"<[^>]+>")
 _TR_RE = re.compile(r"<tr\b[^>]*>(.*?)</tr>", re.IGNORECASE | re.DOTALL)
+# Capture <p>...</p> blocks (top-level, no nested strong required) for the
+# fallback path that handles entries which don't wrap the name banner in
+# <strong> at all (e.g., McGIFFORD, Diane).
+_P_RE = re.compile(r"<p\b[^>]*>(.*?)</p>", re.IGNORECASE | re.DOTALL)
 
 # LASTNAME, First ...  where first may carry nickname parens, initials,
 # and a trailing honorific suffix after another comma (Q.C., D.C., etc.).
+# Surname character class allows mixed case (lowercase chars permitted
+# after the leading uppercase) so that Mc/Mac/Van/de-prefixed surnames
+# like McFADYEN / McGIFFORD / VanDeMark / deLaTour match the source's
+# actual casing.
 _NAME_RE = re.compile(
     r"""^
-    (?P<last>[A-ZÀ-Þ][A-ZÀ-Þ'\-.\s]*?)   # SURNAME (uppercase, spaces/hyphens/periods OK)
+    (?P<last>[A-ZÀ-Þ][A-Za-zÀ-ÿ'\-.\s]*?)   # SURNAME (uppercase first, mixed-case OK)
     ,\s+
     (?P<first>[A-Za-zÀ-ÿ0-9'\-.\s]+?(?:\([^)]+\))?[A-Za-zÀ-ÿ0-9'\-.\s]*)  # First (middle) (nick)
     (?:,\s*[A-Za-z.]+\.?)?                                    # optional suffix: ", Q.C." / ", M.D."
+    \s*$""",
+    re.VERBOSE,
+)
+# Variant: LASTNAME First (no comma). Surname must contain at least one
+# uppercase block of 3+ chars to filter regular sentence text. Encountered
+# for SELBY Erin.
+_NAME_NOCOMMA_RE = re.compile(
+    r"""^
+    (?P<last>[A-ZÀ-Þ][A-Za-zÀ-ÿ'\-]*[A-ZÀ-Þ]{3,}[A-Za-zÀ-ÿ'\-]*)   # SURNAME with uppercase block
+    \s+
+    (?P<first>[A-Z][a-zA-ZÀ-ÿ'\-.]+(?:\s+[A-Z][a-zA-ZÀ-ÿ'\-.]+)?)  # First [Middle] (capitalized)
     \s*$""",
     re.VERBOSE,
 )
@@ -317,22 +337,88 @@ def _extract_narrative_terms(row_text: str) -> list[Term]:
     return terms
 
 
+_HEADER_SURNAME_BLOCKLIST = {
+    "NAME", "DATE", "ELECTION", "PORTFOLIO", "CONSTITUENCY",
+    "THE", "MINISTER", "HON",
+}
+
+
+def _name_from_text(text: str) -> Optional[tuple[str, str]]:
+    """Try to parse a `LASTNAME, First` (or `LASTNAME First`) name out of
+    a single decoded text fragment. Returns (last, first) or None.
+    """
+    if not text:
+        return None
+    m = _NAME_RE.match(text)
+    if m is None:
+        m = _NAME_NOCOMMA_RE.match(text)
+    if m is None:
+        return None
+    surname_token = m.group("last").split()[0] if m.group("last") else ""
+    if surname_token.upper() in _HEADER_SURNAME_BLOCKLIST:
+        return None
+    return m.group("last").strip().title(), m.group("first").strip()
+
+
 def _find_name_in_row(row_html: str) -> Optional[tuple[str, str]]:
-    """Return (last, first) of the first name-shaped <strong> in a row, or None."""
-    for raw in _STRONG_RE.findall(row_html):
+    """Return (last, first) of the first name-shaped banner in a row.
+
+    Looks for the MLA banner across four format variants seen on
+    gov.mb.ca's mla_bio_living/_deceased pages:
+
+      1. ``<strong>LASTNAME, First</strong>`` — standard form (most rows).
+      2. ``<strong>LASTNAME First</strong>`` — comma-less variant
+         (e.g., SELBY Erin). All-uppercase surname required to avoid
+         false positives on body text.
+      3. ``<strong>LASTNAME,</strong>`` followed by ``<strong>First</strong>``
+         — split across two adjacent strong tags (e.g., McFADYEN, Hugh).
+         Concatenate before parsing.
+      4. ``<p>LASTNAME, First</p>`` — no ``<strong>`` at all on the
+         banner (e.g., McGIFFORD, Diane). Fallback to <p> scan.
+    """
+    # Variants 1 & 2: any <strong> whose text matches a name shape.
+    strong_texts: list[tuple[str, str]] = []  # (decoded_text, raw_inner)
+    for raw in _STRONG_ITER_RE.findall(row_html):
+        text = _decode_and_strip(raw)
+        strong_texts.append((text, raw))
+        if not text:
+            continue
+        result = _name_from_text(text)
+        if result is not None:
+            return result
+
+    # Variant 3: split across adjacent strong tags. First strong ends in a
+    # comma (e.g., "McFADYEN,"); next non-empty strong is the first name
+    # alone (e.g., "Hugh"). Concatenate "McFADYEN, Hugh" and parse.
+    for i, (text_a, _) in enumerate(strong_texts):
+        if not text_a or not text_a.endswith(","):
+            continue
+        # Find next non-empty strong text after position i.
+        for text_b, _ in strong_texts[i + 1 : i + 4]:  # cap lookahead at 3
+            if not text_b:
+                continue
+            # Skip term-range strings — they shouldn't be a first name.
+            if _TERM_RE.match(text_b):
+                break
+            combined = f"{text_a} {text_b}".strip()
+            result = _name_from_text(combined)
+            if result is not None:
+                return result
+            break
+
+    # Variant 4: no <strong> banner at all; scan top-level <p> blocks.
+    for raw in _P_RE.findall(row_html):
         text = _decode_and_strip(raw)
         if not text:
             continue
-        m = _NAME_RE.match(text)
-        if not m:
+        # Skip <p> blocks that themselves contain a <strong> name (already
+        # tried above) — those would be variant 1/2/3 territory.
+        if "<strong" in raw.lower():
             continue
-        surname_token = m.group("last").split()[0] if m.group("last") else ""
-        if surname_token.upper() in (
-            "NAME", "DATE", "ELECTION", "PORTFOLIO", "CONSTITUENCY",
-            "THE", "MINISTER", "HON",
-        ):
-            continue
-        return m.group("last").strip().title(), m.group("first").strip()
+        result = _name_from_text(text)
+        if result is not None:
+            return result
+
     return None
 
 
@@ -355,15 +441,24 @@ def _parse_page(html_text: str, source_page: str) -> Iterator[ParsedMla]:
         if name is None:
             continue
         last, first = name
+        # Term-source precedence depends on which page we're parsing.
+        # Deceased page: <strong>Date - Date</strong> blocks ARE the
+        #   MLA tenure spans (deceased members rarely have narrative
+        #   events). Strong-form wins.
+        # Living page: <strong>Date - Date</strong> blocks are usually
+        #   ministerial-portfolio spans (within a third <td> cell),
+        #   while the MLA tenure lives in narrative events
+        #   ("Elected ... Re-elected ... Resigned ..."). Narrative wins;
+        #   strong-form is used only as a fallback when no narrative
+        #   exists (rare on the living page — typically by-election
+        #   appointees who haven't yet sat for a full term).
+        row_text = _decode_and_strip(row_html)
+        narrative_terms = _extract_narrative_terms(row_text)
         strong_terms = _extract_strong_terms(row_html)
-        if strong_terms:
-            terms = strong_terms
+        if source_page == "living":
+            terms = narrative_terms or strong_terms
         else:
-            # Decode to plain text (tags stripped) for narrative
-            # pattern matching — regex is anchored on word tokens so
-            # tag-stripping can't create false positives.
-            row_text = _decode_and_strip(row_html)
-            terms = _extract_narrative_terms(row_text)
+            terms = strong_terms or narrative_terms
         yield ParsedMla(
             last_name=last, first_name=first, terms=terms,
             source_page=source_page,
