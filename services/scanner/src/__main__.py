@@ -1508,6 +1508,37 @@ def cmd_ingest_ab_former_mlas(
 
 
 
+@cli.command("ingest-nb-former-mlas")
+@click.pass_context
+def cmd_ingest_nb_former_mlas(ctx: click.Context) -> None:
+    """Seed NB historical-MLA roster (58th-60th Legislatures, 2014-2024).
+
+    NB doesn't publish a machine-readable former-members directory and
+    legnb.ca's `/en/members/former-members` URL 404s. This command
+    inserts a hand-curated roster sourced from Wikipedia per-Legislature
+    articles. Idempotent: re-runs UPSERT politicians and skip-existing
+    terms by (politician_id, started_at, source).
+
+    Required for Pass 4 surname-only resolution to fire on NB Hansard
+    pre-2024 — without per-Legislature term windows on the historical
+    politicians, date-window narrowing returns no candidates.
+    """
+    from .legislative.nb_former_mlas import ingest_nb_former_mlas
+
+    async def _wrap(db: Database) -> None:
+        stats = await ingest_nb_former_mlas(db)
+        console.print(
+            f"[green]ingest-nb-former-mlas[/green]: "
+            f"legislatures={stats.legislatures_processed} "
+            f"unique_mlas={stats.unique_mlas} "
+            f"inserted={stats.politicians_inserted} "
+            f"matched={stats.politicians_matched_existing} "
+            f"terms_inserted={stats.terms_inserted} "
+            f"terms_skipped={stats.terms_skipped_existing}"
+        )
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
 @cli.command("ingest-mb-former-mlas")
 @click.option("--living/--no-living", default=True,
               help="Include the living-MLAs bio page.")
