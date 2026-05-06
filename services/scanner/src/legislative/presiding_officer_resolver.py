@@ -660,6 +660,21 @@ ROLE_ONLY_PRESIDING_ROSTER: dict[str, dict[str, list[SpeakerTerm]]] = {
             SpeakerTerm("Glenn van Dijken",     "Glenn",     "van Dijken", date(2023,  6, 20), None),               # 31L
         ],
     },
+    # British Columbia: Deputy Speaker, single-person date-determined.
+    # BC's chamber parser tags these as bare `Deputy Speaker` (no "The"
+    # prefix). Coverage is 39L (2009) → 43L (current); 38L (2008, ~115
+    # rows) and 40L (2013-2017, ~700 rows) gaps acknowledged where the
+    # Deputy Speaker holder couldn't be confirmed from public sources.
+    # Sourced from 41st/42nd/43rd Parliament Wikipedia pages plus search
+    # confirmation for Linda Reid 2009 and Mable Elmore 2025-03 appointment.
+    "BC": {
+        "Deputy Speaker": [
+            SpeakerTerm("Linda Reid",              "Linda",            "Reid",    date(2009,  8, 25), date(2013,  6, 26)),  # 39L
+            SpeakerTerm("Raj Chouhan",             "Raj",              "Chouhan", date(2017,  6, 22), date(2020, 12,  7)),  # 41L
+            SpeakerTerm("Spencer Chandra Herbert", "Spencer Chandra",  "Herbert", date(2020, 12,  7), date(2024, 10, 19)),  # 42L
+            SpeakerTerm("Mable Elmore",            "Mable",            "Elmore",  date(2025,  3,  1), None),                 # 43L
+        ],
+    },
 }
 
 # Per-province map from `speeches.speaker_role` → `politician_terms.office`
@@ -668,6 +683,10 @@ ROLE_ONLY_OFFICE_MAP: dict[str, dict[str, str]] = {
     "AB": {
         "The Deputy Speaker": "Deputy Speaker",
         "The Deputy Chair":   "Deputy Chair of Committees",
+    },
+    "BC": {
+        # BC parser emits bare "Deputy Speaker" (no "The" prefix), unlike AB.
+        "Deputy Speaker": "Deputy Speaker",
     },
 }
 
