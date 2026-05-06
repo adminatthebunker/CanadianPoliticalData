@@ -219,6 +219,30 @@ _ROLE_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"^voices?$"),                             "Voices"),
 ]
 
+# Patterns that identify parliamentary-staff turns regardless of whether
+# they carry a parens-name suffix (Madam Clerk, Clerk (Patricia Chaychuk),
+# Deputy Clerk (Mr. Rick Yarish), Madam Deputy Clerk, Clerk Assistant,
+# Sergeant-at-Arms, Deputy Sergeant-at-Arms, Acting Sergeant-at-Arms).
+# Used to assign speech_type='staff' so coverage queries can exclude
+# them from the unattributed-politicians count.
+_STAFF_RAW_RE = re.compile(
+    r"^\s*(?:Madam\s+|Mr\.?\s+)?"
+    r"(?:Acting\s+)?"
+    r"(?:Deputy\s+)?"
+    r"(?:Clerk(?:\s+Assistant)?|Sergeant[-\s]at[-\s]Arms|Table\s+Officer|Black\s+Rod|Doorkeeper)"
+    r"(?:\s*\([^)]+\))?\s*$",
+    re.IGNORECASE,
+)
+
+# Patterns that identify group / heckle turns. The MB chamber parser
+# was previously hardcoded to speech_type='floor' for everything; this
+# check recovers ~29K MB rows that should have been speech_type='group'.
+_GROUP_RAW_RE = re.compile(
+    r"^\s*(?:An|Some|Several)\s+Hon(?:ourable)?\s+Members?:?\s*$|"
+    r"^\s*Voices?:?\s*$",
+    re.IGNORECASE,
+)
+
 # Main/paren split: "Hon. Anita R. Neville (Lieutenant Governor of...)"
 _PAREN_SPLIT_RE = re.compile(r"^(?P<main>[^()]+?)\s*\((?P<paren>[^()]+)\)\s*$")
 
@@ -443,6 +467,15 @@ def extract_speeches(html_text: str, url: str) -> ParseResult:
             turn_section = None
             return
         spoken_at = _localise(sitting_date, turn_time)
+        # speech_type derived from the raw label so future ingests don't
+        # need post-hoc backfills. Priority order: group (heckles) /
+        # staff (Clerk, Sergeant) / floor (real MLA speeches).
+        if _GROUP_RAW_RE.match(turn_name_raw or "") or turn_attr.role == "Honourable Members" or turn_attr.role == "Voices":
+            speech_type = "group"
+        elif _STAFF_RAW_RE.match(turn_name_raw or ""):
+            speech_type = "staff"
+        else:
+            speech_type = "floor"
         speech = ParsedSpeech(
             sequence=len(speeches) + 1,
             speaker_name_raw=turn_name_raw,
@@ -451,7 +484,7 @@ def extract_speeches(html_text: str, url: str) -> ParseResult:
             surname=turn_attr.surname,
             full_name=turn_attr.full_name,
             paren_role=turn_attr.paren_role,
-            speech_type="floor",
+            speech_type=speech_type,
             spoken_at=spoken_at,
             text=text,
             language="en",

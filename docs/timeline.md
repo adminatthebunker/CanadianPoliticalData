@@ -1,6 +1,6 @@
 # Timeline / direction
 
-Where the project is going, in priority order. Last reviewed 2026-05-06 (re-synced after NL chamber-parser staff-classification fix).
+Where the project is going, in priority order. Last reviewed 2026-05-06 (re-synced after MB + NL chamber-parser staff/group classification).
 
 This is the **what we're building next** doc. For the **why**, read [`goals.md`](./goals.md). For the **how**, read the per-feature plan under [`plans/`](./plans/) linked from each item below. When this file disagrees with the plan docs, the plan docs win — keep this one short and reorder it as priorities shift.
 
