@@ -136,12 +136,15 @@ _TERM_RE = re.compile(
 #   "Defeated g.e. April 11, 2023"
 #   "Retired April 11, 2023"
 _EVENT_START_RE = re.compile(
-    rf"(?:(?:Re[-\s]?)?[Ee]lected|[Aa]ppointed|[Ss]worn\s+in)\s+(?:g\.?\s*e\.?\s+)?"
+    rf"(?:(?:Re[-\s]?)?[Ee]lected|[Aa]ppointed|[Ss]worn\s+in)\s+"
+    rf"(?:by[\-\s]?election\s+|g\.?\s*e\.?\s+)?"   # optional "by-election" / "g.e." filler
     rf"(?P<date>{_DATE_TOKEN})",
 )
 _EVENT_END_RE = re.compile(
     rf"(?:[Nn]ot\s+a\s+candidate|[Rr]esigned|[Rr]etired|[Dd]efeated|[Dd]ied|"
-    rf"[Dd]eceased|[Pp]assed\s+away)\s+(?:g\.?\s*e\.?\s+)?(?:on\s+)?"
+    rf"[Dd]eceased|[Pp]assed\s+away)\s+"
+    rf"(?:in\s+)?"                                 # optional "in" (e.g. "Not a candidate in g.e. <date>")
+    rf"(?:g\.?\s*e\.?\s+)?(?:on\s+)?"
     rf"(?P<date>{_DATE_TOKEN})",
 )
 
@@ -583,16 +586,34 @@ async def ingest_mb_former_mlas(
                 stats.politicians_updated += 1
 
         # ── Upsert terms for this politician ────────────────────────
+        # Existence keyed on (politician_id, office='MLA', started_at).
+        # When the row exists but its ended_at differs from what the
+        # parser now produces, UPDATE — this is how parser-fix re-runs
+        # (e.g., the 2026-05-06 "Not a candidate in g.e." regex fix
+        # that closes Oscar Bjornson's 1966 → NULL term to 1966 → 1969)
+        # propagate to existing data. Source-tag matched too so we don't
+        # overwrite hand-curated entries from other sources.
         for term in p.terms:
             existing = await db.fetchrow(
                 """
-                SELECT 1 FROM politician_terms
+                SELECT id, ended_at FROM politician_terms
                  WHERE politician_id = $1 AND office = 'MLA'
                    AND started_at = $2
                 """,
                 pol_id, term.started_at,
             )
             if existing is not None:
+                # Update if ended_at differs from the new parse.
+                if existing["ended_at"] != term.ended_at:
+                    await db.execute(
+                        """
+                        UPDATE politician_terms
+                           SET ended_at = $1
+                         WHERE id = $2
+                           AND source = 'assembly.mb.ca:former-mlas'
+                        """,
+                        term.ended_at, existing["id"],
+                    )
                 stats.terms_skipped_existing += 1
                 continue
             await db.execute(
