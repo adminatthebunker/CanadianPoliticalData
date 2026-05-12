@@ -166,6 +166,11 @@ nav:
       - reports/index.md
       - Buying credits: reports/credits.md
       - Generating a report: reports/generate.md
+  - Developer API:
+      - developers/index.md
+      - Authentication: developers/authentication.md
+      - Rate limiting: developers/rate-limiting.md
+      - Errors: developers/errors.md
   - Contributors:
       - contributors/index.md
   - Blog:
