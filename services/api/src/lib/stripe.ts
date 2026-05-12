@@ -232,3 +232,127 @@ export function constructWebhookEvent(
     config.stripe.webhookSecret
   );
 }
+
+// ─── Subscription helpers (public dev-API phase 1b) ─────────────────
+// All subscription state lives on private.users (current_plan,
+// plan_status, stripe_subscription_id, plan_renews_at, etc. — see
+// migration 0049). Subscriptions are pure API access tiers — they
+// don't grant credits. The credit_ledger flow stays orthogonal.
+
+export type SubscriptionPlan = "dev" | "pro";
+
+/**
+ * Reverse-lookup helper for the webhook: map a Stripe price id back
+ * to our internal plan enum. Returns null on unknown price (e.g. an
+ * old price id from before a plan rename).
+ */
+export function priceIdToPlan(priceId: string): SubscriptionPlan | null {
+  if (priceId === config.stripe.planPriceIds.dev) return "dev";
+  if (priceId === config.stripe.planPriceIds.pro) return "pro";
+  return null;
+}
+
+export function planPriceId(plan: SubscriptionPlan): string {
+  return plan === "dev"
+    ? config.stripe.planPriceIds.dev
+    : config.stripe.planPriceIds.pro;
+}
+
+/**
+ * Create a recurring-subscription Stripe Checkout Session for a plan.
+ *
+ * Mirrors createCheckoutSession (one-time credit packs) but with
+ * mode="subscription" and subscription_data.metadata so the webhook
+ * handler can recover (user_id, plan) from the subscription object.
+ * The same Stripe Tax opts apply — recurring tax is calculated on
+ * each renewal automatically when automatic_tax is on.
+ */
+export async function createSubscriptionCheckoutSession(params: {
+  userId: string;
+  userEmail: string;
+  plan: SubscriptionPlan;
+  successUrl: string;
+  cancelUrl: string;
+}): Promise<{ url: string; sessionId: string }> {
+  const priceId = planPriceId(params.plan);
+  if (!priceId) {
+    throw new Error(`subscription plan unavailable: ${params.plan}`);
+  }
+  const customerId = await getOrCreateCustomer(params.userId, params.userEmail);
+
+  // Tax opts identical to credit-pack flow (line 175-182). Recurring
+  // tax applies to renewals automatically when automatic_tax is on,
+  // so the dashboard activation done for credit packs covers
+  // subscriptions for free.
+  const taxOpts = config.stripe.taxEnabled
+    ? ({
+        automatic_tax: { enabled: true },
+        billing_address_collection: "required",
+        customer_update: { address: "auto", name: "auto" },
+        tax_id_collection: { enabled: true },
+      } as const)
+    : ({} as const);
+
+  const session = await getClient().checkout.sessions.create({
+    mode: "subscription",
+    customer: customerId,
+    client_reference_id: params.userId,
+    line_items: [{ price: priceId, quantity: 1 }],
+    success_url: params.successUrl,
+    cancel_url: params.cancelUrl,
+    metadata: {
+      user_id: params.userId,
+      plan: params.plan,
+    },
+    subscription_data: {
+      metadata: {
+        user_id: params.userId,
+        plan: params.plan,
+      },
+    },
+    ...taxOpts,
+  });
+
+  if (!session.url) {
+    throw new Error("stripe returned subscription session without url");
+  }
+  return { url: session.url, sessionId: session.id };
+}
+
+/**
+ * Create a Stripe Customer Portal session so the user can self-serve
+ * card updates, invoice viewing, and plan changes without us building
+ * UI for each. Returns the hosted-portal URL.
+ */
+export async function createPortalSession(params: {
+  customerId: string;
+  returnUrl: string;
+}): Promise<{ url: string }> {
+  const session = await getClient().billingPortal.sessions.create({
+    customer: params.customerId,
+    return_url: params.returnUrl,
+  });
+  return { url: session.url };
+}
+
+/** Convenience wrapper for the webhook handler to fetch fresh state. */
+export async function getSubscription(
+  subscriptionId: string,
+): Promise<Stripe.Subscription> {
+  return getClient().subscriptions.retrieve(subscriptionId);
+}
+
+/**
+ * Set cancel_at_period_end on a Stripe subscription (true to schedule
+ * cancellation at the next renewal; false to undo a pending cancel).
+ * The webhook will fire customer.subscription.updated and our handler
+ * syncs the flag into private.users.
+ */
+export async function setSubscriptionCancelAtPeriodEnd(
+  subscriptionId: string,
+  cancel: boolean,
+): Promise<Stripe.Subscription> {
+  return getClient().subscriptions.update(subscriptionId, {
+    cancel_at_period_end: cancel,
+  });
+}

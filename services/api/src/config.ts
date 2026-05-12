@@ -71,6 +71,11 @@ const schema = z.object({
   STRIPE_PRICE_ID_CREDIT_PACK_SMALL: z.string().optional(),
   STRIPE_PRICE_ID_CREDIT_PACK_MEDIUM: z.string().optional(),
   STRIPE_PRICE_ID_CREDIT_PACK_LARGE: z.string().optional(),
+  // Public dev-API subscription tiers (phase 1b). Recurring monthly
+  // prices created in the Stripe dashboard. Unset → /me/subscriptions/
+  // checkout 400s for that plan and the BillingPage hides the card.
+  STRIPE_PRICE_ID_PLAN_DEV: z.string().optional(),
+  STRIPE_PRICE_ID_PLAN_PRO: z.string().optional(),
   // Preprocess empty string → undefined so docker-compose's
   // `${VAR:-}` pattern (empty string when unset) doesn't trip .url()
   // validation. Consistent with how the other optional strings
@@ -174,6 +179,10 @@ export const config = (() => {
         small: env.STRIPE_PRICE_ID_CREDIT_PACK_SMALL ?? "",
         medium: env.STRIPE_PRICE_ID_CREDIT_PACK_MEDIUM ?? "",
         large: env.STRIPE_PRICE_ID_CREDIT_PACK_LARGE ?? "",
+      },
+      planPriceIds: {
+        dev: env.STRIPE_PRICE_ID_PLAN_DEV ?? "",
+        pro: env.STRIPE_PRICE_ID_PLAN_PRO ?? "",
       },
       successUrl:
         env.STRIPE_SUCCESS_URL ??
