@@ -2,7 +2,7 @@
 
 Actionable checkbox view of [`docs/timeline.md`](./docs/timeline.md). When this file disagrees with the timeline or with a plan doc under [`docs/plans/`](./docs/plans/), **the plan docs win** — update this file rather than the other way round.
 
-- **Last synced with `docs/timeline.md`:** 2026-05-12 (re-synced after `/api/v1/search` v1.0 contract freeze — Now horizon empty for the first time on record)
+- **Last synced with `docs/timeline.md`:** 2026-05-12 (re-synced after public dev-API phase 1a ship — `/api/public/v1/*` debut + free-tier infra)
 - **Why this exists:** the timeline is prose-shaped; this is the version you tick off. One source of priority ordering (timeline), one place to mark progress (here).
 - **How to update:** check items as they ship, move them to *Recently shipped*, and re-sync the date above. If a horizon shifts, edit `docs/timeline.md` first, then mirror here.
 
@@ -148,7 +148,10 @@ Independent, ship-each-on-its-own work.
 
 Parked behind the priorities above — not abandoned.
 
-- [ ] **Public developer API** (`/api/public/v1/*`) with three paid tiers. Free / dev / pro, Stripe subscriptions distinct from credit-pack one-time, per-tier rate limits, OpenAPI + Swagger UI, key provisioning at `/account/api-keys`. → [`docs/plans/public-developer-api.md`](./docs/plans/public-developer-api.md)
+- [~] **Public developer API** (`/api/public/v1/*`) with three paid tiers. → [`docs/plans/public-developer-api.md`](./docs/plans/public-developer-api.md)
+  - [x] **Phase 1a — free-tier infra + 3 read endpoints** (shipped 2026-05-12, commits `35b3f31` + `<phase-ii>` + `<phase-iii>`). Migration 0048 (`private.api_keys` + `api_key_events` + `api_usage_daily`), token lib (`cpd_<env>_<22b62>_<6cs>` HMAC-hashed at rest with `API_KEY_PEPPER`), `requireApiKey` / `optionalApiKey` middleware, `/me/api-keys` CRUD with rotate (24h grace) + revoke + audit, frontend page at `/account/api-keys` with one-shot full-token banner, per-tier rate-limit middleware (free=60/hr per key, anon=30/hr per IP, dev/pro reserved), `/api/public/v1` plugin with permissive CORS + 3 endpoints (`/coverage`, `/jurisdiction-sources`, `/politicians/:id`). Smoke-tested: 60 OK then 5x 429 with audit rows. See [`docs/api.md`](./docs/api.md) § Public API.
+  - [ ] **Phase 1b — Stripe subscriptions for dev/pro tiers.** Subscription Checkout + Portal + webhook + plan-state sync on `private.users` + frontend billing page + dev/pro tier limit wiring. Touches Stripe live mode — needs the same careful test-mode-first arc as the 2026-05-05 Stripe live deploy.
+  - [ ] **Phase 1c — OpenAPI + Swagger UI + `/developers` mkdocs section.** `@fastify/swagger` + `fastify-type-provider-zod` integration, `/api/public/v1/openapi.json` + `/api/public/v1/docs`, mkdocs `mkdocs/docs/developers/` with auth + rate-limiting + endpoints + errors pages.
 - [ ] **Bulk export endpoints** (Parquet / CSV) — `read:bulk` scope, per-jurisdiction-month presigned exports. Sits behind dev-API v1.0 as v1.1. → same plan doc.
 - [ ] **Map tiles self-hosting.** CARTO + OSM currently CDN-loaded. Three options scoped: nginx raster cache, PMTiles + MapLibre GL (~25 GB Z0–Z14 Canada), OpenMapTiles container. → [`docs/plans/sovereignty-runtime-deps.md`](./docs/plans/sovereignty-runtime-deps.md) § item 3
 - [ ] **Browser automation (Playwright / Camoufox)** for PE/YT WAF jurisdictions. Only worth it if direct outreach to legislatures for a civic-transparency allowlist fails. → [`docs/plans/national-expansion-scoping.md`](./docs/plans/national-expansion-scoping.md) q5.3

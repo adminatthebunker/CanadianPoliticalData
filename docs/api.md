@@ -580,6 +580,27 @@ Query: `?status=open|reviewing|resolved|dismissed&limit=1..200`.
 ### `PATCH /admin/bug-reports/:id`
 Body: `{ "status": "<status>", "admin_notes"?: "<= 2000 chars or null>" }`. `resolved_at` is auto-set to `now()` on transition to `resolved` / `dismissed`.
 
+## Public API (`/api/public/v1/*`)
+
+A separate, third-party-friendly tree under `/api/public/v1/*`, derived from the v1.0 internal contract. Phase 1a (shipped 2026-05-12) exposes three read-only endpoints behind per-key rate limiting; Stripe-subscription paid tiers (dev / pro), OpenAPI emission, and the `/developers` docs site land in phases 1b / 1c. Plan: [`docs/plans/public-developer-api.md`](./plans/public-developer-api.md).
+
+**Auth.** Bearer-token via `Authorization: Bearer cpd_<env>_<random>_<checksum>`. Tokens are minted at `/account/api-keys` (signed-in users only) — see `services/api/src/routes/keys.ts`. The full token is shown once at create / rotate; storage is HMAC-hashed.
+
+**Rate limits (per hour).** Free tier (a registered key) → 60 req/hr per key. Anonymous (no key) → 30 req/hr per source IP. `dev` and `pro` tiers exist in the schema but require Stripe subscription wiring (phase 1b). 429 responses include the standard `Retry-After` header; rate-limited authed callers get a `private.api_key_events` audit row with `event_type='rate_limited'`.
+
+**CORS.** `Access-Control-Allow-Origin: *` for the entire `/api/public/v1/*` tree (vs the credentialed restricted CORS on `/api/v1/*`). Public tokens are bearer-auth, not cookie-auth — wildcard origin is intentional and browser-accepted.
+
+**Endpoints (phase 1a):**
+
+### `GET /api/public/v1/coverage`
+Mirror of internal `/api/v1/coverage`. Returns `{ jurisdictions: [...], summary: {...} }`. Optional `?status=live|partial|blocked|none` filter. `Cache-Control: public, max-age=300`.
+
+### `GET /api/public/v1/jurisdiction-sources`
+Flat per-jurisdiction list — same underlying `jurisdiction_sources` table as `/coverage`, without the summary rollup. `Cache-Control: public, max-age=300`.
+
+### `GET /api/public/v1/politicians/:id`
+Mirror of internal `/api/v1/politicians/:id`. UUID path param; 404 on missing or malformed id. Returns `{ politician, websites, boundary }` — politician row + active websites with latest `infrastructure_scans` join + constituency boundary GeoJSON when `constituency_id` is set. `Cache-Control: public, max-age=60`.
+
 ## Health
 
 ### `GET /health`
