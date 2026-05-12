@@ -36,7 +36,9 @@ Accepted by `/search/speeches`, `/search/politician-quotes`, and `/search/facets
 - `exclude_presiding` — `true` strips Speaker / Chair turns (rows where `speeches.speaker_role` is non-empty).
 - `min_similarity` — cosine-similarity floor 0..1. Only meaningful with `q` set; ignored in recency mode. `/politician-quotes` and grouped `/speeches` clamp to `>= 0.45` server-side so quote counts stay aligned with the grouped-view `mention_count`.
 - `parliament_number` + `session_number` — must arrive together; resolved against `legislative_sessions` within the request's (level, province). One without the other is dropped as ambiguous.
-- `speech_type` — repeated param over `floor | committee | question_period | statement | point_of_order | group`. Example: `?speech_type=question_period&speech_type=statement`.
+- `speech_type` — repeated param over `floor | committee | question_period | statement | point_of_order | group` (sourced from `SPEECH_TYPE_VALUES` in `services/api/src/routes/search.ts`). Example: `?speech_type=question_period&speech_type=statement`.
+- `politician_active` — `active | inactive`. Restrict to speeches by politicians who are currently in office (`active`) or no longer in office (`inactive`). Implemented as an EXISTS join to `politicians.is_active`, so unresolved speeches (`politician_id IS NULL`) drop out of both sides — an unresolved speaker is neither active nor inactive.
+- `anchor_chunk_id` — UUID. Anchor-chunk search: rank the corpus by cosine similarity to this chunk's embedding instead of a text query. Mutually exclusive with `q` — when both are present, `q` wins and the anchor is ignored. The anchor itself is excluded from results so it doesn't dominate its own ranking. 404 (`anchor_not_found`) if the chunk doesn't exist.
 
 ### `GET /search/speeches`
 
@@ -44,7 +46,8 @@ Two modes selected by `group_by`.
 
 **Timeline mode** (`group_by=timeline`, default). Flat chunk list, paginated.
 - Adds: `page` (default 1), `limit` (1–50, default 20).
-- 400 if neither `q` nor any structural filter is present.
+- `include_count` (default `true`): set to `false` to skip the COUNT(*) query and have `total` and `pages` returned as `null`. The frontend opts out and stages count off the hot path via `/search/speeches/count` because the threshold-COUNT can't use HNSW (it's a cardinality-of-neighbourhood question, not a top-K one) and on a q-only query against the full corpus it costs ~15s. URL form accepts `false` / `"false"` literally — `z.coerce.boolean("false")` would silently coerce to true, so the schema does explicit literal-aware parsing.
+- 400 if neither `q`, `anchor_chunk_id`, nor any structural filter is present.
 
 ```jsonc
 {
@@ -63,12 +66,15 @@ Two modes selected by `group_by`.
       "speech": {
         "speaker_name_raw": "...", "speaker_role": "...",
         "source_url": "...", "source_anchor": "...",
+        "source_system": "openparliament", // origin pipeline; backs video deep-links
         "session": { "parliament_number": 44, "session_number": 1 }
       }
     }
   ],
   "page": 1, "limit": 20,
-  "total": 1234, "totalCapped": false, "pages": 62,
+  "total": 1234,                      // null when include_count=false
+  "capped": false,                    // true when total === 10000 (HNSW LIMIT trick)
+  "pages": 62,                        // null when include_count=false
   "mode": "semantic"                  // or "recent"
 }
 ```
@@ -96,6 +102,18 @@ Two modes selected by `group_by`.
 }
 ```
 
+### `GET /search/speeches/count`
+
+Count-only sibling of `/speeches`. Same filter shape, runs only the `COUNT(*)` query so the frontend can stage it in parallel with a `/speeches?include_count=false` call — results render fast while the (potentially slow) total resolves separately. Threshold semantics mirror `/speeches` exactly so the count and the rendered page agree on what's included.
+
+- 400 if neither `q`, `anchor_chunk_id`, nor any structural filter is present.
+
+```json
+{ "total": 1234, "capped": false }
+```
+
+`capped: true` means the count hit the cap (10,000 + 1 cancel-after sentinel) and the real total is `>= 10,000`. The cap exists because threshold-COUNT on a q-only query against the full corpus is ~15s without HNSW, and the UI doesn't need an exact figure past five digits.
+
 ### `GET /search/politician-quotes`
 
 Single-politician deep-dive backing the "Show all matching quotes" expand affordance on `/search`'s grouped view. **Auth-gated** (`requireUser`) and per-user rate-limited at 60/min keyed on `expand-quotes:<userId>`.
@@ -105,12 +123,15 @@ Single-politician deep-dive backing the "Show all matching quotes" expand afford
 
 ### `GET /search/facets`
 
-Analytics breakdown over the top-200 candidate pool (semantic when `q` is set, else recent). Backs the Analysis tab on `/search`. `SET LOCAL hnsw.ef_search = 300` per statement.
-- 400 if neither `q` nor any structural filter is present.
+Analytics breakdown over the top-N candidate pool (semantic when `q` is set, else recent). Backs the Analysis tab on `/search`. `SET LOCAL hnsw.ef_search = 300` per statement.
+
+- Optional `limit` query param controls N: clamped `[10, 500]`, default `200`. Upper bound is shared with the analysis CTA's input cap (max input to a paid search analysis is 500 chunks; same number).
+- 400 if neither `q`, `anchor_chunk_id`, nor any structural filter is present.
 
 ```jsonc
 {
   "analyzed_count": 200, "analysis_limit": 200,
+  "chunk_ids":     ["uuid", "uuid", ...],                    // top-N chunk ids the tiles aggregate over; same set feeds the "Analyse these results" CTA
   "by_party":      [{ "party": "Conservative", "count": 47, "avg_similarity": 0.68 }, ...],
   "by_politician": [{ "politician": { "id": "...", "name": "...", "slug": "..." }, "count": 12, "avg_similarity": 0.71 }, ...],
   "by_year":       [{ "year": 2023, "count": 18 }, ...],
@@ -126,6 +147,31 @@ Lookup table for the cascading parliament/session dropdown in the advanced-filte
 - Query params: `level`, `province` (2-letter, optional). For `level=federal` with no `province`, restricts to `province_territory IS NULL`.
 - Response: `{ "sessions": [{ "parliament_number", "session_number", "name", "start_date", "end_date" }] }`, newest first.
 - `Cache-Control: public, max-age=3600` — sessions change ~once per prorogation.
+
+### `GET /search/chunks/:id`
+
+Anchor-chunk lookup. The `/search` frontend's anchor banner uses this to render "currently anchored on `<speaker>`: `<chunk text>`" with a single round trip rather than two (chunk → `speech_id` → speech).
+
+- Path param `:id` is a UUID; 400 (`invalid id`) if it doesn't match `[0-9a-f-]{36}`.
+- 404 if the chunk doesn't exist.
+
+```jsonc
+{
+  "chunk_id": "uuid", "speech_id": "uuid",
+  "text": "…",
+  "char_start": 0, "char_end": 412,
+  "language": "en",
+  "speaker_name_raw": "...", "party_at_time": "Conservative",
+  "spoken_at": "2024-03-21T00:00:00Z",
+  "level": "federal", "province_territory": null,
+  "source_url": "...", "source_anchor": "#turn-32",
+  "source_system": "openparliament",
+  "politician": {
+    "id": "uuid", "name": "...", "slug": "...",
+    "photo_url": "...", "party": "..."
+  } // null if speech.politician_id is unresolved
+}
+```
 
 ### `GET /search/meta`
 
