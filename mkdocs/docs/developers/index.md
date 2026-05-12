@@ -108,13 +108,30 @@ to prevent any single client from starving the GPU. See
 [Rate limiting](./rate-limiting.md#tei-semaphore-on-paid-search) for
 details.
 
+**Bulk export** (`read:bulk` scope required — orthogonal to tier):
+
+- **`GET /exports/dumps`** — list current full-dataset dump artifacts
+  (filename, size, modified-at, kind).
+- **`GET /exports/dumps/:filename`** — stream a specific dump file
+  (`pg_dump --schema=public` custom-format archive + integrity
+  checksum + manifest).
+
+Same files served anonymously at
+[`/datasets/`](https://canadianpoliticaldata.org/datasets/) — the
+API surface adds auth + per-key metering. See
+[Bulk export](./bulk-export.md) for the full guide including
+`pg_restore` instructions.
+
 ## Topics
 
 - **[Authentication](./authentication.md)** — token format, key
-  creation, rotation, revocation.
+  creation, rotation, revocation, scopes.
 - **[Rate limiting](./rate-limiting.md)** — per-tier limits, headers,
-  429 handling.
-- **[Errors](./errors.md)** — 400 / 401 / 404 / 429 / 503 catalog.
+  429 handling, TEI semaphore.
+- **[Bulk export](./bulk-export.md)** — `read:bulk` scope,
+  `pg_dump` artifacts, restore guide.
+- **[Errors](./errors.md)** — 400 / 401 / 403 / 404 / 429 / 503
+  catalog.
 
 ## Stability
 

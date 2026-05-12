@@ -156,6 +156,39 @@ Stripe webhook landing. The free-tier auxiliaries
 (`/search/sessions`, `/search/chunks/:id`, `/search/meta`) work for
 any tier including anonymous.
 
+## Scopes
+
+Tiers and scopes are **orthogonal axes**:
+
+- **Tier** = your billing level. Free / Developer / Pro. Governs
+  rate limits and access to expensive-by-default endpoints.
+- **Scope** = the capability flags your specific key carries.
+  Governs access to opt-in surfaces.
+
+Today there's one scope beyond the implicit baseline:
+
+| Scope | What it unlocks | Default? |
+|---|---|---|
+| `read:public` | Every public-API endpoint that doesn't require an opt-in scope. | **Yes** — every key implicitly carries this. |
+| `read:bulk` | The `/api/public/v1/exports/*` endpoints. Multi-GB `pg_dump` archives of the public dataset. | **No** — opt in at create time. |
+
+A free-tier key CAN have `read:bulk` (no subscription required for
+bulk download). A pro-tier key WITHOUT `read:bulk` can hammer search
+but can't download dumps. Two orthogonal axes.
+
+To add `read:bulk` to a new key:
+
+1. At [`/account/api-keys`](https://canadianpoliticaldata.org/account/api-keys),
+   click "+ New API key."
+2. In the **Scopes** fieldset, tick the `read:bulk` checkbox.
+3. Click "Create key" — the resulting token carries both
+   `read:public` (implicit) and `read:bulk` (opted in).
+
+Per-key scope changes-after-creation aren't supported in v1 — rotate
+the key with the new scope set, OR create a new key for the bulk
+workflow alongside your existing one. See
+[Bulk export](./bulk-export.md) for the full download guide.
+
 ## Security notes
 
 - **Never commit tokens to source control.** Use environment variables

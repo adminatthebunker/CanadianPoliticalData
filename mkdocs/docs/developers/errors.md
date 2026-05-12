@@ -63,11 +63,12 @@ If you get a 401 unexpectedly, check that:
 
 ## `403 Forbidden`
 
-You're authenticated but your tier doesn't authorize this endpoint.
-Currently surfaces only on the pro-tier search endpoints
-(`/search/speeches`, `/search/speeches/count`, `/search/facets`)
-when called by a free or dev-tier key. Anonymous callers don't see
-this — they hit `401` first.
+You're authenticated but your tier OR scope doesn't authorize this
+endpoint. Two flavours, distinguished by the `code` field.
+
+**`code: "insufficient_tier"`** — your billing level (free / dev /
+pro) is too low. Surfaces on the pro-tier search endpoints when
+called by a free or dev-tier key.
 
 ```http
 HTTP/1.1 403 Forbidden
@@ -82,10 +83,37 @@ Content-Type: application/json
 }
 ```
 
-To resolve: subscribe to the appropriate tier at
+To resolve: subscribe at
 [`/account/billing`](https://canadianpoliticaldata.org/account/billing).
-Existing keys auto-promote to your new tier within seconds of the
-Stripe webhook landing — no need to mint new keys.
+Existing keys auto-promote within seconds of the Stripe webhook
+landing — no need to mint new keys.
+
+**`code: "insufficient_scope"`** — your key's capability flags don't
+include a required scope. Surfaces on the bulk-export endpoints
+when called by a key that didn't tick the `read:bulk` checkbox at
+create time.
+
+```http
+HTTP/1.1 403 Forbidden
+Content-Type: application/json
+
+{
+  "code": "insufficient_scope",
+  "error": "Forbidden",
+  "message": "this endpoint requires the 'read:bulk' scope. Your key has [read:public]. Create a new key with the scope at /account/api-keys, or rotate this one and tick the scope checkbox.",
+  "required_scope": "read:bulk",
+  "current_scopes": ["read:public"]
+}
+```
+
+To resolve: create a new key at
+[`/account/api-keys`](https://canadianpoliticaldata.org/account/api-keys)
+with the required scope ticked. Per-key scope changes-after-creation
+aren't supported in v1 — rotate the key with the new scope set OR
+create a fresh key for the new workflow.
+
+Anonymous callers see `401` (caught by `requireApiKey`), not 403 —
+the tier/scope gates only run after authentication succeeds.
 
 ## `404 Not Found`
 
