@@ -100,6 +100,13 @@ export function Layout() {
           >
             Blog
           </a>
+          <a
+            href="https://docs.canadianpoliticaldata.org/developers/"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Developers
+          </a>
           <ShareMenu />
           <a
             className="shell__contact"
