@@ -765,6 +765,14 @@ COMMANDS: dict[str, dict[str, Any]] = {
         "description": "Provincial/territorial legislators via Open North.",
         "cli": "ingest-mlas", "category": "enrichment", "args": [],
     },
+    "ingest-manitoba-mlas": {
+        "description": "MB current MLA roster from Open North Represent (/representatives/manitoba-legislature/). Closes politician_terms.ended_at + flips is_active=false for politicians dropped from the upstream roster (detect_retirements). Run weekly.",
+        "cli": "ingest-manitoba-mlas", "category": "enrichment", "args": [],
+    },
+    "ingest-quebec-mnas": {
+        "description": "QC current MNA roster from Open North Represent (/representatives/quebec-assemblee-nationale/). Closes politician_terms.ended_at + flips is_active=false for politicians dropped from the upstream roster (detect_retirements). Run weekly.",
+        "cli": "ingest-quebec-mnas", "category": "enrichment", "args": [],
+    },
     "ingest-mb-mlas": {
         "description": "Stamp politicians.mb_assembly_slug on existing MB rows; insert any missing MLAs. Prereq for ingest-mb-bills and ingest-mb-hansard.",
         "cli": "ingest-mb-mlas", "category": "enrichment", "args": [],
