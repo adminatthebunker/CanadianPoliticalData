@@ -14,6 +14,7 @@ import { publicRateLimitConfig } from "../../middleware/api-rate-limit.js";
 import { resolvePhotoUrl } from "../../lib/photos.js";
 import { config } from "../../config.js";
 import publicV1SearchRoutes from "./search.js";
+import publicV1ExportsRoutes from "./exports.js";
 
 /**
  * Public developer API surface (/api/public/v1/*).
@@ -188,6 +189,11 @@ export default async function publicV1Routes(app: FastifyInstance) {
   // metadata. Pro-tier routes inside add their own requireApiKey +
   // requireTier('pro') preHandlers.
   await app.register(publicV1SearchRoutes);
+
+  // Phase 1e: bulk-export endpoints over the public-dump artifacts.
+  // requireApiKey + requireScope('read:bulk') gate; same auth seam
+  // as the search routes but orthogonal axis (scope vs tier).
+  await app.register(publicV1ExportsRoutes);
 
   // ── GET /api/public/v1/coverage ───────────────────────────────
   a.get(

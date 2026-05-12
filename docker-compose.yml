@@ -108,6 +108,16 @@ services:
       REPORT_HNSW_EF_SEARCH: ${REPORT_HNSW_EF_SEARCH:-1000}
       REPORTS_RATE_LIMIT_DEFAULT_PER_DAY: ${REPORTS_RATE_LIMIT_DEFAULT_PER_DAY:-5}
       REPORTS_RATE_LIMIT_EXTENDED_PER_DAY: ${REPORTS_RATE_LIMIT_EXTENDED_PER_DAY:-20}
+      # Path inside the container where the public-dump artifacts are
+      # mounted (read-only). Same source directory nginx serves from
+      # /datasets/, exposed here for the read:bulk-scoped public-API
+      # download endpoints (services/api/src/routes/public/exports.ts).
+      PUBLIC_DUMPS_DIR: /srv/datasets
+    volumes:
+      # Same mount nginx uses (line ~466 below) — the /api/public/v1/
+      # exports/* endpoints serve these dump files behind read:bulk
+      # scope auth, in parallel with the anonymous /datasets/ surface.
+      - /media/bunker-admin/Internal/canadian-political-data-backups/public-dumps:/srv/datasets:ro
     restart: unless-stopped
     networks: [sw]
 

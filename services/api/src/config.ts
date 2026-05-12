@@ -26,6 +26,10 @@ const schema = z.object({
   // that we 503 immediately rather than letting users wait minutes.
   PUBLIC_TEI_MAX_CONCURRENT: z.coerce.number().int().positive().default(2),
   PUBLIC_TEI_MAX_QUEUE: z.coerce.number().int().nonnegative().default(6),
+  // Directory the api container reads dump artifacts from. Same path
+  // nginx serves from /datasets/ (mounted in docker-compose.yml).
+  // Unset → /api/public/v1/exports/* respond 503 (feature disabled).
+  PUBLIC_DUMPS_DIR: z.string().optional(),
   // End-user auth (phase 1 magic-link). Unset → /api/v1/auth/* and
   // /api/v1/me/* respond 503 (feature disabled), same ergonomics as
   // ADMIN_TOKEN.
@@ -159,6 +163,7 @@ export const config = (() => {
       maxConcurrent: env.PUBLIC_TEI_MAX_CONCURRENT,
       maxQueue: env.PUBLIC_TEI_MAX_QUEUE,
     },
+    publicDumpsDir: env.PUBLIC_DUMPS_DIR ?? "",
     jwtSecret: env.JWT_SECRET ?? "",
     apiKeyPepper: env.API_KEY_PEPPER ?? "",
     smtp: {
