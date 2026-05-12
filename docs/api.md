@@ -4,6 +4,33 @@ Base URL: `http://<host>/api/v1`
 
 All endpoints return JSON. Pagination: `?page=N&limit=M` where applicable.
 
+> **`/api/v1/search/*` is frozen as v1.0 on 2026-05-12.**
+> New optional query params and response fields may be added without a version bump.
+> Field removals or renames require v2. See **[Stability & Versioning](#stability--versioning)** below.
+
+## Stability & Versioning
+
+The `/api/v1/search/*` surface — `/speeches`, `/speeches/count`, `/politician-quotes`, `/facets`, `/sessions`, `/chunks/:id`, `/meta` — is the canonical search contract. The frontend `/search` page consumes it; saved searches persist filters in this shape; the planned **Public developer API** workstream (`docs/plans/public-developer-api.md`) will derive `/api/public/v1/*` from it. Sign-off date: **2026-05-12**.
+
+**Backward-compatible (allowed within v1.x — no version bump):**
+- New optional query parameters.
+- New response fields (clients should ignore unknown keys).
+- New endpoints under `/api/v1/search/*`.
+- New server-side defaults that don't change observable output for existing requests.
+- Tightening internal performance tuning (HNSW `ef_search`, query-embedding LRU, etc.) when output is unchanged.
+
+**Breaking (require v2):**
+- Removing or renaming any documented field.
+- Changing a documented default in a way that alters observable output (e.g., `min_similarity` server-side default of 0.5, the `/politician-quotes` 0.45 clamp, the `/facets` `?limit` default of 200, the 10,000 `capped` ceiling).
+- Removing an endpoint or removing a value from a previously-permissive enum (e.g., dropping `floor` from `speech_type`).
+- Changing the structural shape of an existing field (e.g., array → scalar).
+
+**Deprecation policy:** any v2 cutover ships with at least **6 months notice** in this doc, in the application changelog, and in a `Sunset` HTTP header on the deprecated endpoint(s). Deprecated fields and endpoints continue to function in full during the notice window.
+
+**Schema source of truth:** `services/api/src/routes/search.ts` — `baseFilterSchema` (filter contract), `searchQuery` (extends with pagination), and `SPEECH_TYPE_VALUES` (the speech-type enum). When the docs and the schema disagree, **the schema wins** and this doc is the bug.
+
+**Auth tiers** are not part of the v1.0 freeze: `/politician-quotes` is auth-gated + rate-limited (60/min) today; everything else is public. Public-developer-API tier annotations (free / dev / pro) live in that workstream's own surface and don't backflow into v1.
+
 ## Politicians
 
 ### `GET /politicians`
@@ -559,3 +586,27 @@ Body: `{ "status": "<status>", "admin_notes"?: "<= 2000 chars or null>" }`. `res
 ```json
 { "ok": true, "db": true }
 ```
+
+## Error responses
+
+Cross-cutting error shapes for the v1.0 search surface (and most other endpoints — Fastify defaults).
+
+**`400 Bad Request`** — zod validation failure or business-logic precondition (e.g., grouped `/speeches` without `q`, `parliament_number` without `session_number`, `/speeches` with neither query nor structural filter). Body is the Fastify default:
+
+```json
+{ "statusCode": 400, "error": "Bad Request", "message": "<zod error or precondition text>" }
+```
+
+**`404 Not Found`** — missing `anchor_chunk_id` (body `{ "statusCode": 404, "error": "Not Found", "message": "anchor_not_found" }`), missing `/chunks/:id`, or owner-gated 404 on `/me/reports/:id` for non-owners (deliberate, not 403, to prevent id-enumeration).
+
+**`429 Too Many Requests`** — only on `/search/politician-quotes` today (limit 60/min keyed on `expand-quotes:<userId>`). Standard `Retry-After` header in seconds.
+
+**`503 Service Unavailable`** — query embedding failed because the TEI service is unreachable or returned non-OK. Fastify `setErrorHandler` (in `services/api/src/index.ts`) maps the internal `EmbeddingServiceUnavailableError` thrown by `encodeQuery()` (in `services/api/src/routes/search.ts`) to a stable code so the frontend can show a "search temporarily unavailable, retry shortly" surface instead of a generic 500:
+
+```json
+{ "code": "embedding_service_unavailable", "message": "<detail>" }
+```
+
+`503` is distinct from a generic 500: the API is up; only the embedding inference path is degraded. Callers should treat it as transient and retry with backoff. The scanner-side ingest pipeline has its own multi-attempt retry layer for the same upstream — `503` here only ever surfaces on interactive search calls.
+
+**`500 Internal Server Error`** — unhandled exception. Bug — please file. Body is the Fastify default with the exception message redacted.
