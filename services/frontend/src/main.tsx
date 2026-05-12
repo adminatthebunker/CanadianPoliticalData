@@ -24,6 +24,7 @@ import CreditsPage from "./pages/CreditsPage";
 import InvoicePage from "./pages/InvoicePage";
 import ReportsListPage from "./pages/ReportsListPage";
 import ApiKeysPage from "./pages/ApiKeysPage";
+import BillingPage from "./pages/BillingPage";
 import ReportViewerPage from "./pages/ReportViewerPage";
 import { AdminLayout } from "./components/AdminLayout";
 import AdminDashboard from "./pages/admin/AdminDashboard";
@@ -75,6 +76,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
           <Route path="account/credits" element={<CreditsPage />} />
           <Route path="account/reports" element={<ReportsListPage />} />
           <Route path="account/api-keys" element={<ApiKeysPage />} />
+          <Route path="account/billing" element={<BillingPage />} />
           <Route path="corrections" element={<CorrectionsPage />} />
           <Route path="admin" element={<AdminLayout />}>
             <Route index element={<AdminDashboard />} />

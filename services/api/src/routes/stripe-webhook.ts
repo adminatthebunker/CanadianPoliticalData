@@ -1,10 +1,12 @@
 import type { FastifyInstance } from "fastify";
 import type Stripe from "stripe";
-import { query } from "../db.js";
+import { query, pool } from "../db.js";
 import {
   isConfigured as stripeIsConfigured,
   constructWebhookEvent,
   getPackBySku,
+  priceIdToPlan,
+  type SubscriptionPlan,
 } from "../lib/stripe.js";
 import { grantStripePurchase } from "../lib/credits.js";
 
@@ -120,8 +122,15 @@ export default async function stripeWebhookRoutes(app: FastifyInstance) {
   });
 }
 
+type WebhookLog = {
+  log: {
+    info: (obj: object, msg: string) => void;
+    warn: (obj: object, msg: string) => void;
+  };
+};
+
 async function dispatchEvent(
-  req: { log: { info: (obj: object, msg: string) => void; warn: (obj: object, msg: string) => void } },
+  req: WebhookLog,
   event: Stripe.Event
 ): Promise<void> {
   switch (event.type) {
@@ -129,9 +138,18 @@ async function dispatchEvent(
       await handleCheckoutCompleted(req, event);
       return;
 
-    // Ignored but acknowledged 200 so Stripe stops retrying. When
-    // phase 2 adds subscriptions (dev-API plan), those event types
-    // get their own case here.
+    // Public dev-API subscription lifecycle (phase 1b). The
+    // checkout.session.completed event also fires for subscription
+    // mode but we let the dedicated subscription events drive the
+    // state machine — they carry the authoritative subscription
+    // object directly.
+    case "customer.subscription.created":
+    case "customer.subscription.updated":
+    case "customer.subscription.deleted":
+      await handleSubscriptionEvent(req, event);
+      return;
+
+    // Ignored but acknowledged 200 so Stripe stops retrying.
     default:
       req.log.info({ type: event.type, id: event.id }, "[stripe-webhook] ignoring event type");
       return;
@@ -227,6 +245,216 @@ async function handleCheckoutCompleted(
       return;
     }
     throw err;
+  }
+}
+
+/**
+ * Subscription lifecycle handler. Backs all three of:
+ *   - customer.subscription.created   (first subscribe / re-subscribe)
+ *   - customer.subscription.updated   (plan change, cancel-at-period-end
+ *                                       toggle, status transition)
+ *   - customer.subscription.deleted   (subscription has actually ended)
+ *
+ * Resolves the user via stripe_customer_id lookup. All sync writes
+ * (subscription_events audit + private.users state + api_keys.tier
+ * auto-promote/demote) happen in one DB transaction so partial state
+ * is impossible. Downstream idempotency: UNIQUE on
+ * subscription_events.stripe_event_id catches double-deliveries even
+ * if the upstream stripe_webhook_events PK dedupe somehow misses.
+ *
+ * Auto-promote: on subscribe (or upgrade), every non-revoked api_key
+ * for the user gets tier=$plan. On subscription.deleted, every
+ * non-revoked api_key gets tier='free'. This keeps api_keys.tier as
+ * the source of truth for the rate-limit middleware — no per-request
+ * join to users.current_plan.
+ *
+ * cancel_at_period_end is NOT a demotion trigger. The user keeps
+ * their tier until subscription.deleted actually fires at period end.
+ * past_due is also not a demotion trigger; Stripe handles dunning
+ * and ultimately fires subscription.deleted if the customer can't
+ * pay.
+ */
+async function handleSubscriptionEvent(
+  req: WebhookLog,
+  event: Stripe.Event,
+): Promise<void> {
+  const sub = event.data.object as Stripe.Subscription;
+  const customerId = typeof sub.customer === "string"
+    ? sub.customer
+    : sub.customer.id;
+
+  const userRow = await query<{ id: string; current_plan: string }>(
+    `SELECT id::text, current_plan
+       FROM private.users WHERE stripe_customer_id = $1`,
+    [customerId],
+  );
+  const user = userRow[0];
+  if (!user) {
+    req.log.warn(
+      { customer_id: customerId, event_id: event.id, event_type: event.type },
+      "[stripe-webhook] subscription event for unknown customer; ignoring",
+    );
+    return;
+  }
+
+  // Resolve target plan from the subscription's first price item.
+  // subscription.items.data[0].price.id should always be present;
+  // missing is a hard error (stripe sent us a malformed event).
+  const priceId = sub.items.data[0]?.price.id;
+  let plan: SubscriptionPlan | "free";
+  if (event.type === "customer.subscription.deleted") {
+    plan = "free";
+  } else {
+    const resolved = priceId ? priceIdToPlan(priceId) : null;
+    if (!resolved) {
+      req.log.warn(
+        { event_id: event.id, price_id: priceId, customer_id: customerId },
+        "[stripe-webhook] subscription event with unknown price id; ignoring",
+      );
+      return;
+    }
+    plan = resolved;
+  }
+
+  // Map Stripe status → our four-state enum. `incomplete` /
+  // `incomplete_expired` map to inactive (the subscribe attempt failed
+  // before the first payment); `unpaid` is treated as past_due.
+  let planStatus: "active" | "past_due" | "canceled" | "inactive";
+  if (event.type === "customer.subscription.deleted") {
+    planStatus = "canceled";
+  } else if (sub.status === "active" || sub.status === "trialing") {
+    planStatus = "active";
+  } else if (sub.status === "past_due" || sub.status === "unpaid") {
+    planStatus = "past_due";
+  } else if (sub.status === "canceled") {
+    planStatus = "canceled";
+  } else {
+    planStatus = "inactive";
+  }
+
+  // current_period_end moved off the Subscription object onto each
+  // SubscriptionItem in newer Stripe API versions. Read it from the
+  // first item — for our single-item subscriptions (one plan price)
+  // these are equivalent.
+  const periodEnd = sub.items.data[0]?.current_period_end;
+  const renewsAt = periodEnd
+    ? new Date(periodEnd * 1000).toISOString()
+    : null;
+  const cancelAtPeriodEnd = Boolean(sub.cancel_at_period_end);
+
+  const eventTypeShort: "created" | "updated" | "canceled" =
+    event.type === "customer.subscription.created" ? "created"
+    : event.type === "customer.subscription.deleted" ? "canceled"
+    : "updated";
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    // Downstream idempotency: UNIQUE on stripe_event_id. If we hit
+    // 23505 here, this exact event was already processed (likely an
+    // out-of-order or post-failure retry that the upstream PK dedupe
+    // didn't catch); just commit the no-op transaction and return.
+    try {
+      await client.query(
+        `INSERT INTO private.subscription_events
+              (user_id, stripe_event_id, event_type,
+               stripe_subscription_id, from_plan, to_plan, metadata)
+            VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)`,
+        [
+          user.id,
+          event.id,
+          eventTypeShort,
+          sub.id,
+          user.current_plan,
+          plan,
+          JSON.stringify({
+            stripe_status: sub.status,
+            cancel_at_period_end: cancelAtPeriodEnd,
+            current_period_end: periodEnd,
+          }),
+        ],
+      );
+    } catch (err) {
+      const code = (err as { code?: string }).code;
+      if (code === "23505") {
+        await client.query("ROLLBACK");
+        req.log.info(
+          { event_id: event.id, type: event.type },
+          "[stripe-webhook] subscription_event already recorded, skipping sync",
+        );
+        return;
+      }
+      throw err;
+    }
+
+    if (event.type === "customer.subscription.deleted") {
+      // Hard demote. Clear all subscription state on the user; flip
+      // every non-revoked api_key back to 'free'.
+      await client.query(
+        `UPDATE private.users
+            SET current_plan          = 'free',
+                plan_status           = 'canceled',
+                plan_canceled_at      = now(),
+                stripe_subscription_id = NULL,
+                plan_renews_at        = NULL,
+                cancel_at_period_end  = false,
+                plan_updated_at       = now()
+          WHERE id = $1`,
+        [user.id],
+      );
+      await client.query(
+        `UPDATE private.api_keys
+            SET tier = 'free',
+                updated_at = now()
+          WHERE user_id = $1 AND revoked_at IS NULL AND tier != 'free'`,
+        [user.id],
+      );
+    } else {
+      // created / updated. Sync the user row in full.
+      await client.query(
+        `UPDATE private.users
+            SET current_plan          = $2,
+                plan_status           = $3,
+                stripe_subscription_id = $4,
+                plan_renews_at        = $5::timestamptz,
+                cancel_at_period_end  = $6,
+                plan_updated_at       = now(),
+                plan_canceled_at      = NULL
+          WHERE id = $1`,
+        [user.id, plan, planStatus, sub.id, renewsAt, cancelAtPeriodEnd],
+      );
+
+      // Auto-promote: only if the subscription is currently providing
+      // service (active/past_due/inactive-but-not-canceled). Past-due
+      // intentionally keeps the tier — Stripe handles dunning, and a
+      // successful retry restores 'active' without churning the keys.
+      if (planStatus === "active" || planStatus === "past_due") {
+        await client.query(
+          `UPDATE private.api_keys
+              SET tier = $2,
+                  updated_at = now()
+            WHERE user_id = $1 AND revoked_at IS NULL AND tier != $2`,
+          [user.id, plan],
+        );
+      }
+    }
+
+    await client.query("COMMIT");
+    req.log.info(
+      {
+        user_id: user.id, event_type: event.type,
+        from_plan: user.current_plan, to_plan: plan,
+        plan_status: planStatus,
+        cancel_at_period_end: cancelAtPeriodEnd,
+      },
+      "[stripe-webhook] subscription state synced",
+    );
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
   }
 }
 

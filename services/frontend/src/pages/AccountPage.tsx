@@ -187,6 +187,14 @@ export default function AccountPage() {
           </span>
           <span className="cpd-auth__tile-arrow" aria-hidden="true">→</span>
         </Link>
+
+        <Link to="/account/billing" className="cpd-auth__tile">
+          <span className="cpd-auth__tile-title">Billing</span>
+          <span className="cpd-auth__tile-sub">
+            Subscribe to dev / pro tiers for higher API rate limits
+          </span>
+          <span className="cpd-auth__tile-arrow" aria-hidden="true">→</span>
+        </Link>
       </nav>
 
       <div className="cpd-auth__footer-row">
