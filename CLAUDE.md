@@ -138,6 +138,23 @@ Public passwordless auth surface. The admin panel piggybacks on this flow via th
 
 The auth pipeline (login token → JWT → CSRF), the IdP-swap seam in `auth-token.ts`, saved searches + alerts worker, the ledger discipline + two-layer Stripe-webhook idempotency, Stripe Tax opt-in, admin credit grants, correction rewards, the rate-limit tier, and the report-generation hold/commit/release flow all live in the **`user-accounts` skill** at `.claude/skills/user-accounts/SKILL.md` — auto-loads when you ask about login, sessions, credits, billing, or reports. Guardrails: `docs/gotchas.md` § Auth & sessions, § Stripe/billing/credits ledger, and § Reports worker & LLM map-reduce.
 
+## Public developer API (`/api/public/v1/*`)
+
+Parallel third-party-facing API surface alongside the internal `/api/v1/*`. **11 endpoints across 5 tags** as of 2026-05-12 (phases 1a + 1b + 1c + 1d + 1e all shipped). Bearer-token authenticated via API keys minted at `/account/api-keys` (HMAC-hashed at rest with `API_KEY_PEPPER`). Two orthogonal authorization axes: **tier** (free / dev $20/mo / pro $200/mo, gates rate limits + paid search) and **scope** (`read:public` implicit / `read:bulk` opt-in, gates bulk export). Permissive CORS (`origin: *`) — public surface, bearer-not-cookie auth.
+
+Key files:
+- `services/api/src/routes/public/index.ts` — plugin root; CORS + onRequest hook + Swagger.
+- `services/api/src/routes/public/search.ts` — 6 search endpoints, pro-tier-gated TEI semaphore via `app.inject` proxy to internal handlers.
+- `services/api/src/routes/public/exports.ts` — 2 bulk-export endpoints, `read:bulk`-scoped, file streams from `/srv/datasets` mount.
+- `services/api/src/middleware/api-key-auth.ts` — `requireApiKey` / `optionalApiKey`.
+- `services/api/src/middleware/api-tier-gate.ts` — `requireTier('dev'|'pro')`.
+- `services/api/src/middleware/api-scope-gate.ts` — `requireScope('read:bulk')`.
+- `services/api/src/middleware/api-rate-limit.ts` — per-tier rate-limit resolver.
+- `services/api/src/lib/api-key-token.ts` — `cpd_<env>_<random>_<checksum>` mint/verify.
+- `services/api/src/lib/tei-semaphore.ts` — `withPublicTeiSlot` admission control.
+
+The interactive reference at `/api/public/v1/docs/` (Swagger UI) and the prose guide at `mkdocs/docs/developers/` are the canonical end-user references — derive from those, not from `docs/api.md` § Public API which is the operator-side overview only. Plan + design history: `docs/plans/public-developer-api.md`. Operations: `docs/operations.md` § Public developer API.
+
 ## Blog (MkDocs Material)
 
 Posts live under `mkdocs/docs/blog/posts/<slug>.md`, rendered by the MkDocs Material blog plugin and served at `docs.canadianpoliticaldata.org/blog/`. The post-shape, draft workflow, publish checklist, and file map live in the **`blog-post` skill** at `.claude/skills/blog-post/SKILL.md` — that skill auto-loads when you ask to write or publish a post. Guardrails for what doesn't belong in the blog are in `docs/gotchas.md` § Blog & MkDocs.

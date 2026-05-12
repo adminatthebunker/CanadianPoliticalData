@@ -116,6 +116,66 @@ Adding a new command requires updates in **two** spots (see CLAUDE.md § Admin p
 
 `sw-scanner-jobs` is a long-running container. On boot it requeues any `status='running'` row older than `JOBS_STUCK_MINUTES` (default 10 min) with an `error='recovered after worker restart'` note. That makes `docker compose restart scanner-jobs` safe even mid-job — the current run is abandoned, the DB row flips to queued, the next worker picks it up.
 
+### Public developer API (`/api/public/v1/*`)
+
+Operational notes for the third-party-facing API surface that ships in dev-API phases 1a-1e. The full guide for end-users lives at `docs.canadianpoliticaldata.org/developers/`; this section is operator-side concerns.
+
+**Required env vars** (all in `.env`, passed through `docker-compose.yml` to the api container):
+
+| Var | Purpose | Default | Required? |
+|---|---|---|---|
+| `API_KEY_PEPPER` | HMAC-SHA256 key used to (a) hash full API tokens for at-rest storage in `private.api_keys.token_hash` and (b) compute the 6-char checksum at the end of each minted token. | unset | Yes for `/api/public/v1/*` + `/me/api-keys`; unset → 503 |
+| `STRIPE_PRICE_ID_PLAN_DEV` | Stripe recurring price id for the $20/mo developer tier. | unset | For paid subscriptions only |
+| `STRIPE_PRICE_ID_PLAN_PRO` | Stripe recurring price id for the $200/mo pro tier. | unset | For paid subscriptions only |
+| `PUBLIC_TEI_MAX_CONCURRENT` | Max simultaneous TEI embed requests on `/api/public/v1/search/*`. | `2` | No (default safe) |
+| `PUBLIC_TEI_MAX_QUEUE` | Max queued requests before refusing with 503. Total slots = concurrent + queue. | `6` | No (default safe) |
+| `PUBLIC_DUMPS_DIR` | Directory inside the api container where dump artifacts are mounted (read-only, parallel of nginx's `/srv/datasets`). | unset | Yes for `/api/public/v1/exports/*`; unset → 503 |
+
+Rotating `API_KEY_PEPPER` invalidates every issued API key in one move (parallel of rotating `JWT_SECRET` to revoke every session). Treat it like any other secret — set once, rotate only with intent.
+
+**Generate a fresh `API_KEY_PEPPER`** with:
+
+```bash
+openssl rand -hex 32
+```
+
+**Volume mount for the bulk-export endpoints** (already in `docker-compose.yml`; here for reference if you re-architect storage):
+
+```yaml
+api:
+  volumes:
+    - /media/bunker-admin/Internal/canadian-political-data-backups/public-dumps:/srv/datasets:ro
+```
+
+The same directory is read-only mounted into nginx for the anonymous `/datasets/` autoindex (`docker-compose.yml` ~line 466). The api-side mount adds programmatic + auth-gated access to the same files via `/api/public/v1/exports/*`.
+
+**Per-tier rate limits** (per-key per-hour, in `services/api/src/middleware/api-rate-limit.ts:13-17`):
+
+| Tier | Limit | Tunable? |
+|---|---|---|
+| Anonymous (no key) | 30 / hr per IP | Hardcoded in middleware |
+| Free (any registered key) | 60 / hr per key | Hardcoded |
+| Developer ($20/mo) | 1,000 / hr per key | Hardcoded |
+| Pro ($200/mo) | 10,000 / hr per key | Hardcoded |
+
+To change a tier limit, edit `TIER_HOURLY` in `api-rate-limit.ts` and rebuild api. No env var.
+
+**Manually flipping a key's tier** (for testing or comp grants):
+
+```sql
+UPDATE private.api_keys SET tier = 'pro' WHERE prefix = 'cpd_live_…';
+```
+
+The change is picked up on the next request — no restart needed.
+
+**Manually adding a scope** (for testing `read:bulk` without going through the self-service flow):
+
+```sql
+UPDATE private.api_keys
+   SET scopes = ARRAY['read:public', 'read:bulk']::text[]
+ WHERE prefix = 'cpd_live_…';
+```
+
 ### Agent-driven enrichment (paid LLM, no default schedule)
 
 Two scanner commands invoke Anthropic Claude Sonnet 4.6 with the `web_search_20250305` tool to discover politician metadata that no public roster exposes:

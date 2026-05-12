@@ -582,24 +582,55 @@ Body: `{ "status": "<status>", "admin_notes"?: "<= 2000 chars or null>" }`. `res
 
 ## Public API (`/api/public/v1/*`)
 
-A separate, third-party-friendly tree under `/api/public/v1/*`, derived from the v1.0 internal contract. Phase 1a (shipped 2026-05-12) exposes three read-only endpoints behind per-key rate limiting; Stripe-subscription paid tiers (dev / pro), OpenAPI emission, and the `/developers` docs site land in phases 1b / 1c. Plan: [`docs/plans/public-developer-api.md`](./plans/public-developer-api.md).
+A separate, third-party-friendly tree under `/api/public/v1/*`, derived from the v1.0 internal contract. **Eleven endpoints across five tags** as of 2026-05-12 (phases 1a + 1b + 1c + 1d + 1e). Plan: [`docs/plans/public-developer-api.md`](./plans/public-developer-api.md).
 
-**Auth.** Bearer-token via `Authorization: Bearer cpd_<env>_<random>_<checksum>`. Tokens are minted at `/account/api-keys` (signed-in users only) — see `services/api/src/routes/keys.ts`. The full token is shown once at create / rotate; storage is HMAC-hashed.
+**The canonical reference is auto-generated:**
+- **Swagger UI** (interactive, "Try it out"): [`/api/public/v1/docs/`](https://canadianpoliticaldata.org/api/public/v1/docs/)
+- **OpenAPI 3.0.3 JSON**: [`/api/public/v1/docs/json`](https://canadianpoliticaldata.org/api/public/v1/docs/json) (and `/yaml`)
+- **End-user developer guide**: [`docs.canadianpoliticaldata.org/developers/`](https://docs.canadianpoliticaldata.org/developers/)
 
-**Rate limits (per hour).** Free tier (a registered key) → 60 req/hr per key. Anonymous (no key) → 30 req/hr per source IP. **Dev** ($20/mo, 1,000 req/hr) and **Pro** ($200/mo, 10,000 req/hr) tiers are reachable via subscription at `/account/billing`. Subscribing auto-promotes ALL of a user's existing API keys to the new tier — no need to mint new keys. Cancel at period end keeps the higher tier until the renewal date. 429 responses include the standard `Retry-After` header; rate-limited authed callers get a `private.api_key_events` audit row with `event_type='rate_limited'`.
+This section is the operator-side overview only; the auto-generated specs above are the source of truth for endpoint contracts.
+
+**Auth.** Bearer-token via `Authorization: Bearer cpd_<env>_<random>_<checksum>`. Tokens are minted at `/account/api-keys` (signed-in users only) — see `services/api/src/routes/keys.ts`. The full token is shown once at create / rotate; storage is HMAC-hashed with `API_KEY_PEPPER`.
+
+**Two orthogonal authorization axes:**
+- **Tier** (billing level): `free` / `dev` ($20/mo) / `pro` ($200/mo). Governs rate limits + access to expensive-by-default endpoints. Subscribe at `/account/billing`. Subscribing auto-promotes ALL of a user's existing keys to the new tier; cancellation keeps the higher tier until period end.
+- **Scope** (capability flags): `read:public` (implicit baseline on every key) / `read:bulk` (opt-in at create time). Governs access to opt-in surfaces like bulk export.
+
+**Rate limits (per hour, per key or per IP for anonymous):**
+
+| Tier | Limit | Bucket |
+|---|---|---|
+| Anonymous | 30 / hr | Source IP |
+| Free | 60 / hr | API key id |
+| Developer | 1,000 / hr | API key id |
+| Pro | 10,000 / hr | API key id |
+
+429 responses include `Retry-After`; rate-limited authed callers get a `private.api_key_events` row with `event_type='rate_limited'`.
+
+**TEI semaphore on paid search.** The pro-tier search endpoints (`/search/speeches`, `/search/speeches/count`, `/search/facets`) share a separate concurrency budget — max 2 active embed requests + 6 queued = 8 slots total. Past that, 503 with `code='search_overloaded'` + `Retry-After: 5`. Independent of the per-tier hourly rate limit.
 
 **CORS.** `Access-Control-Allow-Origin: *` for the entire `/api/public/v1/*` tree (vs the credentialed restricted CORS on `/api/v1/*`). Public tokens are bearer-auth, not cookie-auth — wildcard origin is intentional and browser-accepted.
 
-**Endpoints (phase 1a):**
+**Endpoint inventory:**
 
-### `GET /api/public/v1/coverage`
-Mirror of internal `/api/v1/coverage`. Returns `{ jurisdictions: [...], summary: {...} }`. Optional `?status=live|partial|blocked|none` filter. `Cache-Control: public, max-age=300`.
+| Endpoint | Tier | Scope | Notes |
+|---|---|---|---|
+| `GET /coverage` | any | read:public | Mirror of internal `/api/v1/coverage`; jurisdictions + summary |
+| `GET /jurisdiction-sources` | any | read:public | Flat per-jurisdiction list, no summary rollup |
+| `GET /politicians/:id` | any | read:public | Politician + websites + boundary GeoJSON |
+| `GET /search/sessions` | any | read:public | Parliament + session catalog (no TEI) |
+| `GET /search/chunks/:id` | any | read:public | Anchor-chunk lookup by UUID (no TEI) |
+| `GET /search/meta` | any | read:public | Backfill-progress meta (no TEI) |
+| `GET /search/speeches` | **pro** | read:public | Hybrid HNSW + BM25; TEI semaphore |
+| `GET /search/speeches/count` | **pro** | read:public | Count-only sibling; TEI semaphore |
+| `GET /search/facets` | **pro** | read:public | Aggregations over top-N; TEI semaphore |
+| `GET /exports/dumps` | any | **read:bulk** | List current `pg_dump --schema=public` artifacts |
+| `GET /exports/dumps/:filename` | any | **read:bulk** | Stream a specific dump file |
 
-### `GET /api/public/v1/jurisdiction-sources`
-Flat per-jurisdiction list — same underlying `jurisdiction_sources` table as `/coverage`, without the summary rollup. `Cache-Control: public, max-age=300`.
+**Implementation pattern (search routes only):** the public search handlers proxy to the corresponding internal `/api/v1/search/*` route via Fastify's `app.inject()` in-process pipeline. The internal handlers in `services/api/src/routes/search.ts` remain the single source of truth for search semantics; the public surface is a thin tier-gate + scope-gate + semaphore wrapper. Behavior changes there propagate to the public surface for free.
 
-### `GET /api/public/v1/politicians/:id`
-Mirror of internal `/api/v1/politicians/:id`. UUID path param; 404 on missing or malformed id. Returns `{ politician, websites, boundary }` — politician row + active websites with latest `infrastructure_scans` join + constituency boundary GeoJSON when `constituency_id` is set. `Cache-Control: public, max-age=60`.
+**Bulk-export files.** The same `pg_dump --schema=public` archives nginx serves anonymously at [`/datasets/`](https://canadianpoliticaldata.org/datasets/). The api container mounts the same directory read-only at `/srv/datasets` (configured via `PUBLIC_DUMPS_DIR`); the `/exports/dumps` endpoints adds auth + per-key metering on top of the existing artifact pipeline. See [`docs/operations.md`](./operations.md) § Public developer API for env-var details.
 
 ## Health
 
