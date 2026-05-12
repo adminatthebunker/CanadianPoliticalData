@@ -1,6 +1,6 @@
 # Timeline / direction
 
-Where the project is going, in priority order. Last reviewed 2026-05-06 (re-synced after MB + NL chamber-parser staff/group classification).
+Where the project is going, in priority order. Last reviewed 2026-05-12 (re-synced after websites-provenance ship — infra only, agent not yet enabled).
 
 This is the **what we're building next** doc. For the **why**, read [`goals.md`](./goals.md). For the **how**, read the per-feature plan under [`plans/`](./plans/) linked from each item below. When this file disagrees with the plan docs, the plan docs win — keep this one short and reorder it as priorities shift.
 
@@ -94,7 +94,11 @@ Not horizon-bound. These need attention every cycle regardless of what else is i
 
 ---
 
-## Recently shipped (last three cycles, 2026-04-26 → 2026-05-06)
+## Recently shipped (last three cycles, 2026-04-26 → 2026-05-12)
+
+### Cycle 2026-05-12
+
+- **Websites-provenance + Tier-3 Sonnet discovery agent + `/admin/websites` review queue** (commits `10c9f75` + `930f5aa`). Mirrors the `politician_socials` provenance shape (migration `0026`) onto the `websites` table so agent-discovered politician sites become auditable and routable through a low-confidence review queue. **Migration 0047** adds six columns to `websites` (`source` / `confidence` / `evidence_url` / `flagged_low_confidence` / `discovered_at` / `last_verified_at`), a partial index on flagged rows, and a `v_websites_missing` coverage view (politicians with no active website row AND no denormalised `personal_url` / `official_url`). **`websites_agent.py`** is the Sonnet 4.6 + `web_search_20250305` agent paralleling `socials_agent.py` — hard cap 3 searches per politician, dual confidence thresholds (≥0.85 auto-promote / 0.60–0.85 flag for review / <0.60 reject), batch of 10 politicians with `max_batches=20` default. **`websites.py`** is the canonicalize+upsert helper (lowercases hostname, strips `www.` prefix, drops tracking params, rejects non-http(s) schemes). **`agent-missing-websites`** Click command registered in `__main__.py`, whitelisted in both `jobs_catalog.py` and `admin.ts COMMAND_CATALOG` (two-place whitelist per CLAUDE.md § Admin panel). **`/admin/websites`** review UI mirrors `/admin/socials` byte-for-byte — same `useAdminFetch` + `adminFetch` pattern, same stats card + paginated flagged-row table + per-row approve/reject buttons; field swaps are `platform→label`, `handle→hostname`. Four new backend routes in `admin.ts` paralleling the socials trio (`GET /websites/coverage`, `GET /websites/flagged`, `POST /websites/:id/approve`, `POST /websites/:id/reject`); `AdminWebsitesReview.tsx` page + `main.tsx` route + `AdminLayout.tsx` NavLink. **State on ship:** 354 agent-discovered rows already existed in the table from prior on-demand runs (236 `agent_sonnet` + 118 `agent_session`); 144 of those are `flagged_low_confidence=true` and sitting in the new review queue ready for an operator pass. **Agent not enabled — no `scanner_schedules` entry seeded.** Per-run cost is ~$0.35–$0.50 on Anthropic (~2K politicians × 3 searches × Sonnet pricing). To enable a weekly cadence, paste one INSERT into psql (see [`docs/operations.md`](./operations.md) § Agent-driven enrichment). Pre-req: fix Roster hygiene first or ~25–30% of QC + MB + SK budget will chase ex-politicians. **Drive-by fix:** `socials_agent.py` search budget tightened 3 → 2 per (politician, platform) with explicit `max_uses` on the `web_search_20250305` tool — keeps the existing socials agent from spiralling on the same constraint as the new websites agent.
 
 ### Cycle 2026-05-06
 

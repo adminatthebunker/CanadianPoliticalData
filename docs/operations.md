@@ -116,6 +116,35 @@ Adding a new command requires updates in **two** spots (see CLAUDE.md § Admin p
 
 `sw-scanner-jobs` is a long-running container. On boot it requeues any `status='running'` row older than `JOBS_STUCK_MINUTES` (default 10 min) with an `error='recovered after worker restart'` note. That makes `docker compose restart scanner-jobs` safe even mid-job — the current run is abandoned, the DB row flips to queued, the next worker picks it up.
 
+### Agent-driven enrichment (paid LLM, no default schedule)
+
+Two scanner commands invoke Anthropic Claude Sonnet 4.6 with the `web_search_20250305` tool to discover politician metadata that no public roster exposes:
+
+| Command | Discovers | Search cap | Approx. cost per full sweep |
+|---|---|---|---|
+| `agent-missing-socials` | Twitter / IG / Bluesky / etc. handles | 2 per (politician, platform) | ~$0.30–$0.45 per ~2K politicians |
+| `agent-missing-websites` | Personal / campaign / party-lander URLs | 3 per politician | ~$0.35–$0.50 per ~2K politicians |
+
+Both require `ANTHROPIC_API_KEY` in the scanner's env. Both write to the `*_provenance` columns (`source='agent_sonnet'`, `confidence` 0.60–1.00, `flagged_low_confidence=true` between 0.60 and 0.85). Anything ≥0.85 is auto-promoted; flagged rows land in the operator review queue at `/admin/socials` and `/admin/websites` respectively.
+
+**Neither is scheduled by default.** They're admin-runnable on-demand via `/admin/jobs`, or via the scanner CLI. When budget allows, enable a weekly cadence with a single INSERT:
+
+```sql
+-- Weekly websites discovery, Mon 06:00 UTC
+INSERT INTO scanner_schedules (command, args, cron, enabled)
+VALUES ('agent-missing-websites',
+        '{"batch_size": 10, "max_batches": 20, "model": "claude-sonnet-4-6"}'::jsonb,
+        '0 6 * * 1', true);
+
+-- Weekly socials discovery, Mon 07:00 UTC (offset to spread Anthropic billing)
+INSERT INTO scanner_schedules (command, args, cron, enabled)
+VALUES ('agent-missing-socials',
+        '{"batch_size": 8, "max_batches": 15, "model": "claude-sonnet-4-6"}'::jsonb,
+        '0 7 * * 1', true);
+```
+
+Roster-hygiene caveat: until the QC/MB/SK enrichers close `politician_terms.ended_at` on defeated/retired members + flip `politicians.is_active`, both agents will spend Sonnet credits chasing handles for ex-politicians. Estimated waste: ~25–30% of QC + MB + SK candidates per run. Fix that first if budget is tight (see `TODO.md` § Always-on → *Roster hygiene*).
+
 ## Billing rail (premium reports phase 1a)
 
 Full design + deploy sequence in `docs/plans/premium-reports.md`. Operational quick-ref below.
