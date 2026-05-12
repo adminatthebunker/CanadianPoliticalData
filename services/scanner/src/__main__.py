@@ -2490,6 +2490,7 @@ def cmd_ingest_sk_mlas(ctx: click.Context, parliaments: str) -> None:
             f"entries={stats.entries_parsed} "
             f"inserted={stats.politicians_inserted} "
             f"updated={stats.politicians_updated} "
+            f"retired={stats.politicians_retired} "
             f"failures={len(stats.failures)}"
         )
         if stats.failures:

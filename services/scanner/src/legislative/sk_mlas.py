@@ -116,6 +116,7 @@ class IngestStats:
     entries_parsed: int = 0
     politicians_inserted: int = 0
     politicians_updated: int = 0
+    politicians_retired: int = 0
     failures: list[str] = dc_field(default_factory=list)
 
 
@@ -237,6 +238,99 @@ async def _upsert_member(
 # ── Public entry point ──────────────────────────────────────────────
 
 
+# Current SK chamber is 61 seats. We require the parsed roster to be at
+# least this large before flipping anyone retired — the Hansard speaker
+# index only lists members who have spoken, so a transient fetch issue or
+# a sitting-but-silent MLA early in a parliament could leave the set
+# under-populated. Below the floor we skip the retirement pass entirely.
+SK_CURRENT_PARLIAMENT = 30
+SK_RETIREMENT_ROSTER_FLOOR = 55
+
+
+async def _detect_sk_retirements(
+    db: Database, current_ids: set[str], stats: IngestStats,
+) -> None:
+    """Mark SK politicians retired when they're active in the DB but were
+    not in the current-parliament roster snapshot.
+
+    Mirrors the body of compare_politicians.detect_retirements but
+    identifies the candidate set by (level, province_territory, is_active)
+    rather than by source_id prefix — SK politicians are keyed on
+    sk_assembly_slug with no opennorth source_id, so the canonical helper
+    can't see them.
+    """
+    if len(current_ids) < SK_RETIREMENT_ROSTER_FLOOR:
+        msg = (
+            f"retirement pass skipped — current roster only "
+            f"{len(current_ids)} members (floor {SK_RETIREMENT_ROSTER_FLOOR}); "
+            f"likely fetch issue or sparse speaker index"
+        )
+        log.warning("sk_mlas: %s", msg)
+        stats.failures.append(msg)
+        return
+
+    rows = await db.fetch(
+        """
+        SELECT id::text AS id, name, party, elected_office, level,
+               province_territory, constituency_id
+          FROM politicians
+         WHERE level = 'provincial'
+           AND province_territory = 'SK'
+           AND is_active = true
+        """,
+    )
+    retired = [r for r in rows if r["id"] not in current_ids]
+    if not retired:
+        return
+
+    log.info("sk_mlas: marking %d SK politician(s) retired", len(retired))
+
+    for row in retired:
+        pid = row["id"]
+        old_value = {
+            "name": row.get("name"),
+            "party": row.get("party"),
+            "office": row.get("elected_office"),
+            "level": row.get("level"),
+            "province_territory": row.get("province_territory"),
+            "constituency_id": row.get("constituency_id"),
+        }
+        try:
+            await db.execute(
+                """
+                INSERT INTO politician_changes
+                  (politician_id, change_type, old_value, new_value, severity)
+                VALUES ($1, 'retired', $2, NULL, 'notable')
+                """,
+                pid,
+                orjson.dumps(old_value).decode(),
+            )
+            await db.execute(
+                """
+                UPDATE politician_terms
+                   SET ended_at = now()
+                 WHERE politician_id = $1
+                   AND ended_at IS NULL
+                """,
+                pid,
+            )
+            await db.execute(
+                """
+                UPDATE politicians
+                   SET is_active = false,
+                       updated_at = now()
+                 WHERE id = $1
+                """,
+                pid,
+            )
+            stats.politicians_retired += 1
+        except Exception as exc:  # pragma: no cover - defensive
+            log.exception(
+                "sk_mlas: failed to retire politician %s: %s", pid, exc,
+            )
+            stats.failures.append(f"retire failed for {pid}: {exc}")
+
+
 async def ingest_sk_mlas(
     db: Database, *, parliaments: Optional[list[int]] = None,
 ) -> IngestStats:
@@ -245,9 +339,18 @@ async def ingest_sk_mlas(
 
     Re-runs are idempotent (UPSERT keyed on sk_assembly_slug). Cabinet
     roles update; ``extras`` merges to preserve prior keys.
+
+    When the current parliament (30L) is in the parliaments list, runs a
+    retirement pass at the end: any SK politician with is_active=true who
+    is NOT in the freshly-parsed current roster gets soft-closed (open
+    politician_terms.ended_at set to NOW(), is_active flipped false,
+    politician_changes audit row written). The pass is gated on
+    SK_RETIREMENT_ROSTER_FLOOR so a sparse fetch can't accidentally
+    retire sitting members.
     """
     stats = IngestStats()
-    parls = parliaments or [30]
+    parls = parliaments or [SK_CURRENT_PARLIAMENT]
+    current_roster_ids: set[str] = set()
 
     async with httpx.AsyncClient(headers=HEADERS, follow_redirects=True) as client:
         for parliament in parls:
@@ -263,14 +366,20 @@ async def ingest_sk_mlas(
                 parliament, len(members),
             )
             for m in members:
-                await _upsert_member(db, m, parliament, stats)
+                pid = await _upsert_member(db, m, parliament, stats)
+                if pid and parliament == SK_CURRENT_PARLIAMENT:
+                    current_roster_ids.add(pid)
             # Polite gap between parliaments.
             await asyncio.sleep(0.3)
 
+    if SK_CURRENT_PARLIAMENT in parls:
+        await _detect_sk_retirements(db, current_roster_ids, stats)
+
     log.info(
-        "sk_mlas: parliaments=%d entries=%d inserted=%d updated=%d failures=%d",
+        "sk_mlas: parliaments=%d entries=%d inserted=%d updated=%d "
+        "retired=%d failures=%d",
         stats.parliaments_fetched, stats.entries_parsed,
         stats.politicians_inserted, stats.politicians_updated,
-        len(stats.failures),
+        stats.politicians_retired, len(stats.failures),
     )
     return stats
