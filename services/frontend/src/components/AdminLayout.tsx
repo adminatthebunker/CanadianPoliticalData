@@ -77,6 +77,9 @@ export function AdminLayout() {
           <NavLink to="/admin/socials" className={({ isActive }) => (isActive ? "active" : "")}>
             Socials
           </NavLink>
+          <NavLink to="/admin/websites" className={({ isActive }) => (isActive ? "active" : "")}>
+            Websites
+          </NavLink>
           <NavLink to="/admin/corrections" className={({ isActive }) => (isActive ? "active" : "")}>
             Corrections
             {pendingCorrections > 0 && (

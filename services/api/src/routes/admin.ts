@@ -1036,6 +1036,109 @@ export default async function adminRoutes(app: FastifyInstance) {
     return reply.code(204).send();
   });
 
+  // ── Websites audit + review queue ──────────────────────────────
+  // Mirrors the socials review queue. The Tier-3 Sonnet websites agent
+  // (agent-missing-websites) lands rows with flagged_low_confidence=true
+  // when self-reported confidence is in the 0.60–0.85 band; this surface
+  // is where an operator approves (clear flag) or rejects (delete) them.
+  // Politician-owned rows only — the websites table is polymorphic but
+  // organisations aren't part of this review surface yet.
+  app.get("/websites/coverage", async () => {
+    const [total, withAny, sources, labels] = await Promise.all([
+      queryOne<{ n: number }>(
+        `SELECT COUNT(*)::int AS n FROM politicians WHERE is_active = true`),
+      queryOne<{ n: number }>(
+        `SELECT COUNT(DISTINCT owner_id)::int AS n
+           FROM websites
+          WHERE owner_type = 'politician'
+            AND is_active = true
+            AND owner_id IN (SELECT id FROM politicians WHERE is_active = true)`),
+      query<{ source: string; n: number; flagged: number }>(
+        `SELECT COALESCE(source, '<null>') AS source,
+                COUNT(*)::int AS n,
+                COUNT(*) FILTER (WHERE flagged_low_confidence = true)::int AS flagged
+           FROM websites
+          WHERE owner_type = 'politician'
+          GROUP BY source
+          ORDER BY n DESC`),
+      query<{ label: string; n: number; flagged: number }>(
+        `SELECT COALESCE(label, '<null>') AS label,
+                COUNT(*)::int AS n,
+                COUNT(*) FILTER (WHERE flagged_low_confidence = true)::int AS flagged
+           FROM websites
+          WHERE owner_type = 'politician'
+          GROUP BY label
+          ORDER BY n DESC`),
+    ]);
+    return {
+      total_active: total?.n ?? 0,
+      with_any_website: withAny?.n ?? 0,
+      by_source: sources,
+      by_label: labels,
+    };
+  });
+
+  const websitesFlaggedListQuery = z.object({
+    label: z.string().optional(),
+    limit: z.coerce.number().int().min(1).max(500).default(50),
+    offset: z.coerce.number().int().min(0).default(0),
+  });
+
+  app.get("/websites/flagged", async (req, reply) => {
+    const q = websitesFlaggedListQuery.safeParse(req.query);
+    if (!q.success) return reply.badRequest(q.error.message);
+    const { label, limit, offset } = q.data;
+    const params: (string | number | boolean | null | string[])[] = [];
+    const where: string[] = [
+      "w.flagged_low_confidence = true",
+      "w.owner_type = 'politician'",
+    ];
+    if (label) { params.push(label); where.push(`w.label = $${params.length}`); }
+    params.push(limit); const limIdx = params.length;
+    params.push(offset); const offIdx = params.length;
+    const rows = await query(
+      `SELECT w.id, w.owner_id AS politician_id, w.label, w.url, w.hostname,
+              w.source, w.confidence::float AS confidence,
+              w.evidence_url, w.discovered_at,
+              p.name AS politician_name,
+              p.level, p.province_territory, p.party, p.constituency_name
+         FROM websites w
+         JOIN politicians p ON p.id = w.owner_id
+        WHERE ${where.join(" AND ")}
+        ORDER BY w.confidence ASC, w.discovered_at DESC NULLS LAST
+        LIMIT $${limIdx} OFFSET $${offIdx}`,
+      params as any,
+    );
+    return { items: rows };
+  });
+
+  app.post("/websites/:id/approve", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!/^[0-9a-f-]{36}$/i.test(id)) return reply.notFound();
+    const row = await queryOne(
+      `UPDATE websites
+          SET flagged_low_confidence = false,
+              confidence = GREATEST(confidence, 1.0),
+              updated_at = now()
+        WHERE id = $1
+        RETURNING id, flagged_low_confidence, confidence`,
+      [id] as any,
+    );
+    if (!row) return reply.notFound();
+    return row;
+  });
+
+  app.post("/websites/:id/reject", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!/^[0-9a-f-]{36}$/i.test(id)) return reply.notFound();
+    const row = await queryOne(
+      `DELETE FROM websites WHERE id = $1 RETURNING id`,
+      [id] as any,
+    );
+    if (!row) return reply.notFound();
+    return reply.code(204).send();
+  });
+
   // ── Corrections review ──────────────────────────────────────────
   // List / triage / resolve user-submitted corrections. Deep-linking
   // to the subject is the frontend's responsibility (see

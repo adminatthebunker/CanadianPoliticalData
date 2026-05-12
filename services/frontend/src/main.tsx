@@ -30,6 +30,7 @@ import AdminJobs from "./pages/admin/AdminJobs";
 import AdminJobDetail from "./pages/admin/AdminJobDetail";
 import AdminSchedules from "./pages/admin/AdminSchedules";
 import AdminSocialsReview from "./pages/admin/AdminSocialsReview";
+import AdminWebsitesReview from "./pages/admin/AdminWebsitesReview";
 import AdminCorrections from "./pages/admin/AdminCorrections";
 import AdminUsers from "./pages/admin/AdminUsers";
 import AdminReports from "./pages/admin/AdminReports";
@@ -79,6 +80,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
             <Route path="jobs/:id" element={<AdminJobDetail />} />
             <Route path="schedules" element={<AdminSchedules />} />
             <Route path="socials" element={<AdminSocialsReview />} />
+            <Route path="websites" element={<AdminWebsitesReview />} />
             <Route path="corrections" element={<AdminCorrections />} />
             <Route path="users" element={<AdminUsers />} />
             <Route path="reports" element={<AdminReports />} />
