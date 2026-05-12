@@ -459,6 +459,14 @@ const COMMAND_CATALOG = [
       { name: "model", type: "str", required: false, help: "Override the default Claude model." },
       { name: "dry_run", type: "bool", required: false, help: "Print candidate hits without inserting." },
     ] },
+  { key: "agent-missing-websites", category: "enrichment",
+    description: "Tier-3: Sonnet agent + web_search finds politician personal/party websites. Search cap = 3 per politician. Requires ANTHROPIC_API_KEY.",
+    args: [
+      { name: "batch_size", type: "int", required: false, default: 10, help: "Politicians per agent call (max 25)." },
+      { name: "max_batches", type: "int", required: false, default: 20, help: "Hard cap on agent calls per run." },
+      { name: "model", type: "str", required: false, help: "Override the default Claude model." },
+      { name: "dry_run", type: "bool", required: false, help: "Print candidate hits without inserting." },
+    ] },
   { key: "verify-socials", category: "enrichment",
     description: "Liveness check on politician_socials URLs. Writes social_dead change rows on live→dead flips.",
     args: [

@@ -888,6 +888,20 @@ COMMANDS: dict[str, dict[str, Any]] = {
              "help": "Print candidate hits without inserting."},
         ],
     },
+    "agent-missing-websites": {
+        "description": "Tier-3: Sonnet agent + web_search finds politician personal/party websites. Search cap = 3 per politician. Requires ANTHROPIC_API_KEY.",
+        "cli": "agent-missing-websites", "category": "enrichment",
+        "args": [
+            {"name": "batch_size", "type": "int", "required": False, "default": 10,
+             "help": "Politicians per agent call (max 25)."},
+            {"name": "max_batches", "type": "int", "required": False, "default": 20,
+             "help": "Hard cap on agent calls per run."},
+            {"name": "model", "type": "str", "required": False,
+             "help": "Override the default Claude model."},
+            {"name": "dry_run", "type": "bool", "required": False,
+             "help": "Print candidate hits without inserting."},
+        ],
+    },
     "verify-socials": {
         "description": "Liveness check on politician_socials URLs. Writes social_dead change rows on live→dead flips.",
         "cli": "verify-socials", "category": "enrichment",

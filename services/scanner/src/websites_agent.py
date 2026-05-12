@@ -1,33 +1,23 @@
-"""Tier-3 Sonnet agent for discovering politician social handles.
+"""Tier-3 Sonnet agent for discovering politician personal/party websites.
 
-Invokes `claude-sonnet-4-6` via the Anthropic API with the built-in
-`web_search_20250305` tool. One agent call handles a *batch* of
-politicians (default 10) to amortise the system prompt. The agent
-returns structured JSON; we parse it and route through `upsert_social`
-with `source='agent_sonnet'`.
+Mirror of `socials_agent.py`. One agent call handles a batch of
+politicians (default 10). The Anthropic web_search tool is hard-capped at
+3 searches per politician via the `max_uses` parameter on the tool
+definition itself — the prompt's "≤3 searches" guidance is reinforced by
+that hard cap so the model can't spiral.
 
-Cost guardrails:
+Output shape per politician (the agent returns the best single hit):
 
-  * --batch-size  — politicians per call (default 10, max 25)
-  * --max-batches — hard cap on calls per invocation (default 20)
-  * --dry-run     — write candidates to stdout; do not insert
+  kind        — "personal" (own site / campaign / constituency office),
+                "campaign" (explicit campaign domain),
+                "party_lander" (party's MP/MLA listing page that names them);
+                fallback when no personal site is findable in 3 searches.
+  url         — the canonical URL of the page itself.
+  confidence  — agent self-reported [0, 1]. <0.85 lands in review queue.
+  evidence_url— page that proves the site belongs to this person.
 
-Insertion thresholds (see `socials.py::_should_flag`):
-
+Insertion thresholds (see `websites.py::_should_flag`):
   agent_sonnet rows are flagged_low_confidence=true below 0.85.
-
-Provenance: every row written by this module gets `source='agent_sonnet'`,
-the agent's reported `confidence`, and the agent-supplied `evidence_url`.
-
-Cache: this module does NOT persist a response cache in v1. Re-running
-is idempotent because we only query politicians still missing the given
-platform; `upsert_social` is a no-op for already-known handles.
-
-Environment:
-
-  ANTHROPIC_API_KEY must be set (see .env / .env.example).
-  ANTHROPIC_MODEL defaults to 'claude-sonnet-4-6' and can be overridden
-  for evaluation runs.
 """
 from __future__ import annotations
 
@@ -44,7 +34,7 @@ from rich.console import Console
 from rich.table import Table
 
 from .db import Database
-from .socials import ALLOWED_PLATFORMS, upsert_social
+from .websites import ALLOWED_LABELS, upsert_website
 
 log = logging.getLogger(__name__)
 console = Console()
@@ -54,23 +44,22 @@ DEFAULT_MODEL = "claude-sonnet-4-6"
 DEFAULT_MAX_TOKENS = 4096
 DEFAULT_BATCH_SIZE = 10
 MAX_BATCH_SIZE = 25
-# Agent-source rows below this land in the review queue. Must match the
-# value in socials._AGENT_FLAG_THRESHOLD or routing will be inconsistent.
+PER_POLITICIAN_SEARCH_BUDGET = 3  # the user-mandated hard cap
+
 AGENT_PROMOTE_THRESHOLD = 0.85
 AGENT_MIN_WRITE = 0.60
 
 
-SYSTEM_PROMPT = """You are auditing social-media handles for Canadian politicians.
+SYSTEM_PROMPT = """You are auditing personal websites for Canadian politicians.
 
-For each politician in the batch and each platform in their `missing_platforms`, use the web_search tool to find the politician's **official personal** handle on that platform. Return one JSON object for the whole batch with this shape:
+For each politician in the batch, use the web_search tool to find ONE best website that represents them. Return one JSON object for the whole batch:
 
 {
   "results": [
     {
       "politician_id": "<uuid from the batch>",
-      "platform": "twitter" | "facebook" | "instagram" | "youtube" | "tiktok" | "linkedin" | "mastodon" | "bluesky" | "threads",
+      "kind": "personal" | "campaign" | "party_lander",
       "url": "https://...",
-      "handle": "<bare handle or null>",
       "confidence": 0.0,
       "evidence_url": "https://...",
       "reasoning": "<one short line>"
@@ -82,33 +71,48 @@ For each politician in the batch and each platform in their `missing_platforms`,
 Hard rules:
 
 - Return **only** the JSON object — no prose before or after.
-- Return at most ONE hit per (politician_id, platform). If you can't find a
-  clear hit, simply omit that platform for that politician.
-- Use web_search evidence. Set `evidence_url` to the page that proves the
-  handle belongs to this specific person (their parliamentary bio, their
-  party profile, their Wikipedia article, or the social profile itself
-  only if it clearly names them + their role).
-- **Do NOT invent handles.** If no evidence, omit.
-- **Official personal handle only** — not a party caucus, constituency
-  office, riding association, or parody account. "Team SomeName" campaign
-  accounts do not count.
-- Prefer .ca / parl.gc.ca / ourcommons.ca / sencanada.ca / provincial
-  legislature domains as evidence when available.
-- Confidence scale:
-    0.95-1.00  evidence page names the person + links the handle directly
-    0.85-0.94  strong circumstantial (bio explicitly describes this role
-               and jurisdiction; name matches; no ambiguity)
-    0.60-0.84  likely but some ambiguity (common name, partial evidence)
-    <0.60      do not return (just omit)
-- If the politician has already-known handles in `known_socials`, respect
-  them — you are filling gaps, not replacing.
+- Return at most ONE hit per politician. If you can't find anything,
+  omit that politician.
+- **Up to 3 web_searches per politician.** Do not spiral. The tool will
+  reject further searches once the budget is exhausted.
 
-Constraints:
+Preference order (try in this order):
 
-- Up to 2 web_searches per politician-platform pair. Do not spiral.
-  The tool will reject further searches once the budget is exhausted.
-- If a politician is clearly retired/defeated, their old handles may be
-  archived — that's OK, mark confidence <= 0.80.
+1. **personal** — the politician's own website, campaign site, or
+   constituency-office page. Examples: justintrudeau.ca,
+   pierrepoilievre.ca, jagmeetsingh.ca, votenameXYZ.ca. **Strongly
+   preferred.** confidence 0.85-1.0 if URL is clearly theirs.
+
+2. **campaign** — an explicit campaign-only domain (often seasonal,
+   sometimes party-co-branded). confidence 0.75-0.95.
+
+3. **party_lander** — the politician's party's MP/MLA listing page that
+   names them, e.g. https://www.conservative.ca/team/<name>,
+   https://liberal.ca/your-liberal-mps/<slug>,
+   https://www.ndp.ca/team/<slug>. **Fallback only** — use when 1-2
+   yield no result within budget. confidence 0.50-0.85.
+
+Hard rules on accuracy:
+
+- **Do NOT invent URLs.** If web_search doesn't surface a clear hit,
+  omit. A correctly-omitted politician is better than a wrong URL.
+- **Match the specific person**, not someone with a similar name. Use
+  party + jurisdiction + constituency from the brief to disambiguate.
+- `evidence_url` MUST be a page you actually visited via web_search
+  that names the politician + their role + links/refers to the URL.
+  Their parliamentary bio (parl.gc.ca, ola.org, leg.bc.ca, etc.),
+  Wikipedia, or the party page itself are all valid evidence.
+- Defeated/retired politicians may have archived sites — that's OK,
+  but cap confidence at 0.75.
+- Skip social-media profiles (twitter.com, facebook.com, linkedin.com,
+  bsky.app, etc.) — those are tracked in a separate system. Only
+  return websites here.
+
+Confidence scale:
+  0.95-1.00  evidence page directly links the URL and names the person
+  0.85-0.94  strong circumstantial match (bio + jurisdiction + party)
+  0.60-0.84  party_lander fallback or some ambiguity
+  <0.60      do not return (just omit)
 """
 
 
@@ -120,10 +124,6 @@ class PoliticianContext:
     level: str
     province_territory: Optional[str]
     constituency_name: Optional[str]
-    official_url: Optional[str]
-    personal_url: Optional[str]
-    known_socials: dict[str, str]           # platform -> handle
-    missing_platforms: list[str]
     openparliament_slug: Optional[str] = None
     ola_slug: Optional[str] = None
     nslegislature_slug: Optional[str] = None
@@ -132,9 +132,8 @@ class PoliticianContext:
 @dataclass
 class AgentHit:
     politician_id: str
-    platform: str
+    kind: str
     url: str
-    handle: Optional[str]
     confidence: float
     evidence_url: Optional[str]
     reasoning: Optional[str]
@@ -146,122 +145,46 @@ class AgentHit:
 async def _fetch_batch_contexts(
     db: Database,
     *,
-    platform: Optional[str],
     batch_size: int,
     offset: int,
 ) -> list[PoliticianContext]:
-    """Read `batch_size` politicians from v_socials_missing, grouped by politician.
-
-    If `platform` is provided, only that missing-platform drives the query;
-    each politician in the batch has exactly one entry in `missing_platforms`.
-    If `platform` is None, we pull every politician that has at least one
-    missing platform and include ALL their missing platforms.
-    """
-    if platform is not None:
-        rows = await db.fetch(
-            """
-            SELECT DISTINCT politician_id, name, level, province_territory,
-                            constituency_name, party,
-                            official_url, personal_url,
-                            openparliament_slug, ola_slug, nslegislature_slug
-              FROM v_socials_missing
-             WHERE platform = $1
-             ORDER BY politician_id
-             OFFSET $2 LIMIT $3
-            """,
-            platform, int(offset), int(batch_size),
-        )
-        politician_ids = [str(r["politician_id"]) for r in rows]
-        missing_by_pol = {pid: [platform] for pid in politician_ids}
-    else:
-        # Unique politicians first, then their missing-platform list.
-        pid_rows = await db.fetch(
-            """
-            SELECT DISTINCT politician_id
-              FROM v_socials_missing
-             ORDER BY politician_id
-             OFFSET $1 LIMIT $2
-            """,
-            int(offset), int(batch_size),
-        )
-        politician_ids = [str(r["politician_id"]) for r in pid_rows]
-        if not politician_ids:
-            return []
-        rows = await db.fetch(
-            """
-            SELECT politician_id, name, level, province_territory,
-                   constituency_name, party,
-                   official_url, personal_url,
-                   openparliament_slug, ola_slug, nslegislature_slug,
-                   platform
-              FROM v_socials_missing
-             WHERE politician_id = ANY($1)
-             ORDER BY politician_id, platform
-            """,
-            politician_ids,
-        )
-        missing_by_pol: dict[str, list[str]] = {pid: [] for pid in politician_ids}
-        for r in rows:
-            missing_by_pol[str(r["politician_id"])].append(r["platform"])
-
-    if not politician_ids:
-        return []
-
-    known = await db.fetch(
+    rows = await db.fetch(
         """
-        SELECT politician_id, platform, handle
-          FROM politician_socials
-         WHERE politician_id = ANY($1) AND handle IS NOT NULL
+        SELECT politician_id, name, level, province_territory, party,
+               constituency_name, openparliament_slug, ola_slug,
+               nslegislature_slug
+          FROM v_websites_missing
+         ORDER BY politician_id
+         OFFSET $1 LIMIT $2
         """,
-        politician_ids,
+        int(offset), int(batch_size),
     )
-    known_by_pol: dict[str, dict[str, str]] = {pid: {} for pid in politician_ids}
-    for r in known:
-        known_by_pol[str(r["politician_id"])][r["platform"]] = r["handle"]
-
-    seen_ids: set[str] = set()
-    contexts: list[PoliticianContext] = []
-    for r in rows:
-        pid = str(r["politician_id"])
-        if pid in seen_ids:
-            continue
-        seen_ids.add(pid)
-        contexts.append(PoliticianContext(
-            id=pid,
+    return [
+        PoliticianContext(
+            id=str(r["politician_id"]),
             name=r["name"] or "",
             party=r["party"],
             level=r["level"],
             province_territory=r["province_territory"],
             constituency_name=r["constituency_name"],
-            official_url=r["official_url"],
-            personal_url=r["personal_url"],
-            known_socials=known_by_pol.get(pid, {}),
-            missing_platforms=missing_by_pol.get(pid, []),
-            openparliament_slug=r.get("openparliament_slug") if isinstance(r, dict) else r["openparliament_slug"],
-            ola_slug=r.get("ola_slug") if isinstance(r, dict) else r["ola_slug"],
-            nslegislature_slug=r.get("nslegislature_slug") if isinstance(r, dict) else r["nslegislature_slug"],
-        ))
-    return contexts
+            openparliament_slug=r["openparliament_slug"],
+            ola_slug=r["ola_slug"],
+            nslegislature_slug=r["nslegislature_slug"],
+        )
+        for r in rows
+    ]
 
 
 def _ctx_to_brief(ctx: PoliticianContext) -> dict[str, Any]:
-    """Slim dict for inclusion in the agent's user message."""
     d: dict[str, Any] = {
         "politician_id": ctx.id,
         "name": ctx.name,
         "level": ctx.level,
         "province_territory": ctx.province_territory,
         "party": ctx.party,
-        "missing_platforms": ctx.missing_platforms,
     }
     if ctx.constituency_name:
         d["constituency_name"] = ctx.constituency_name
-    if ctx.official_url:
-        d["official_url"] = ctx.official_url
-    if ctx.personal_url:
-        d["personal_url"] = ctx.personal_url
-    if ctx.known_socials:
-        d["known_socials"] = ctx.known_socials
     if ctx.openparliament_slug:
         d["openparliament_slug"] = ctx.openparliament_slug
     if ctx.ola_slug:
@@ -274,7 +197,9 @@ def _ctx_to_brief(ctx: PoliticianContext) -> dict[str, Any]:
 def _build_user_message(contexts: list[PoliticianContext]) -> str:
     payload = [_ctx_to_brief(c) for c in contexts]
     return (
-        "Find official personal social-media handles for these politicians.\n\n"
+        "Find the best representative website (personal / campaign / "
+        "party_lander) for each politician below. Up to 3 web_searches "
+        "per politician.\n\n"
         "```json\n"
         + orjson.dumps(payload, option=orjson.OPT_INDENT_2).decode()
         + "\n```\n\n"
@@ -289,9 +214,6 @@ _JSON_OBJ_RE = re.compile(r"\{[\s\S]*\}", re.MULTILINE)
 
 
 def _parse_response(text: str) -> list[AgentHit]:
-    """Extract the {results: [...]} JSON from the agent's final assistant text."""
-    # Be forgiving: the agent may wrap JSON in a code fence despite the
-    # instruction to return raw JSON.
     text = text.strip()
     if text.startswith("```"):
         text = re.sub(r"^```(?:json)?\s*", "", text)
@@ -314,11 +236,11 @@ def _parse_response(text: str) -> list[AgentHit]:
         if not isinstance(item, dict):
             continue
         pid = item.get("politician_id")
-        platform = item.get("platform")
+        kind = item.get("kind")
         url = item.get("url")
-        if not (pid and platform and url):
+        if not (pid and kind and url):
             continue
-        if platform not in ALLOWED_PLATFORMS:
+        if kind not in ALLOWED_LABELS:
             continue
         conf = item.get("confidence")
         try:
@@ -328,9 +250,8 @@ def _parse_response(text: str) -> list[AgentHit]:
         conf = max(0.0, min(1.0, conf))
         hits.append(AgentHit(
             politician_id=str(pid),
-            platform=platform,
+            kind=kind,
             url=str(url),
-            handle=item.get("handle") if isinstance(item.get("handle"), str) else None,
             confidence=conf,
             evidence_url=item.get("evidence_url") if isinstance(item.get("evidence_url"), str) else None,
             reasoning=item.get("reasoning") if isinstance(item.get("reasoning"), str) else None,
@@ -348,15 +269,15 @@ async def _call_agent(
     contexts: list[PoliticianContext],
     max_tokens: int,
 ) -> tuple[list[AgentHit], dict[str, int]]:
-    """Invoke the Anthropic API and return (hits, usage_summary)."""
-    messages = [
-        {"role": "user", "content": _build_user_message(contexts)},
-    ]
-    cells = sum(len(c.missing_platforms) for c in contexts)
+    messages = [{"role": "user", "content": _build_user_message(contexts)}]
+    # Hard cap: 3 searches per politician × N politicians in this batch.
+    # Floor at 3 in case len(contexts)==1 to avoid a degenerate cap.
+    budget = max(PER_POLITICIAN_SEARCH_BUDGET,
+                 PER_POLITICIAN_SEARCH_BUDGET * len(contexts))
     tools = [{
         "type": "web_search_20250305",
         "name": "web_search",
-        "max_uses": max(2, 2 * cells),
+        "max_uses": budget,
     }]
     try:
         resp = await client.messages.create(
@@ -370,7 +291,6 @@ async def _call_agent(
         log.error("anthropic call failed: %s", exc)
         return [], {"input_tokens": 0, "output_tokens": 0, "error": 1}
 
-    # Extract the final text block from the assistant message.
     text_chunks: list[str] = []
     for block in resp.content:
         if getattr(block, "type", None) == "text":
@@ -384,7 +304,6 @@ async def _call_agent(
         "output_tokens": getattr(usage, "output_tokens", 0) if usage else 0,
         "error": 0,
     }
-    # web_search_requests is surfaced in usage as server_tool_use.web_search_requests
     if usage is not None:
         stu = getattr(usage, "server_tool_use", None)
         if stu is not None:
@@ -402,7 +321,7 @@ async def _ingest_hits(
     *,
     dry_run: bool,
 ) -> dict[str, int]:
-    stats = Counter()
+    stats: Counter = Counter()
     for h in hits:
         if h.confidence < AGENT_MIN_WRITE:
             stats["below_min_write"] += 1
@@ -411,14 +330,17 @@ async def _ingest_hits(
             stats["dry_run"] += 1
             continue
         try:
-            canon = await upsert_social(
-                db, h.politician_id, h.platform, h.url,
+            canon = await upsert_website(
+                db, h.politician_id, h.url,
+                label=h.kind,
                 source="agent_sonnet",
                 confidence=h.confidence,
                 evidence_url=h.evidence_url,
+                notes=h.reasoning,
             )
         except Exception as exc:
-            log.warning("agent upsert failed for %s %s: %s", h.politician_id, h.url, exc)
+            log.warning("agent upsert failed for %s %s: %s",
+                        h.politician_id, h.url, exc)
             stats["insert_error"] += 1
             continue
         if canon is None:
@@ -434,22 +356,16 @@ async def _ingest_hits(
 # ── Driver ───────────────────────────────────────────────────────────
 
 
-async def agent_find_socials(
+async def agent_find_websites(
     db: Database,
     *,
-    platform: Optional[str] = None,
     batch_size: int = DEFAULT_BATCH_SIZE,
     max_batches: int = 20,
     model: str = DEFAULT_MODEL,
     dry_run: bool = False,
     max_tokens: int = DEFAULT_MAX_TOKENS,
 ) -> None:
-    """Run the Tier-3 agent loop.
-
-    Iterates the v_socials_missing matrix, submits batches of
-    politicians to the model, and ingests the returned hits. Stops when
-    max_batches is hit or the matrix is exhausted.
-    """
+    """Run the Tier-3 websites agent loop."""
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         console.print("[red]ANTHROPIC_API_KEY is not set. Aborting.[/red]")
@@ -458,27 +374,28 @@ async def agent_find_socials(
     try:
         import anthropic  # type: ignore
     except ImportError:
-        console.print("[red]The 'anthropic' package is not installed. Run: pip install anthropic[/red]")
+        console.print("[red]The 'anthropic' package is not installed.[/red]")
         return
 
     batch_size = max(1, min(batch_size, MAX_BATCH_SIZE))
     client = anthropic.AsyncAnthropic(api_key=api_key)
 
-    running_tokens = {"input_tokens": 0, "output_tokens": 0, "web_searches": 0, "error": 0}
-    running_ingest = Counter()
+    running_tokens = {"input_tokens": 0, "output_tokens": 0,
+                      "web_searches": 0, "error": 0}
+    running_ingest: Counter = Counter()
     all_hits: list[AgentHit] = []
 
     console.print(
-        f"[cyan]agent-missing-socials:[/cyan] platform={platform or 'all-missing'} "
-        f"batch_size={batch_size} max_batches={max_batches} "
-        f"model={model} dry_run={dry_run}"
+        f"[cyan]agent-missing-websites:[/cyan] batch_size={batch_size} "
+        f"max_batches={max_batches} model={model} dry_run={dry_run} "
+        f"per-politician-search-budget={PER_POLITICIAN_SEARCH_BUDGET}"
     )
 
     offset = 0
     batch_n = 0
     while batch_n < max_batches:
         contexts = await _fetch_batch_contexts(
-            db, platform=platform, batch_size=batch_size, offset=offset,
+            db, batch_size=batch_size, offset=offset,
         )
         if not contexts:
             console.print("[yellow]no more politicians to process — stopping[/yellow]")
@@ -487,8 +404,8 @@ async def agent_find_socials(
         batch_n += 1
 
         console.print(
-            f"[cyan]batch {batch_n}/{max_batches}:[/cyan] {len(contexts)} politicians, "
-            f"{sum(len(c.missing_platforms) for c in contexts)} target cells"
+            f"[cyan]batch {batch_n}/{max_batches}:[/cyan] {len(contexts)} politicians "
+            f"(search cap = {PER_POLITICIAN_SEARCH_BUDGET * len(contexts)})"
         )
         hits, usage = await _call_agent(
             client, model=model, contexts=contexts, max_tokens=max_tokens,
@@ -501,7 +418,7 @@ async def agent_find_socials(
         all_hits.extend(hits)
         if hits:
             console.print(
-                f"  → {len(hits)} hits returned "
+                f"  → {len(hits)} hits "
                 f"(tokens: in={usage.get('input_tokens', 0)} "
                 f"out={usage.get('output_tokens', 0)} "
                 f"searches={usage.get('web_searches', 0)})"
@@ -525,7 +442,7 @@ def _print_summary(
 ) -> None:
     console.print()
     console.print(
-        f"[green]✓ agent run complete[/green] — "
+        f"[green]✓ websites agent run complete[/green] — "
         f"{len(hits)} hits, "
         f"input={tokens.get('input_tokens', 0):,} tokens, "
         f"output={tokens.get('output_tokens', 0):,} tokens, "
@@ -545,20 +462,19 @@ def _print_summary(
             )
         console.print(tbl)
 
-    # Show a sample of high-confidence hits for spot-checking.
     auto = [h for h in hits if h.confidence >= AGENT_PROMOTE_THRESHOLD]
     flagged = [h for h in hits if AGENT_MIN_WRITE <= h.confidence < AGENT_PROMOTE_THRESHOLD]
     if auto:
         console.print(f"[green]Auto-inserted samples ({len(auto)}):[/green]")
         for h in auto[:15]:
             console.print(
-                f"  {h.platform:<10} {h.url}  conf={h.confidence:.2f}  "
+                f"  {h.kind:<13} {h.url}  conf={h.confidence:.2f}  "
                 f"ev={(h.evidence_url or '')[:80]}"
             )
     if flagged:
         console.print(f"[yellow]Flagged samples ({len(flagged)}):[/yellow]")
         for h in flagged[:15]:
             console.print(
-                f"  {h.platform:<10} {h.url}  conf={h.confidence:.2f}  "
+                f"  {h.kind:<13} {h.url}  conf={h.confidence:.2f}  "
                 f"ev={(h.evidence_url or '')[:80]}"
             )

@@ -78,6 +78,11 @@ from .socials_agent import (
     DEFAULT_MODEL as AGENT_DEFAULT_MODEL,
     agent_find_socials,
 )
+from .websites_agent import (
+    DEFAULT_BATCH_SIZE as WEBSITES_AGENT_DEFAULT_BATCH_SIZE,
+    DEFAULT_MODEL as WEBSITES_AGENT_DEFAULT_MODEL,
+    agent_find_websites,
+)
 from .resolve_openparliament import resolve_slugs
 from .socials_enrichment import (
     enrich_all_socials,
@@ -458,6 +463,27 @@ def cmd_agent_missing_socials(ctx: click.Context, platform, batch_size,
                      platform=platform, batch_size=batch_size,
                      max_batches=max_batches, model=model,
                      dry_run=dry_run))
+
+
+@cli.command("agent-missing-websites")
+@click.option("--batch-size", type=int, default=WEBSITES_AGENT_DEFAULT_BATCH_SIZE,
+              help="Politicians per agent call (capped at 25)")
+@click.option("--max-batches", type=int, default=20,
+              help="Hard cap on agent calls per invocation")
+@click.option("--model", type=str, default=WEBSITES_AGENT_DEFAULT_MODEL)
+@click.option("--dry-run", is_flag=True,
+              help="Print candidate hits without inserting")
+@click.pass_context
+def cmd_agent_missing_websites(ctx: click.Context, batch_size, max_batches,
+                               model, dry_run) -> None:
+    """Tier-3: Sonnet agent + web_search for politician personal/party websites.
+
+    Search budget is hard-capped at 3 per politician via the web_search
+    tool's `max_uses` parameter. Per-batch cap = 3 × batch_size.
+    """
+    asyncio.run(_run(agent_find_websites, ctx.obj["dsn"],
+                     batch_size=batch_size, max_batches=max_batches,
+                     model=model, dry_run=dry_run))
 
 
 @cli.command("verify-socials")
