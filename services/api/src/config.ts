@@ -18,6 +18,14 @@ const schema = z.object({
   CHANGE_WEBHOOK_SECRET: z.string().min(16).optional(),
   WEBHOOK_SECRET: z.string().min(16).optional(),
   TEI_URL: z.string().default("http://tei:80"),
+  // Public-API search concurrency budget. The /api/public/v1/search/*
+  // endpoints share a single TEI semaphore across all callers (across
+  // all keys, across all tiers). MAX_CONCURRENT caps simultaneous
+  // embed requests; MAX_QUEUE caps backlog before refusing with 503.
+  // Total in-flight + queued cap = MAX_CONCURRENT + MAX_QUEUE; past
+  // that we 503 immediately rather than letting users wait minutes.
+  PUBLIC_TEI_MAX_CONCURRENT: z.coerce.number().int().positive().default(2),
+  PUBLIC_TEI_MAX_QUEUE: z.coerce.number().int().nonnegative().default(6),
   // End-user auth (phase 1 magic-link). Unset → /api/v1/auth/* and
   // /api/v1/me/* respond 503 (feature disabled), same ergonomics as
   // ADMIN_TOKEN.
@@ -147,6 +155,10 @@ export const config = (() => {
     databaseUrl: env.DATABASE_URL,
     webhookSecret: env.CHANGE_WEBHOOK_SECRET ?? env.WEBHOOK_SECRET ?? "",
     teiUrl: env.TEI_URL.replace(/\/$/, ""),
+    publicTei: {
+      maxConcurrent: env.PUBLIC_TEI_MAX_CONCURRENT,
+      maxQueue: env.PUBLIC_TEI_MAX_QUEUE,
+    },
     jwtSecret: env.JWT_SECRET ?? "",
     apiKeyPepper: env.API_KEY_PEPPER ?? "",
     smtp: {
