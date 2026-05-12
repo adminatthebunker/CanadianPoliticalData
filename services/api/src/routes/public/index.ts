@@ -13,6 +13,7 @@ import { optionalApiKey } from "../../middleware/api-key-auth.js";
 import { publicRateLimitConfig } from "../../middleware/api-rate-limit.js";
 import { resolvePhotoUrl } from "../../lib/photos.js";
 import { config } from "../../config.js";
+import publicV1SearchRoutes from "./search.js";
 
 /**
  * Public developer API surface (/api/public/v1/*).
@@ -176,8 +177,17 @@ export default async function publicV1Routes(app: FastifyInstance) {
 
   // optionalApiKey runs at onRequest so req.apiKey is populated
   // BEFORE @fastify/rate-limit's per-route keyGenerator/max resolver
-  // fires.
+  // fires. Pro-tier routes (under publicV1SearchRoutes) re-run
+  // requireApiKey at preHandler stage to enforce non-anonymous
+  // access — the second DB lookup is cheap and worth the auth-flow
+  // clarity.
   app.addHook("onRequest", optionalApiKey);
+
+  // Phase 1d: paid + free search endpoints. Registered inside the
+  // public plugin so it inherits CORS, rate-limit, and Swagger
+  // metadata. Pro-tier routes inside add their own requireApiKey +
+  // requireTier('pro') preHandlers.
+  await app.register(publicV1SearchRoutes);
 
   // ── GET /api/public/v1/coverage ───────────────────────────────
   a.get(
