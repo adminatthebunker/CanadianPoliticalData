@@ -51,6 +51,7 @@ services:
       DATABASE_URL: postgresql://sw:${DB_PASSWORD}@db:5432/sovereignwatch
       CHANGE_WEBHOOK_SECRET: ${WEBHOOK_SECRET}
       JWT_SECRET: ${JWT_SECRET:-}
+      API_KEY_PEPPER: ${API_KEY_PEPPER:-}
       PUBLIC_SITE_URL: ${PUBLIC_SITE_URL:-http://localhost:5173}
       SMTP_HOST: ${SMTP_HOST:-smtp.protonmail.ch}
       SMTP_PORT: ${SMTP_PORT:-587}

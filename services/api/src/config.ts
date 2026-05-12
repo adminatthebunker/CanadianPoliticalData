@@ -22,6 +22,14 @@ const schema = z.object({
   // /api/v1/me/* respond 503 (feature disabled), same ergonomics as
   // ADMIN_TOKEN.
   JWT_SECRET: z.string().min(32).optional(),
+  // Public-developer-API key minting pepper. HMAC-SHA256 key used by
+  // services/api/src/lib/api-key-token.ts to (a) hash full tokens for
+  // at-rest storage in private.api_keys.token_hash and (b) compute the
+  // 6-char checksum at the end of each minted token. Unset → the
+  // /api/public/v1/* surface and /me/api-keys CRUD respond 503.
+  // Rotating this value invalidates every issued API key in one move
+  // (parallel of rotating JWT_SECRET to revoke every session).
+  API_KEY_PEPPER: z.string().min(32).optional(),
   // SMTP (Proton submission in prod). Unset → email.ts runs in
   // dev-stub mode and logs would-be links to server logs.
   SMTP_HOST: z.string().default("smtp.protonmail.ch"),
@@ -135,6 +143,7 @@ export const config = (() => {
     webhookSecret: env.CHANGE_WEBHOOK_SECRET ?? env.WEBHOOK_SECRET ?? "",
     teiUrl: env.TEI_URL.replace(/\/$/, ""),
     jwtSecret: env.JWT_SECRET ?? "",
+    apiKeyPepper: env.API_KEY_PEPPER ?? "",
     smtp: {
       host: env.SMTP_HOST,
       port: env.SMTP_PORT,
@@ -208,6 +217,12 @@ export const config = (() => {
 if (config.env === "production" && !config.jwtSecret) {
   console.warn(
     "[config] JWT_SECRET is unset in production; /api/v1/auth/* + /api/v1/me/* will reject all callers."
+  );
+}
+
+if (config.env === "production" && !config.apiKeyPepper) {
+  console.warn(
+    "[config] API_KEY_PEPPER is unset in production; /api/public/v1/* and /me/api-keys will respond 503."
   );
 }
 

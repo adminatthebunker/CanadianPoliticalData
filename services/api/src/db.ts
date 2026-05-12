@@ -14,7 +14,7 @@ pool.on("error", (err: Error) => {
   console.error("pg pool error", err);
 });
 
-export type QueryArg = string | number | boolean | null | string[] | Record<string, unknown>;
+export type QueryArg = string | number | boolean | null | string[] | Buffer | Record<string, unknown>;
 
 export async function query<T = unknown>(text: string, params: QueryArg[] = []): Promise<T[]> {
   const res = await pool.query(text, params as unknown as unknown[]);
