@@ -119,6 +119,40 @@ Rate-limited authenticated calls are also recorded in an audit log
 (`private.api_key_events.event_type = 'rate_limited'`) so you can
 look back at usage patterns when deciding whether to upgrade.
 
+## TEI semaphore on paid search
+
+The semantic-search endpoints (`/search/speeches`,
+`/search/speeches/count`, `/search/facets`) share a **GPU concurrency
+budget** independent of your tier's rate limit. The embedding step
+runs on a single GPU and serves both interactive search and
+background ingest, so we cap simultaneous embed requests across all
+public-API callers.
+
+- **Max concurrent**: 2 embed requests in flight at a time.
+- **Max queued**: 6 requests waiting for a slot.
+- **Total slots**: 8.
+
+When all 8 slots are full, additional requests get refused immediately
+with **`503 Service Unavailable`** + **`Retry-After: 5`** so your
+client can back off cleanly rather than waiting minutes:
+
+```http
+HTTP/1.1 503 Service Unavailable
+Retry-After: 5
+Content-Type: application/json
+
+{
+  "code": "search_overloaded",
+  "error": "Service Unavailable",
+  "message": "public search service is at capacity, retry shortly"
+}
+```
+
+This is independent of and in addition to the per-tier hourly rate
+limit. A pro-tier caller hitting the 10,000/hr ceiling sees a 429;
+a pro-tier caller hammering 12 search requests in a single second
+sees one 503 for each request past the 8-slot budget.
+
 ## Quotas vs. rate limits
 
 The current limits are **rate** limits (sliding hourly buckets), not

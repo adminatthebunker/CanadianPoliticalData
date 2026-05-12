@@ -61,6 +61,32 @@ If you get a 401 unexpectedly, check that:
 - You're not sending a test-mode token to the live API or vice versa.
 - The token's `expires_at` (if you set one) hasn't passed.
 
+## `403 Forbidden`
+
+You're authenticated but your tier doesn't authorize this endpoint.
+Currently surfaces only on the pro-tier search endpoints
+(`/search/speeches`, `/search/speeches/count`, `/search/facets`)
+when called by a free or dev-tier key. Anonymous callers don't see
+this — they hit `401` first.
+
+```http
+HTTP/1.1 403 Forbidden
+Content-Type: application/json
+
+{
+  "code": "insufficient_tier",
+  "error": "Forbidden",
+  "message": "this endpoint requires a pro+ tier API key. Your key is on the free tier. Subscribe or upgrade at /account/billing.",
+  "required_tier": "pro",
+  "current_tier": "free"
+}
+```
+
+To resolve: subscribe to the appropriate tier at
+[`/account/billing`](https://canadianpoliticaldata.org/account/billing).
+Existing keys auto-promote to your new tier within seconds of the
+Stripe webhook landing — no need to mint new keys.
+
 ## `404 Not Found`
 
 The resource doesn't exist. For `/politicians/:id`, returned when the
@@ -99,10 +125,35 @@ the recommended retry strategy.
 
 ## `503 Service Unavailable`
 
-A backend dependency is degraded. Currently only surfaces on the
-internal search API (`/api/v1/search/*`) when the embedding service
-is unreachable; the public API doesn't expose search yet so you won't
-see this in v1.0. Documented here for forward-compat:
+Two distinct flavours, distinguished by the `code` field:
+
+**`code: "search_overloaded"`** — the public-search TEI semaphore is
+at capacity (max 2 concurrent embed requests + max 6 queued). This
+fires on `/search/speeches`, `/search/speeches/count`, `/search/facets`
+under burst load. Always paired with `Retry-After`:
+
+```http
+HTTP/1.1 503 Service Unavailable
+Retry-After: 5
+Content-Type: application/json
+
+{
+  "code": "search_overloaded",
+  "error": "Service Unavailable",
+  "message": "public search service is at capacity, retry shortly"
+}
+```
+
+Respect `Retry-After`. The semaphore drains as in-flight requests
+complete (typically <1s each); 5 seconds is usually enough for the
+queue to clear. See [Rate limiting](./rate-limiting.md#tei-semaphore-on-paid-search)
+for the full semaphore design.
+
+**`code: "embedding_service_unavailable"`** — the underlying TEI
+service is down or returning errors. Less frequent than overload
+(TEI has its own auto-restart layer); when it does fire, treat as
+transient and retry with exponential backoff (start 1s, cap 30s).
+No `Retry-After` header — the duration is unpredictable.
 
 ```http
 HTTP/1.1 503 Service Unavailable
@@ -113,10 +164,6 @@ Content-Type: application/json
   "message": "embedding service did not return ok"
 }
 ```
-
-Treat as transient. Retry with exponential backoff (start at 1s, cap
-at 30s). The condition usually clears within a minute or two — the
-embedding service has its own auto-restart layer.
 
 ## `500 Internal Server Error`
 
@@ -159,8 +206,8 @@ def call_api(url, headers):
         if r.status_code == 503:
             time.sleep(min(2 ** attempt, 30))  # exponential backoff
             continue
-        if r.status_code in (400, 401, 404):
-            # Permanent — don't retry
+        if r.status_code in (400, 401, 403, 404):
+            # Permanent — don't retry. 403 means upgrade your tier.
             r.raise_for_status()
         if r.status_code == 500:
             # Transient bug; retry once, then give up

@@ -134,6 +134,28 @@ If a payment goes past-due, your tier stays active during Stripe's
 dunning window. If Stripe ultimately gives up, the subscription is
 deleted and your keys demote to free.
 
+### Pro-tier-only endpoints
+
+The semantic-search endpoints (`/search/speeches`,
+`/search/speeches/count`, `/search/facets`) are **gated to PRO tier
+only** because they hit a GPU-backed embedding service. Calling them
+with a free or dev-tier key returns:
+
+```json
+{
+  "code": "insufficient_tier",
+  "required_tier": "pro",
+  "current_tier": "free"
+}
+```
+
+Subscribe at
+[`/account/billing`](https://canadianpoliticaldata.org/account/billing)
+to unlock — your existing keys auto-promote within seconds of the
+Stripe webhook landing. The free-tier auxiliaries
+(`/search/sessions`, `/search/chunks/:id`, `/search/meta`) work for
+any tier including anonymous.
+
 ## Security notes
 
 - **Never commit tokens to source control.** Use environment variables

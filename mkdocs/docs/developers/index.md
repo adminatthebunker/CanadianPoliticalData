@@ -69,24 +69,44 @@ end (you keep what you paid for), then drops to the free tier.
 
 ## What's in v1.0
 
-Three read endpoints in v1.0 (frozen 2026-05-12):
+Nine endpoints across four tags:
+
+**Reference data** (any tier including anonymous):
 
 - **`GET /coverage`** — current state of all 14 Canadian jurisdictions
   (federal + 10 provinces + 3 territories): bills/Hansard/votes/committees
-  pipelines status + row counts. The honesty surface for what we cover.
-- **`GET /jurisdiction-sources`** — the same data as `/coverage` but
-  as a flat per-jurisdiction list, no summary rollup. For callers
-  building their own dashboards.
-- **`GET /politicians/:id`** — single politician with their currently-
-  active websites (with infrastructure scan: hosting provider, country,
-  CDN/CMS detection, sovereignty tier 1-6) and constituency boundary
-  GeoJSON.
+  pipelines status + row counts.
+- **`GET /jurisdiction-sources`** — flat per-jurisdiction list, no
+  summary rollup.
+- **`GET /politicians/:id`** — single politician with currently-active
+  websites (hosting provider, country, CDN/CMS, sovereignty tier 1-6)
+  and constituency boundary GeoJSON.
 
-More endpoints land in future releases. The internal `/api/v1/search/*`
-surface is **also** stable as v1.0 (see [`docs/api.md`](https://github.com/adminatthebunker/CanadianPoliticalData/blob/main/docs/api.md)
-in the repo) but isn't yet exposed publicly — semantic search over the
-full Hansard corpus is the next planned addition once the pro-tier
-TEI concurrency wiring lands.
+**Search auxiliaries** (any tier including anonymous; no embeddings, fast lookups):
+
+- **`GET /search/sessions`** — parliament + session catalog for the
+  cascading filter dropdown.
+- **`GET /search/chunks/:id`** — anchor-chunk lookup by UUID.
+- **`GET /search/meta`** — backfill-progress meta (`total_chunks`,
+  `embedded_chunks`, `coverage`).
+
+**Semantic search** (PRO tier only — TEI-embedded; subject to a shared
+concurrency semaphore):
+
+- **`GET /search/speeches`** — hybrid HNSW + BM25 search over the full
+  Hansard corpus. Two modes: `timeline` (default; flat chunk list with
+  per-result `similarity` score) and `politician` (grouped by
+  speaker, with their top-N matching chunks).
+- **`GET /search/speeches/count`** — count-only sibling for off-path
+  count staging when paginating large result sets.
+- **`GET /search/facets`** — aggregations (party, politician, year,
+  language) over the top-N candidate pool. Powers analytics tabs.
+
+The pro-tier search routes share a TEI semaphore (max 2 concurrent +
+6 queued = 8 slots total) — past that they 503 with `Retry-After: 5`
+to prevent any single client from starving the GPU. See
+[Rate limiting](./rate-limiting.md#tei-semaphore-on-paid-search) for
+details.
 
 ## Topics
 
