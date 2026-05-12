@@ -586,7 +586,7 @@ A separate, third-party-friendly tree under `/api/public/v1/*`, derived from the
 
 **Auth.** Bearer-token via `Authorization: Bearer cpd_<env>_<random>_<checksum>`. Tokens are minted at `/account/api-keys` (signed-in users only) — see `services/api/src/routes/keys.ts`. The full token is shown once at create / rotate; storage is HMAC-hashed.
 
-**Rate limits (per hour).** Free tier (a registered key) → 60 req/hr per key. Anonymous (no key) → 30 req/hr per source IP. `dev` and `pro` tiers exist in the schema but require Stripe subscription wiring (phase 1b). 429 responses include the standard `Retry-After` header; rate-limited authed callers get a `private.api_key_events` audit row with `event_type='rate_limited'`.
+**Rate limits (per hour).** Free tier (a registered key) → 60 req/hr per key. Anonymous (no key) → 30 req/hr per source IP. **Dev** ($20/mo, 1,000 req/hr) and **Pro** ($200/mo, 10,000 req/hr) tiers are reachable via subscription at `/account/billing`. Subscribing auto-promotes ALL of a user's existing API keys to the new tier — no need to mint new keys. Cancel at period end keeps the higher tier until the renewal date. 429 responses include the standard `Retry-After` header; rate-limited authed callers get a `private.api_key_events` audit row with `event_type='rate_limited'`.
 
 **CORS.** `Access-Control-Allow-Origin: *` for the entire `/api/public/v1/*` tree (vs the credentialed restricted CORS on `/api/v1/*`). Public tokens are bearer-auth, not cookie-auth — wildcard origin is intentional and browser-accepted.
 

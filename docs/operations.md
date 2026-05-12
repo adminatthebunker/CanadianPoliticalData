@@ -239,6 +239,66 @@ The frontend doesn't need a rebuild — the "Prices are exclusive of tax — app
 | `credit_purchases.amount_cents` looks higher than the pack price | Working as intended — `amount_cents` = `session.amount_total` (gross of tax). Pre-tax is in `raw_webhook.session.amount_subtotal`. | Add a `tax_cents` column in a future migration if accounting needs it broken out. |
 | Existing customers in `credit_purchases` from before activation have no address on the Stripe Customer | Customer object created before `customer_update.address: 'auto'` was on. | Harmless — Stripe just won't have an address for those customers until their next checkout. |
 
+### Subscriptions activation walkthrough (public dev-API dev / pro tiers)
+
+Same shape as the credit-pack activation above. The two billing systems share `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, the `stripe_webhook_events` upstream-dedupe table, the `getOrCreateCustomer` race-safe upsert, and the Stripe Tax wiring — so much of the test-mode → live-mode migration is already done if credit packs are live. The new pieces are two recurring price IDs and three subscription-lifecycle webhook event types.
+
+**Phase 1 — Test mode** (test prices + test webhook + test card, no real money).
+
+1. Stripe dashboard → switch to **test mode** (top-right toggle).
+2. Products → **create two recurring products**: "Developer API" ($20/mo CAD recurring) and "Pro API" ($200/mo CAD recurring). Set `Tax behavior: Exclusive` on both. Copy each `price_…` id (NOT the `prod_…` id — same gotcha as credit packs).
+3. Developers → Webhooks → edit the existing endpoint (the one created in the credit-pack walkthrough) → **add three event types** to its filter: `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`. Keep `checkout.session.completed` enabled — credit packs still need it. The webhook signing secret stays the same.
+4. Append to `.env`:
+   ```
+   STRIPE_PRICE_ID_PLAN_DEV=price_test_...
+   STRIPE_PRICE_ID_PLAN_PRO=price_test_...
+   ```
+5. `docker compose up -d api` (frontend doesn't need a rebuild — `BillingPage` discovers plans via `/me/subscriptions`).
+6. End-to-end test in test mode:
+   - Sign in at `/login` → navigate to `/account/billing`. Both Subscribe buttons should appear.
+   - Click "Subscribe to Developer." Stripe-hosted Checkout opens. Pay with `4242 4242 4242 4242`, any future CVC + expiry, Canadian billing address.
+   - Within seconds you should see:
+     - `private.stripe_webhook_events` row created (one per event — there will be 3-4 events: checkout.session.completed + customer.created + subscription.created + invoice.paid; we only act on subscription.created).
+     - `private.subscription_events` row with `event_type='created'`, `to_plan='dev'`.
+     - `private.users` row updated: `current_plan='dev'`, `plan_status='active'`, `stripe_subscription_id='sub_…'`, `plan_renews_at` set to one month out.
+     - Every non-revoked `private.api_keys` row for that user has `tier='dev'` (auto-promote).
+     - `/account/billing` shows "Active" chip + renewal date.
+     - `/account/api-keys` shows tier="dev" badges.
+     - A real API call: `curl -H "Authorization: Bearer cpd_test_…" https://<host>/api/public/v1/coverage` returns `X-RateLimit-Limit: 1000`.
+7. Cancel-flow test: click "Cancel subscription." Confirm modal explains the period-end semantics. Webhook fires `customer.subscription.updated` with `cancel_at_period_end=true`. Page now shows "Canceling on YYYY-MM-DD." Tier still 1000/hr (NOT immediately demoted — by design).
+8. Reactivate-flow test: click "Reactivate subscription." Webhook fires `customer.subscription.updated` with `cancel_at_period_end=false`. UI returns to "Active."
+9. Period-end test (simulate via Stripe test clock OR cancel + wait + manually advance): when `customer.subscription.deleted` fires, `private.users.current_plan` flips to `free`, `api_keys.tier` flips to `free`, rate limit drops to 60/hr.
+10. Idempotency check: from Dashboard → Webhooks → "Resend" any of the subscription events. The API should respond 200 with `{duplicate: true}` (upstream PK dedupe in `stripe_webhook_events`) AND no second `subscription_events` row should land (downstream UNIQUE on `stripe_event_id`).
+
+**Phase 2 — Stripe Tax for subscriptions.** No new activation needed: subscriptions reuse the exact `taxOpts` block from the credit-pack code path (`automatic_tax: { enabled: true }`, address collection, tax-id collection). Recurring tax applies to renewals automatically. The dashboard activation done in the credit-pack walkthrough above covers subscriptions for free. **Tax codes:** assign a tax code to each subscription product the same way (Products → product → Tax behavior → tax code). `txcd_10000000` "General — Services" is the safe default for API access.
+
+**Phase 3 — Live mode.** Mechanical swap, same shape as credit-pack live-flip.
+
+1. Stripe dashboard → toggle to **live mode**.
+2. Recreate the two recurring products in live mode (or use Move-to-live per product). Note the new live `price_…` ids.
+3. Developers → Webhooks → register the live-mode webhook (separate list from test mode). Add **all four** event types: `checkout.session.completed`, `customer.subscription.created`, `customer.subscription.updated`, `customer.subscription.deleted`. Copy the live signing secret (or reuse if already swapped during the credit-pack live deploy).
+4. **Scrub stale test-mode subscription state** before the flip — Stripe subscription IDs are per-mode, same as customer IDs:
+   ```sql
+   UPDATE private.users
+      SET stripe_subscription_id = NULL,
+          current_plan           = 'free',
+          plan_status            = 'inactive',
+          plan_renews_at         = NULL,
+          cancel_at_period_end   = false,
+          plan_canceled_at       = NULL,
+          plan_updated_at        = now()
+    WHERE stripe_subscription_id IS NOT NULL;
+
+   UPDATE private.api_keys
+      SET tier = 'free', updated_at = now()
+    WHERE tier IN ('dev', 'pro');
+   ```
+   Test-mode `subscription_events` rows are harmless — they're audit; leave them.
+5. Update `.env` with the live `STRIPE_PRICE_ID_PLAN_DEV` / `STRIPE_PRICE_ID_PLAN_PRO`. The `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET` are shared with credit packs and should already be live from the 2026-05-05 deploy.
+6. `docker compose up -d api`.
+7. Place a real $20 subscription with a live card. Verify the same chain landed: webhook delivered, `subscription_events` row, user `current_plan='dev'`, all keys auto-promoted, `/api/public/v1/coverage` returns `X-RateLimit-Limit: 1000`.
+8. **Rollback path:** if anything goes wrong post-flip, set both `STRIPE_PRICE_ID_PLAN_*` to the test values and `docker compose up -d api`. Active live subscriptions keep billing on Stripe's side until you cancel them via Customer Portal — the rollback only stops new live subscriptions; existing ones continue rendering service.
+
 ### Compiling a user a credit grant (admin "comp" workflow)
 
 Intended for journalist / partner access or support remediation. Leaves a normal ledger row with admin attribution:
