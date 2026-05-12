@@ -7,6 +7,7 @@ import {
   mintApiKey,
   isConfigured as apiKeysConfigured,
 } from "../lib/api-key-token.js";
+import { ALLOWED_SCOPES } from "../middleware/api-scope-gate.js";
 
 /**
  * Self-service developer API key management.
@@ -31,6 +32,14 @@ const createBody = z.object({
   // Optional natural expiry — bounded at ~10 years to prevent silly
   // never-rotates keys. NULL/omitted = never expires.
   expires_in_days: z.coerce.number().int().min(1).max(3650).optional(),
+  // Capability scopes the key carries. Defaults to ['read:public']
+  // (every API key implicitly carries read:public — the public
+  // dataset surface). Opt in to additional scopes (e.g. read:bulk
+  // for /api/public/v1/exports/*) at create time.
+  scopes: z
+    .array(z.enum(["read:public", "read:bulk"] as const))
+    .min(1)
+    .optional(),
 });
 
 interface KeyRow {
@@ -109,19 +118,26 @@ export default async function keysRoutes(app: FastifyInstance) {
           details: parsed.error.flatten(),
         });
       }
-      const { name, expires_in_days } = parsed.data;
+      const { name, expires_in_days, scopes } = parsed.data;
 
       const minted = mintApiKey();
       const expiresAt = expires_in_days
         ? new Date(Date.now() + expires_in_days * 86_400_000).toISOString()
         : null;
+      // Always include read:public — it's the implicit baseline scope
+      // every key carries. The opt-in scopes are added on top.
+      const finalScopes = Array.from(
+        new Set(["read:public" as const, ...(scopes ?? [])]),
+      ).filter((s): s is "read:public" | "read:bulk" =>
+        (ALLOWED_SCOPES as readonly string[]).includes(s),
+      );
 
       const row = await queryOne<KeyRow>(
         `INSERT INTO private.api_keys
-           (user_id, prefix, token_hash, name, expires_at)
-         VALUES ($1, $2, $3, $4, $5::timestamptz)
+           (user_id, prefix, token_hash, name, expires_at, scopes)
+         VALUES ($1, $2, $3, $4, $5::timestamptz, $6::text[])
          RETURNING ${SELECT_KEY_COLUMNS}`,
-        [claims.sub, minted.prefix, minted.hash, name, expiresAt],
+        [claims.sub, minted.prefix, minted.hash, name, expiresAt, finalScopes],
       );
       if (!row) {
         return reply.code(500).send({ error: "failed to create api key" });

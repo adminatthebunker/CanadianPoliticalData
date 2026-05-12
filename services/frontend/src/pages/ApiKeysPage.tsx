@@ -62,6 +62,7 @@ export default function ApiKeysPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [createName, setCreateName] = useState("");
   const [createExpiresDays, setCreateExpiresDays] = useState<string>("");
+  const [createBulkScope, setCreateBulkScope] = useState(false);
   const [creating, setCreating] = useState(false);
 
   // The single most-recently-shown full token. Persists in component
@@ -112,6 +113,12 @@ export default function ApiKeysPage() {
       const body: Record<string, unknown> = { name: createName.trim() };
       const days = createExpiresDays.trim();
       if (days) body.expires_in_days = Number(days);
+      // read:public is the implicit baseline; only opt-ins ride here.
+      const optInScopes: string[] = [];
+      if (createBulkScope) optInScopes.push("read:bulk");
+      if (optInScopes.length > 0) {
+        body.scopes = ["read:public", ...optInScopes];
+      }
       const created = await userFetch<CreatedKey>("/me/api-keys", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -121,6 +128,7 @@ export default function ApiKeysPage() {
       setCreateOpen(false);
       setCreateName("");
       setCreateExpiresDays("");
+      setCreateBulkScope(false);
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Create failed.");
@@ -249,6 +257,24 @@ export default function ApiKeysPage() {
               placeholder="leave blank for no expiry"
             />
           </label>
+          <fieldset className="cpd-auth__fieldset">
+            <legend>Scopes</legend>
+            <p className="cpd-auth__sub">
+              Every key includes <code>read:public</code> (the public dataset).
+              Opt in to additional capabilities below.
+            </p>
+            <label>
+              <input
+                type="checkbox"
+                checked={createBulkScope}
+                onChange={e => setCreateBulkScope(e.target.checked)}
+              />
+              {" "}
+              <code>read:bulk</code> — bulk dataset downloads via{" "}
+              <code>/api/public/v1/exports/*</code>. Required for the
+              full <code>pg_dump</code> archives.
+            </label>
+          </fieldset>
           <div className="cpd-auth__row">
             <button type="submit" disabled={creating || !createName.trim()}>
               {creating ? "Creating…" : "Create key"}
@@ -256,7 +282,7 @@ export default function ApiKeysPage() {
             <button
               type="button"
               className="cpd-auth__signout"
-              onClick={() => { setCreateOpen(false); setCreateName(""); setCreateExpiresDays(""); }}
+              onClick={() => { setCreateOpen(false); setCreateName(""); setCreateExpiresDays(""); setCreateBulkScope(false); }}
               disabled={creating}
             >
               Cancel
