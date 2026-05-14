@@ -7,6 +7,7 @@ import {
   type AnalysisEstimate,
   type AnalysisKind,
 } from "../api";
+import { notifyJobStarted } from "../lib/jobsBus";
 
 /**
  * Generic "estimate → confirm modal → submit" plumbing for any paid
@@ -100,6 +101,7 @@ export function useAnalysisSubmit(args: {
         headers: { "Content-Type": "application/json" },
         body: buildBody(),
       });
+      notifyJobStarted();
       setEstimate(null);
       const target = successPath ? successPath(res.id) : `/account/reports?new=${res.id}`;
       navigate(target);

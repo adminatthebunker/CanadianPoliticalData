@@ -503,6 +503,31 @@ const COMMAND_CATALOG = [
       { name: "stale_hours", type: "int", required: false, default: 6, help: "Re-scan if older than N hours." },
     ],
   },
+  { key: "dispatch-scrapes", category: "maintenance",
+    description: "One tick of the scrape dispatcher: find due saved-search subscriptions and enqueue scrape_jobs + holds.",
+    args: [] },
+  { key: "run-scrape-jobs", category: "maintenance",
+    description: "Drain up to N queued scrape_jobs (Apify or free APIs); commit or release credit holds.",
+    args: [
+      { name: "limit", type: "int", required: false, default: 5, help: "Max queued jobs to drain in this run." },
+    ],
+  },
+  { key: "poll-scrape-costs", category: "maintenance",
+    description: "Re-fetch Apify usageTotalUsd for succeeded scrape_jobs whose billing settled after the sync run returned.",
+    args: [] },
+  { key: "scrape-politician", category: "enrichment",
+    description: "Enqueue + run one scrape job against a single politician (admin / operator one-shot).",
+    args: [
+      { name: "politician_id", type: "string", required: true, help: "UUID of public.politicians.id." },
+      { name: "platform", type: "enum", required: true,
+        choices: ["twitter", "bluesky", "instagram", "mastodon"] },
+      { name: "user_id", type: "string", required: true, help: "UUID of private.users.id to bill (admin: pass admin user)." },
+      { name: "kind", type: "enum", required: false, default: "monitoring",
+        choices: ["monitoring", "preflight", "archive"],
+        help: "preflight = profile probe; archive = deep history." },
+      { name: "post_hint", type: "int", required: false, help: "Lifetime post-count hint for archive pricing." },
+    ],
+  },
 ];
 
 const COMMAND_KEYS = new Set(COMMAND_CATALOG.map(c => c.key));

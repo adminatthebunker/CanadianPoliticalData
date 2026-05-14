@@ -27,7 +27,10 @@ interface CreatedKey extends ApiKey {
 
 function fmtDate(iso: string | null): string {
   if (!iso) return "—";
-  return new Date(iso).toLocaleString();
+  // Compact ISO-shaped form for table density. The full timestamp
+  // shows on hover via the cell's `title` attribute (set inline at
+  // the call site where the original ISO is in scope).
+  return new Date(iso).toISOString().slice(0, 10);
 }
 
 function statusOf(k: ApiKey): { label: string; cls: string } {
@@ -302,14 +305,25 @@ export default function ApiKeysPage() {
       )}
 
       {list.length > 0 && (
-        <table className="cpd-auth__table" style={{ marginTop: "1.5rem" }}>
+        <div className="cpd-auth__table-wrap" style={{ marginTop: "1.5rem" }}>
+        <table className="cpd-auth__table cpd-auth__table--keys">
+          <colgroup>
+            <col className="cpd-auth__col-name" />
+            <col className="cpd-auth__col-prefix" />
+            <col className="cpd-auth__col-tier" />
+            <col className="cpd-auth__col-status" />
+            <col className="cpd-auth__col-date" />
+            <col className="cpd-auth__col-date" />
+            <col className="cpd-auth__col-date" />
+            <col className="cpd-auth__col-actions" />
+          </colgroup>
           <thead>
             <tr>
               <th>Name</th>
               <th>Prefix</th>
               <th>Tier</th>
               <th>Status</th>
-              <th>Last used</th>
+              <th>Last&nbsp;used</th>
               <th>Created</th>
               <th>Expires</th>
               <th>Actions</th>
@@ -322,19 +336,25 @@ export default function ApiKeysPage() {
               return (
                 <tr key={k.id}>
                   <td>{k.name}</td>
-                  <td><code>{k.prefix}</code></td>
+                  <td>
+                    <code className="cpd-auth__prefix">{k.prefix}</code>
+                  </td>
                   <td>{k.tier}</td>
                   <td>
                     <span className={`cpd-auth__chip ${status.cls}`}>
                       {status.label}
                     </span>
                   </td>
-                  <td>{fmtDate(k.last_used_at)}</td>
-                  <td>{fmtDate(k.created_at)}</td>
-                  <td>{fmtDate(k.expires_at)}</td>
+                  <td title={k.last_used_at ?? undefined}>
+                    {fmtDate(k.last_used_at)}
+                  </td>
+                  <td title={k.created_at}>{fmtDate(k.created_at)}</td>
+                  <td title={k.expires_at ?? undefined}>
+                    {fmtDate(k.expires_at)}
+                  </td>
                   <td>
-                    {isLive && (
-                      <>
+                    {isLive ? (
+                      <span className="cpd-auth__actions">
                         <button
                           type="button"
                           disabled={busyId === k.id}
@@ -342,7 +362,6 @@ export default function ApiKeysPage() {
                         >
                           Rotate
                         </button>
-                        {" "}
                         <button
                           type="button"
                           className="cpd-auth__signout"
@@ -351,11 +370,10 @@ export default function ApiKeysPage() {
                         >
                           Revoke
                         </button>
-                      </>
-                    )}
-                    {k.revoked_at && (
-                      <span className="cpd-auth__sub">
-                        revoked {fmtDate(k.revoked_at)}
+                      </span>
+                    ) : (
+                      <span className="cpd-auth__sub" title={k.revoked_at ?? undefined}>
+                        revoked
                       </span>
                     )}
                   </td>
@@ -364,6 +382,7 @@ export default function ApiKeysPage() {
             })}
           </tbody>
         </table>
+        </div>
       )}
     </section>
   );

@@ -38,7 +38,11 @@ export interface LedgerEntry {
     | "admin_credit"
     | "report_hold"
     | "report_commit"
-    | "report_refund";
+    | "report_refund"
+    | "correction_reward"
+    | "scrape_hold"
+    | "scrape_commit"
+    | "scrape_refund";
   reference_id: string | null;
   reason: string | null;
   created_at: Date;
@@ -277,6 +281,59 @@ export async function releaseHold(
       WHERE id = $1
         AND state = 'held'
         AND kind = 'report_hold'`,
+    [holdLedgerId, reason]
+  );
+}
+
+/**
+ * Place a hold for a scheduled scrape job. Mirrors `holdCredits` but
+ * uses `kind='scrape_hold'` so the report-flow's commit/release paths
+ * can't accidentally finalize a scrape-hold (each kind narrows its
+ * own UPDATE).
+ *
+ * Idempotent per (kind='scrape_hold', reference_id=scrapeJobId).
+ */
+export async function holdScrapeCredits(params: {
+  userId: string;
+  amount: number;
+  scrapeJobId: string;
+}): Promise<string> {
+  if (params.amount <= 0) {
+    throw new Error("hold amount must be positive");
+  }
+  const row = await queryOne<{ id: string }>(
+    `INSERT INTO private.credit_ledger
+         (user_id, delta, state, kind, reference_id)
+       VALUES ($1, $2, 'held', 'scrape_hold', $3)
+       RETURNING id`,
+    [params.userId, -params.amount, params.scrapeJobId]
+  );
+  if (!row) throw new Error("insert returned no id");
+  return row.id;
+}
+
+export async function commitScrapeHold(holdLedgerId: string): Promise<void> {
+  await query(
+    `UPDATE private.credit_ledger
+        SET state = 'committed'
+      WHERE id = $1
+        AND state = 'held'
+        AND kind = 'scrape_hold'`,
+    [holdLedgerId]
+  );
+}
+
+export async function releaseScrapeHold(
+  holdLedgerId: string,
+  reason: string
+): Promise<void> {
+  await query(
+    `UPDATE private.credit_ledger
+        SET state = 'refunded',
+            reason = $2
+      WHERE id = $1
+        AND state = 'held'
+        AND kind = 'scrape_hold'`,
     [holdLedgerId, reason]
   );
 }

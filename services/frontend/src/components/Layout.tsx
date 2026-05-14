@@ -2,6 +2,7 @@ import { Link, NavLink, Outlet } from "react-router-dom";
 import { ShareMenu } from "./ShareMenu";
 import { BetaBadge } from "./BetaBadge";
 import { MobileBottomNav } from "./MobileBottomNav";
+import { ActiveJobsIndicator } from "./ActiveJobsIndicator";
 import { useUserAuth } from "../hooks/useUserAuth";
 
 /**
@@ -123,6 +124,7 @@ export function Layout() {
         <Outlet />
       </main>
 
+      <ActiveJobsIndicator />
       <MobileBottomNav />
 
       <footer className="shell__footer">

@@ -564,3 +564,215 @@
   .pol-detail__name { font-size: 1.3rem; }
   .pol-parl__header { flex-direction: column; align-items: flex-start; }
 }
+
+/* ── Combined Socials & Posts tab (v4 merge of two tabs) ── */
+
+.pol-tab__section {
+  margin-bottom: 1.75rem;
+}
+
+.pol-tab__section:last-child {
+  margin-bottom: 0;
+}
+
+.pol-tab__section-title {
+  margin: 0 0 .55rem;
+  font-size: .85rem;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--ink-muted, #95a3b8);
+  font-weight: 600;
+}
+
+/* ── Recent posts tab (v2, public read of scraped social content) ── */
+
+.pol-posts__intro {
+  margin: 0 0 1rem;
+  padding: .65rem .9rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: .82rem;
+  color: var(--ink-muted);
+}
+
+.pol-posts__intro p { margin: 0; }
+.pol-posts__intro a { color: var(--accent, #4a9eff); }
+
+.pol-tab__hint {
+  margin-top: .5rem !important;
+  font-size: .8rem !important;
+  color: var(--ink-muted);
+}
+
+.pol-tab__hint a { color: var(--accent, #4a9eff); }
+
+.pol-posts__list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: .65rem;
+}
+
+.pol-posts__row {
+  padding: .85rem 1rem;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.pol-posts__row-head {
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  flex-wrap: wrap;
+  font-size: .8rem;
+  color: var(--ink-muted);
+  margin-bottom: .4rem;
+}
+
+.pol-posts__pill {
+  display: inline-block;
+  padding: .08rem .55rem;
+  border-radius: 999px;
+  font-size: .72rem;
+  background: rgba(74, 158, 255, .12);
+  color: var(--accent, #4a9eff);
+  font-weight: 600;
+  letter-spacing: .02em;
+}
+
+.pol-posts__pill--bluesky    { background: rgba(0, 133, 255, .15);  color: #4ab3ff; }
+.pol-posts__pill--twitter    { background: rgba(180, 180, 180, .14); color: #d4d4d4; }
+.pol-posts__pill--instagram  { background: rgba(220, 80, 150, .15);  color: #f098c2; }
+.pol-posts__pill--mastodon   { background: rgba(99, 100, 255, .15);  color: #8c8dff; }
+
+.pol-posts__date { color: var(--ink-muted); }
+
+.pol-posts__src {
+  margin-left: auto;
+  color: var(--accent, #4a9eff);
+  font-size: .78rem;
+  text-decoration: none;
+}
+
+.pol-posts__src:hover { text-decoration: underline; }
+
+.pol-posts__copies {
+  display: inline-block;
+  padding: .05rem .5rem;
+  border-radius: 999px;
+  font-size: .68rem;
+  font-weight: 600;
+  letter-spacing: .02em;
+  background: rgba(255, 255, 255, .07);
+  color: var(--ink-muted);
+  border: 1px solid var(--border);
+}
+
+.pol-posts__alt-sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .6rem;
+  margin: 0 0 .5rem;
+  font-size: .76rem;
+}
+
+.pol-posts__alt-source {
+  color: var(--accent, #4a9eff);
+  text-decoration: none;
+  opacity: .85;
+}
+
+.pol-posts__alt-source:hover {
+  text-decoration: underline;
+  opacity: 1;
+}
+
+.pol-posts__text {
+  margin: 0 0 .5rem;
+  color: var(--ink);
+  font-size: .92rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.pol-posts__row-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem;
+  flex-wrap: wrap;
+  font-size: .78rem;
+  color: var(--ink-muted);
+}
+
+.pol-posts__engagement {
+  font-variant-numeric: tabular-nums;
+}
+
+.pol-posts__attribution {
+  font-size: .75rem;
+}
+
+.pol-posts__attribution--anon {
+  color: var(--ink-muted);
+  font-style: italic;
+}
+
+.pol-posts__handle {
+  font-weight: 600;
+  color: var(--accent, #4a9eff);
+}
+
+.pol-posts__handle--link {
+  text-decoration: none;
+  border-bottom: 1px dotted var(--accent, #4a9eff);
+}
+
+.pol-posts__handle--link:hover {
+  border-bottom-style: solid;
+}
+
+/* Discoverability CTA banner above the post list. */
+.pol-posts__cta {
+  margin: 0 0 1rem;
+  padding: .65rem .9rem;
+  background: rgba(74, 158, 255, .08);
+  border: 1px solid rgba(74, 158, 255, .25);
+  border-radius: 8px;
+  font-size: .85rem;
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  flex-wrap: wrap;
+}
+
+.pol-posts__cta-lede {
+  color: var(--ink-muted, #95a3b8);
+}
+
+.pol-posts__cta-primary {
+  color: var(--accent, #4a9eff);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.pol-posts__cta-primary:hover {
+  text-decoration: underline;
+}
+
+.pol-posts__cta-secondary {
+  color: var(--ink-muted, #95a3b8);
+  text-decoration: none;
+  font-size: .8rem;
+  /* No margin-left: auto — the flex-wrap parent caused the secondary
+     CTA to orphan to the far right on mobile when the primary wraps.
+     Letting it sit inline alongside the primary reads more naturally. */
+}
+
+.pol-posts__cta-secondary:hover {
+  color: var(--accent, #4a9eff);
+  text-decoration: underline;
+}

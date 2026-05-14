@@ -180,6 +180,14 @@ export default function AccountPage() {
           <span className="cpd-auth__tile-arrow" aria-hidden="true">→</span>
         </Link>
 
+        <Link to="/account/monitoring" className="cpd-auth__tile">
+          <span className="cpd-auth__tile-title">Monitoring</span>
+          <span className="cpd-auth__tile-sub">
+            Politicians you're tracking and recent scrape activity
+          </span>
+          <span className="cpd-auth__tile-arrow" aria-hidden="true">→</span>
+        </Link>
+
         <Link to="/account/api-keys" className="cpd-auth__tile">
           <span className="cpd-auth__tile-title">Developer API keys</span>
           <span className="cpd-auth__tile-sub">

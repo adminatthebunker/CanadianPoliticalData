@@ -179,5 +179,9 @@ nav:
   - About:
       - about/index.md
       - Pricing: about/pricing.md
+      - Paid monitoring: about/monitoring.md
       - Privacy: about/privacy.md
+      - Disclaimer: about/disclaimer.md
+      - Takedown requests: about/takedown.md
+      - Data subject access requests: about/dsar.md
       - Contact: about/contact.md

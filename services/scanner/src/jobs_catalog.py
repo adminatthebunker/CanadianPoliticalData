@@ -1042,6 +1042,43 @@ COMMANDS: dict[str, dict[str, Any]] = {
              "choices": ["calgary", "edmonton", "all"]},
         ],
     },
+
+    # ── Scrape worker (paid user-monitoring) ─────────────────────────
+    "dispatch-scrapes": {
+        "description": "One tick of the scrape dispatcher: find due saved-search subscriptions and enqueue scrape_jobs + holds.",
+        "cli": "dispatch-scrapes", "category": "maintenance",
+        "args": [],
+    },
+    "run-scrape-jobs": {
+        "description": "Drain up to N queued scrape_jobs (calls Apify / free APIs, commits or releases credit holds).",
+        "cli": "run-scrape-jobs", "category": "maintenance",
+        "args": [
+            {"name": "limit", "type": "int", "required": False, "default": 5,
+             "help": "Max queued jobs to drain in this run."},
+        ],
+    },
+    "poll-scrape-costs": {
+        "description": "Re-fetch Apify usageTotalUsd for succeeded scrape_jobs whose billing settled after the sync run returned.",
+        "cli": "poll-scrape-costs", "category": "maintenance",
+        "args": [],
+    },
+    "scrape-politician": {
+        "description": "Enqueue + run one scrape job against a single politician (admin / operator one-shot).",
+        "cli": "scrape-politician", "category": "enrichment",
+        "args": [
+            {"name": "politician_id", "type": "str", "required": True,
+             "help": "UUID of public.politicians.id"},
+            {"name": "platform", "type": "enum", "required": True,
+             "choices": ["twitter", "bluesky", "instagram", "mastodon"]},
+            {"name": "user_id", "type": "str", "required": True,
+             "help": "UUID of private.users.id to bill (admin testing: pass admin user)."},
+            {"name": "kind", "type": "enum", "required": False, "default": "monitoring",
+             "choices": ["monitoring", "preflight", "archive"],
+             "help": "Job kind. preflight = profile probe; archive = deep history."},
+            {"name": "post_hint", "type": "int", "required": False,
+             "help": "Lifetime post-count hint (for archive pricing)."},
+        ],
+    },
 }
 
 

@@ -106,6 +106,15 @@ reflected in the documentation site's git history (visible from the
 repo, when public). Material changes will be noted on the
 [home page](../index.md) for at least 30 days.
 
+## Related policies
+
+- [Disclaimer](./disclaimer.md) — what the AI-generated reports and
+  the scraped social-media content from paid monitoring are and aren't.
+- [Takedown and correction requests](./takedown.md) — how to ask us to
+  remove or correct content about you.
+- [Data subject access requests](./dsar.md) — how to ask what we hold
+  about you, get a copy, or have it deleted.
+
 ## Questions or complaints
 
 [admin@thebunkerops.ca](mailto:admin@thebunkerops.ca).

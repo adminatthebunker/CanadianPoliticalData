@@ -20,6 +20,7 @@ import AccountPage from "./pages/AccountPage";
 import SavedSearchesPage from "./pages/SavedSearchesPage";
 import CorrectionsPage from "./pages/CorrectionsPage";
 import AccountCorrectionsPage from "./pages/AccountCorrectionsPage";
+import AccountMonitoringPage from "./pages/AccountMonitoringPage";
 import CreditsPage from "./pages/CreditsPage";
 import InvoicePage from "./pages/InvoicePage";
 import ReportsListPage from "./pages/ReportsListPage";
@@ -75,6 +76,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
           <Route path="account/corrections" element={<AccountCorrectionsPage />} />
           <Route path="account/credits" element={<CreditsPage />} />
           <Route path="account/reports" element={<ReportsListPage />} />
+          <Route path="account/monitoring" element={<AccountMonitoringPage />} />
           <Route path="account/api-keys" element={<ApiKeysPage />} />
           <Route path="account/billing" element={<BillingPage />} />
           <Route path="corrections" element={<CorrectionsPage />} />

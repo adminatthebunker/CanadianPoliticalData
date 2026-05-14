@@ -256,6 +256,14 @@ services:
       # Optional — used by agent-missing-socials (Tier-3 socials backfill).
       # If unset, the command aborts gracefully rather than proceeding.
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # Apify scrape worker (paid user-monitoring feature).
+      APIFY_API_TOKEN: ${APIFY_API_TOKEN:-}
+      SCRAPE_TWITTER_TWEETS_PER_RUN: ${SCRAPE_TWITTER_TWEETS_PER_RUN:-10}
+      SCRAPE_INSTAGRAM_POSTS_PER_RUN: ${SCRAPE_INSTAGRAM_POSTS_PER_RUN:-10}
+      SCRAPE_BLUESKY_POSTS_PER_RUN: ${SCRAPE_BLUESKY_POSTS_PER_RUN:-20}
+      SCRAPE_MASTODON_POSTS_PER_RUN: ${SCRAPE_MASTODON_POSTS_PER_RUN:-20}
+      SCRAPE_DAILY_USD_CAP: ${SCRAPE_DAILY_USD_CAP:-5}
+      SCRAPE_DISPATCH_INTERVAL: ${SCRAPE_DISPATCH_INTERVAL:-60}
     volumes:
       - ./data:/data:ro
       - ./db:/app/db:ro
@@ -297,6 +305,15 @@ services:
       # worker. Unset ⇒ job will log the ANTHROPIC_API_KEY-missing warning
       # and exit cleanly.
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      # Apify scrape worker — admin-triggered scrapes route through here
+      # via dispatch-scrapes / run-scrape-jobs commands.
+      APIFY_API_TOKEN: ${APIFY_API_TOKEN:-}
+      SCRAPE_TWITTER_TWEETS_PER_RUN: ${SCRAPE_TWITTER_TWEETS_PER_RUN:-10}
+      SCRAPE_INSTAGRAM_POSTS_PER_RUN: ${SCRAPE_INSTAGRAM_POSTS_PER_RUN:-10}
+      SCRAPE_BLUESKY_POSTS_PER_RUN: ${SCRAPE_BLUESKY_POSTS_PER_RUN:-20}
+      SCRAPE_MASTODON_POSTS_PER_RUN: ${SCRAPE_MASTODON_POSTS_PER_RUN:-20}
+      SCRAPE_DAILY_USD_CAP: ${SCRAPE_DAILY_USD_CAP:-5}
+      SCRAPE_DISPATCH_INTERVAL: ${SCRAPE_DISPATCH_INTERVAL:-60}
     volumes:
       - ./data:/data:ro
       - ./db:/app/db:ro
@@ -382,6 +399,38 @@ services:
     volumes:
       - ./services/scanner/src:/app/src
     entrypoint: ["python", "-m", "src", "reports-worker"]
+    restart: unless-stopped
+    networks: [sw]
+
+  # ── Scrape worker (paid Apify-backed politician monitoring) ───────
+  # Two-stage loop: dispatch_due_subscriptions enqueues scrape_jobs for
+  # saved_searches whose scrape cadence is due; run_queued_jobs drains
+  # the queue (calls Apify actors or free APIs, commits/releases credit
+  # holds). Independent of the report/alert workers — different actor
+  # set, different ledger kind, different upstream APIs. Daily USD cap
+  # is a platform-level circuit breaker; per-user balance is enforced
+  # at dispatch time.
+  scrape-worker:
+    build:
+      context: ./services/scanner
+      dockerfile: Dockerfile
+    container_name: sw-scrape-worker
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://sw:${DB_PASSWORD}@db:5432/sovereignwatch
+      APIFY_API_TOKEN: ${APIFY_API_TOKEN:-}
+      SCRAPE_TWITTER_TWEETS_PER_RUN: ${SCRAPE_TWITTER_TWEETS_PER_RUN:-10}
+      SCRAPE_INSTAGRAM_POSTS_PER_RUN: ${SCRAPE_INSTAGRAM_POSTS_PER_RUN:-10}
+      SCRAPE_BLUESKY_POSTS_PER_RUN: ${SCRAPE_BLUESKY_POSTS_PER_RUN:-20}
+      SCRAPE_MASTODON_POSTS_PER_RUN: ${SCRAPE_MASTODON_POSTS_PER_RUN:-20}
+      SCRAPE_ARCHIVE_MAX_ITEMS: ${SCRAPE_ARCHIVE_MAX_ITEMS:-3000}
+      SCRAPE_DAILY_USD_CAP: ${SCRAPE_DAILY_USD_CAP:-5}
+      SCRAPE_DISPATCH_INTERVAL: ${SCRAPE_DISPATCH_INTERVAL:-60}
+    volumes:
+      - ./services/scanner/src:/app/src
+    entrypoint: ["python", "-m", "src", "run-scrape-worker"]
     restart: unless-stopped
     networks: [sw]
 

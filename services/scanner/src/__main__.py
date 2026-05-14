@@ -4473,6 +4473,124 @@ def cmd_resolve_meeting_caption_speakers(ctx: click.Context, city) -> None:
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 
 
+@cli.command("run-scrape-worker")
+@click.pass_context
+def cmd_scrape_worker(ctx: click.Context) -> None:
+    """Run the Apify scrape worker daemon.
+
+    Long-running. Each tick: (1) dispatch_due_subscriptions finds saved
+    searches whose scrape cadence is due and creates scrape_jobs +
+    places credit holds; (2) run_queued_jobs drains the queue,
+    calling per-platform actors and committing or releasing holds.
+    Respects SCRAPE_DAILY_USD_CAP as a circuit breaker against
+    runaway Apify spend.
+    """
+    from . import scrape_worker as _sw
+    asyncio.run(_sw.main())
+
+
+@cli.command("dispatch-scrapes")
+@click.pass_context
+def cmd_dispatch_scrapes(ctx: click.Context) -> None:
+    """One tick of the scrape dispatcher (no daemon).
+
+    Useful for testing the cadence + credit-hold path without running
+    the long daemon. Equivalent to one inner iteration of
+    run-scrape-worker.
+    """
+    from .scrape_worker import dispatch_due_subscriptions
+
+    async def _wrap(db: Database) -> None:
+        stats = await dispatch_due_subscriptions(db)
+        console.print(f"[green]dispatch-scrapes[/green]: {stats}")
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
+@cli.command("run-scrape-jobs")
+@click.option("--limit", type=int, default=5, show_default=True,
+              help="Maximum number of queued jobs to drain in this call.")
+@click.pass_context
+def cmd_run_scrape_jobs(ctx: click.Context, limit: int) -> None:
+    """Drain up to N queued scrape jobs (no daemon).
+
+    Honors SCRAPE_DAILY_USD_CAP; will stop early if hit. Useful for
+    one-off draining + verification runs.
+    """
+    from .scrape_worker import run_queued_jobs
+
+    async def _wrap(db: Database) -> None:
+        stats = await run_queued_jobs(db, limit=limit)
+        console.print(f"[green]run-scrape-jobs[/green]: {stats}")
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
+@cli.command("poll-scrape-costs")
+@click.pass_context
+def cmd_poll_scrape_costs(ctx: click.Context) -> None:
+    """One tick of the Apify cost-finalization poller.
+
+    Re-fetches usageTotalUsd for succeeded scrape_jobs whose billing
+    settled after the sync run returned (apidojo/tweet-scraper is the
+    canonical culprit; Apify reports 0 sync, settles minutes later).
+    Honors SCRAPE_COST_POLL_DELAY_MIN (default 5min) and processes up
+    to SCRAPE_COST_POLL_BATCH (default 20) rows. Wraps a single call
+    of the same logic that runs every tick inside run-scrape-worker.
+    """
+    from .scrape_worker import poll_apify_run_costs
+
+    async def _wrap(db: Database) -> None:
+        stats = await poll_apify_run_costs(db)
+        console.print(f"[green]poll-scrape-costs[/green]: {stats}")
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
+@cli.command("scrape-politician")
+@click.option("--politician-id", required=True, help="UUID of politicians.id")
+@click.option("--platform", required=True,
+              type=click.Choice(["twitter", "bluesky", "instagram", "mastodon"]),
+              help="Platform to scrape; must be in v1-supported list.")
+@click.option("--user-id", required=True,
+              help="UUID of private.users.id to bill (admin testing: use the admin user).")
+@click.option("--kind", "scrape_kind", default="monitoring", show_default=True,
+              type=click.Choice(["monitoring", "preflight", "archive"]),
+              help="Job kind. preflight = profile probe only; archive = deep history.")
+@click.option("--post-hint", type=int, default=None,
+              help="Optional lifetime post count hint for archive pricing.")
+@click.pass_context
+def cmd_scrape_politician(
+    ctx: click.Context,
+    politician_id: str,
+    platform: str,
+    user_id: str,
+    scrape_kind: str,
+    post_hint: Optional[int],
+) -> None:
+    """Enqueue + immediately run one scrape job.
+
+    For operator verification and one-shot user-initiated scrapes
+    (archive, manual refresh). The job is created with
+    trigger_source='admin' for monitoring/preflight kinds and
+    'user_oneshot' for archive — the credit hold + commit/release
+    discipline is identical regardless.
+    """
+    from .scrape_worker import one_shot_scrape
+
+    async def _wrap(db: Database) -> None:
+        out = await one_shot_scrape(
+            db,
+            user_id=user_id,
+            politician_id=politician_id,
+            platform=platform,
+            scrape_kind=scrape_kind,
+            post_hint=post_hint,
+        )
+        if not out.get("ok"):
+            console.print(f"[red]scrape-politician failed[/red]: {out}")
+            return
+        console.print(f"[green]scrape-politician[/green]: {out}")
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
 if __name__ == "__main__":
     try:
         cli(obj={})

@@ -127,6 +127,61 @@ export interface SavedSearch {
   updated_at: string;
   has_embedding: boolean;
   feed_url: string | null;
+  // Scrape monitoring (Phase 1b — Apify-backed paid feature).
+  scrape_platforms?: ScrapePlatform[];
+  scrape_cadence?: ScrapeCadence;
+  scrape_last_run_at?: string | null;
+  scrape_next_run_at?: string | null;
+  scrape_attribute_handle?: string | null;
+  scrape_attribute_url?: string | null;
+  scrape_paused_reason?: string | null;
+}
+
+export type ScrapePlatform = "twitter" | "bluesky" | "instagram" | "mastodon";
+export type ScrapeCadence = "none" | "weekly" | "monthly" | "quarterly";
+
+/** Returned by GET /me/scrape-cost-estimate. */
+export interface ScrapeCostEstimate {
+  politician_id: string;
+  platforms: ScrapePlatform[];
+  cadence: "weekly" | "monthly" | "quarterly";
+  monitoring: {
+    platforms: ScrapePlatform[];
+    cadence: "weekly" | "monthly" | "quarterly";
+    credits_per_run: number;
+    runs_per_month: number;
+    total_per_month: number;
+  };
+  preflight_credits: number;
+  archive_credits: number;
+  archive_known_size: boolean;
+  per_platform: Record<ScrapePlatform, {
+    monitoring_credits_per_run: number;
+    preflight_credits: number;
+    lifetime_post_count: number | null;
+    follower_count: number | null;
+    last_profile_check_at: string | null;
+    archive_credits: number | null;
+    archive_known_size: boolean;
+  }>;
+}
+
+/** A single scrape job from GET /me/scrape-jobs. */
+export interface ScrapeJob {
+  id: string;
+  politician_id: string;
+  politician_name: string | null;
+  platform: ScrapePlatform | string;
+  status: "queued" | "running" | "succeeded" | "failed" | "cancelled" | "refunded";
+  scrape_kind: "monitoring" | "preflight" | "archive";
+  trigger_source: "subscription" | "admin" | "user_oneshot";
+  estimated_credits: number;
+  result_count: number | null;
+  cost_usd_apify: string | null;
+  error: string | null;
+  created_at: string;
+  started_at?: string | null;
+  finished_at: string | null;
 }
 
 export interface CorrectionSubmission {

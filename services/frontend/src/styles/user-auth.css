@@ -594,6 +594,1063 @@
   font-size: .8rem;
 }
 
+/* ── MonitorConfigPanel (paid scrape monitoring) ─────────────────── */
+
+.cpd-monitor-wrap {
+  display: inline-block;
+}
+
+/* v5: panel renders as a right-side drawer instead of a button-anchored
+   popover. The drawer is a viewport-level overlay (fixed positioning)
+   with a dimmed backdrop. On mobile the drawer covers the full screen.
+
+   The legacy `.cpd-monitor-panel` selector remains so the inner form
+   markup (headers, fieldsets, hints, etc.) keeps its existing styles
+   — but the outer panel chrome is now `.cpd-monitor-drawer`. */
+
+.cpd-monitor-drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, .55);
+  z-index: 100;
+  animation: cpd-fade-in .15s ease-out;
+}
+
+.cpd-monitor-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  /* min() collapses to viewport width when the screen is narrower than
+     the design width — works without a separate breakpoint. */
+  width: min(30rem, 100vw);
+  background: var(--panel-2, #242a38);
+  border-left: 1px solid #3a4658;
+  z-index: 101;
+  box-shadow: -16px 0 36px rgba(0, 0, 0, .4);
+  display: flex;
+  flex-direction: column;
+  animation: cpd-drawer-in .22s cubic-bezier(.2, .8, .2, 1);
+}
+
+.cpd-monitor-drawer__close {
+  position: absolute;
+  top: .65rem;
+  right: .65rem;
+  /* 2.75rem = 44px at 16px root — meets Apple HIG tap-target minimum */
+  width: 2.75rem;
+  height: 2.75rem;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  color: var(--ink-muted, #95a3b8);
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.cpd-monitor-drawer__close:hover {
+  background: rgba(255, 255, 255, .04);
+  color: var(--ink);
+  border-color: #3a4658;
+}
+
+.cpd-monitor-drawer__body {
+  padding: 1.5rem 1.25rem 1.5rem;
+  overflow-y: auto;
+  flex: 1;
+}
+
+@media (max-width: 30rem) {
+  /* On phones the drawer fills the viewport and the left border
+     becomes redundant. width: min() above already collapses to 100vw. */
+  .cpd-monitor-drawer {
+    border-left: none;
+  }
+}
+
+@keyframes cpd-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes cpd-drawer-in {
+  from { transform: translateX(100%); }
+  to   { transform: translateX(0); }
+}
+
+/* Legacy panel block kept so inner form markup styles still apply.
+   Drop the position/min-width/box-shadow — those are the drawer's job
+   now. The fieldset / radio / etc. selectors below ride on .cpd-monitor-
+   panel__* class names that the JSX still uses inside the drawer. */
+.cpd-monitor-panel {
+  /* visual reset — the drawer owns chrome now */
+}
+
+/* ── Wizard: Scan → Backfill → Monitor ───────────────────────────── */
+
+/* Step indicator: three pills with a connecting line through their
+   midpoint. The line lives in the gap as a single ::before on the
+   <ol>, positioned absolutely so it doesn't interfere with the
+   grid auto-sizing. */
+.cpd-wizard-steps {
+  list-style: none;
+  margin: 0 0 1.5rem;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0;
+  position: relative;
+}
+
+.cpd-wizard-steps::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 14%;
+  right: 14%;
+  height: 1px;
+  background: #2a3242;
+  z-index: 0;
+}
+
+.cpd-wizard-step {
+  margin: 0;
+  position: relative;
+  z-index: 1;
+  display: flex;
+  justify-content: center;
+}
+
+.cpd-wizard-step__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: .5rem;
+  padding: .4rem .9rem;
+  /* min-height: 44px meets mobile tap-target; the pills look fine
+     visually at this height because the rounded shape carries them. */
+  min-height: 44px;
+  background: var(--panel-2, #242a38);
+  border: 1px solid #3a4658;
+  color: var(--ink-muted, #95a3b8);
+  border-radius: 999px;
+  font: inherit;
+  font-size: .82rem;
+  cursor: pointer;
+  transition: color .15s, border-color .15s, background .15s;
+}
+
+.cpd-wizard-step__btn:hover {
+  color: var(--ink);
+  border-color: #4a5568;
+}
+
+.cpd-wizard-step__num {
+  display: inline-grid;
+  place-items: center;
+  width: 1.35rem;
+  height: 1.35rem;
+  border-radius: 50%;
+  background: rgba(74, 158, 255, .15);
+  color: var(--accent, #4a9eff);
+  font-size: .7rem;
+  font-weight: 700;
+  transition: background .15s, color .15s;
+}
+
+.cpd-wizard-step__label {
+  font-weight: 500;
+}
+
+.cpd-wizard-step--current .cpd-wizard-step__btn {
+  border-color: var(--accent, #4a9eff);
+  color: var(--ink);
+  background: rgba(74, 158, 255, .1);
+  box-shadow: 0 0 0 3px rgba(74, 158, 255, .08);
+}
+
+.cpd-wizard-step--current .cpd-wizard-step__num {
+  background: var(--accent, #4a9eff);
+  color: #fff;
+}
+
+.cpd-wizard-body {
+  margin-bottom: 1.25rem;
+  animation: cpd-step-fade .2s ease-out;
+}
+
+@keyframes cpd-step-fade {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.cpd-wizard-body__title {
+  margin: 0 0 .35rem;
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--ink);
+  letter-spacing: -.005em;
+}
+
+/* Step 1 — Scan list */
+.cpd-wizard-scan {
+  list-style: none;
+  margin: 1rem 0 1rem;
+  padding: 0;
+  border: 1px solid #2a3242;
+  border-radius: 8px;
+  overflow: hidden;
+  background: rgba(0, 0, 0, .12);
+}
+
+.cpd-wizard-scan__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: .65rem .85rem;
+  border-bottom: 1px solid #2a3242;
+  transition: background .12s;
+}
+
+.cpd-wizard-scan__row:hover {
+  background: rgba(255, 255, 255, .015);
+}
+
+.cpd-wizard-scan__row:last-child {
+  border-bottom: none;
+}
+
+.cpd-wizard-scan__platform {
+  display: flex;
+  align-items: center;
+  gap: .55rem;
+  cursor: pointer;
+  font-size: .9rem;
+  /* Stretch the label to fill the row height so the whole row is a
+     tap target, not just the 16px checkbox + text. */
+  align-self: stretch;
+  flex: 1;
+  min-height: 44px;
+}
+
+.cpd-wizard-scan__platform input[type="checkbox"] {
+  /* slightly larger native checkbox so it's a comfortable tap target */
+  width: 1rem;
+  height: 1rem;
+  cursor: pointer;
+}
+
+.cpd-wizard-scan__name {
+  text-transform: capitalize;
+}
+
+.cpd-wizard-scan__meta {
+  font-size: .78rem;
+  color: var(--ink-muted, #95a3b8);
+  display: inline-flex;
+  align-items: center;
+  gap: .35rem;
+}
+
+.cpd-wizard-scan__cached {
+  color: #5fc864;
+  background: rgba(95, 200, 100, .12);
+  border: 1px solid rgba(95, 200, 100, .25);
+  padding: .1rem .5rem;
+  border-radius: 999px;
+  font-weight: 600;
+  font-size: .72rem;
+}
+
+.cpd-wizard-scan__cost {
+  color: var(--accent, #4a9eff);
+  background: rgba(74, 158, 255, .1);
+  border: 1px solid rgba(74, 158, 255, .25);
+  padding: .1rem .5rem;
+  border-radius: 999px;
+  font-weight: 600;
+  font-size: .72rem;
+}
+
+.cpd-wizard-scan__action {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: .25rem;
+}
+
+/* Polish: action footer — primary right-aligned via margin-left:auto */
+.cpd-monitor-panel__actions {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  flex-wrap: wrap;
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+  border-top: 1px solid #2a3242;
+}
+
+.cpd-monitor-panel__actions .cpd-monitor-panel__primary {
+  margin-left: auto;
+}
+
+/* Narrow drawers (mobile): the 3-button case (Back / Stop / Save) is
+   wider than the drawer body. flex-wrap lets it spill to a second row.
+   row-gap keeps the buttons separated vertically. The primary keeps
+   margin-left: auto so it lands right-aligned regardless of row. */
+@media (max-width: 30rem) {
+  .cpd-monitor-panel__actions {
+    row-gap: .5rem;
+  }
+}
+
+.cpd-monitor-panel__title {
+  margin: 0 0 1rem;
+  /* Reserved right padding so the drawer's absolute-positioned close
+     button (top-right) doesn't run into the title text. */
+  padding-right: 2.5rem;
+  font-size: 1.15rem;
+  color: var(--ink);
+}
+
+.cpd-monitor-panel__section {
+  border: none;
+  padding: 0;
+  margin: 0 0 1rem;
+}
+
+.cpd-monitor-panel__section legend {
+  font-weight: 600;
+  font-size: .9rem;
+  margin-bottom: .25rem;
+  padding: 0;
+  color: var(--accent, #4a9eff);
+}
+
+.cpd-monitor-panel__hint {
+  margin: .25rem 0 .5rem;
+  font-size: .8rem;
+  color: var(--ink-muted, #95a3b8);
+}
+
+.cpd-monitor-panel__radio,
+.cpd-monitor-panel__platform {
+  display: inline-flex;
+  align-items: center;
+  gap: .5rem;
+  margin-right: .9rem;
+  /* Tap-target minimum on mobile: the native radio/checkbox is 13px
+     but the label is the actual tap region; pad it to 44px tall. */
+  min-height: 44px;
+  font-size: .85rem;
+  cursor: pointer;
+}
+
+.cpd-monitor-panel__radio input,
+.cpd-monitor-panel__platform input {
+  width: 1rem;
+  height: 1rem;
+}
+
+.cpd-monitor-panel__platforms {
+  display: flex;
+  flex-direction: column;
+  gap: .35rem;
+  margin: .25rem 0 .65rem;
+}
+
+.cpd-monitor-panel__platform-meta {
+  color: var(--ink-muted, #95a3b8);
+  font-size: .78rem;
+}
+
+.cpd-monitor-panel__cadence {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  flex-wrap: wrap;
+  margin-bottom: .5rem;
+  font-size: .85rem;
+}
+
+.cpd-monitor-panel__cost {
+  margin-top: .5rem;
+  padding: .55rem .75rem;
+  background: rgba(74, 158, 255, .08);
+  border: 1px solid rgba(74, 158, 255, .25);
+  border-radius: 6px;
+  font-size: .85rem;
+}
+
+.cpd-monitor-panel__archive {
+  margin-top: .35rem;
+  color: var(--ink-muted, #95a3b8);
+  font-size: .8rem;
+}
+
+.cpd-monitor-panel__archive--unknown {
+  color: #d2c478;
+}
+
+.cpd-monitor-panel__error {
+  color: #ff7a7a;
+  font-size: .85rem;
+  margin: .5rem 0;
+}
+
+/* (Original .cpd-monitor-panel__actions block removed — superseded by
+   the wizard-aware version above with margin-left:auto on primary +
+   top border separator. Button styles kept below.) */
+
+.cpd-monitor-panel__actions button {
+  padding: .55rem 1rem;
+  /* Tap target — 44px on mobile, comfortable on desktop. */
+  min-height: 44px;
+  border-radius: 6px;
+  background: var(--panel, #1c222e);
+  color: var(--ink);
+  border: 1px solid #3a4658;
+  font: inherit;
+  font-size: .85rem;
+  cursor: pointer;
+  transition: border-color .12s, background .12s;
+}
+
+.cpd-monitor-panel__actions button:hover {
+  border-color: var(--accent, #4a9eff);
+}
+
+.cpd-monitor-panel__actions button:disabled {
+  opacity: .5;
+  cursor: wait;
+}
+
+.cpd-monitor-panel__primary {
+  background: var(--accent, #4a9eff) !important;
+  color: #fff !important;
+  border-color: var(--accent, #4a9eff) !important;
+  font-weight: 600 !important;
+  box-shadow: 0 1px 3px rgba(74, 158, 255, .25);
+}
+
+.cpd-monitor-panel__primary:hover {
+  filter: brightness(1.08);
+}
+
+.cpd-monitor-panel__danger {
+  color: #ff7a7a !important;
+  border-color: #5a3a3a !important;
+}
+
+.cpd-monitor-panel__secondary {
+  display: inline-block;
+  margin-top: .35rem;
+  padding: .3rem .7rem;
+  background: transparent;
+  border: 1px solid var(--accent, #4a9eff);
+  color: var(--accent, #4a9eff);
+  border-radius: 6px;
+  font: inherit;
+  font-size: .8rem;
+  cursor: pointer;
+}
+
+.cpd-monitor-panel__secondary:hover {
+  background: rgba(74, 158, 255, .08);
+}
+
+.cpd-monitor-panel__cost-status {
+  margin-top: .35rem;
+  font-size: .82rem;
+  color: var(--ink-muted, #95a3b8);
+  font-style: italic;
+}
+
+.cpd-monitor-panel__attribution {
+  margin-top: .75rem;
+  padding-top: .65rem;
+  border-top: 1px dashed #3a4658;
+}
+
+.cpd-monitor-panel__attribution-input {
+  display: block;
+  width: 100%;
+  margin: .4rem 0;
+  padding: .35rem .55rem;
+  background: var(--panel, #1c222e);
+  color: var(--ink);
+  border: 1px solid #3a4658;
+  border-radius: 6px;
+  font: inherit;
+  font-size: .85rem;
+}
+
+/* v4 — multi-platform backfill table */
+
+.cpd-monitor-panel__backfill-head {
+  margin: .5rem 0 .35rem;
+  font-size: .9rem;
+}
+
+.cpd-monitor-panel__hint--inline {
+  display: inline;
+  margin: 0;
+}
+
+.cpd-monitor-panel__backfill {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: .82rem;
+  margin-bottom: .5rem;
+}
+
+.cpd-monitor-panel__backfill td {
+  padding: .25rem .4rem;
+  border-bottom: 1px solid #2a3242;
+  vertical-align: middle;
+}
+
+.cpd-monitor-panel__backfill tfoot td {
+  border-bottom: none;
+  border-top: 1px solid #3a4658;
+  padding-top: .45rem;
+}
+
+.cpd-monitor-panel__backfill-row {
+  display: inline-flex;
+  align-items: center;
+  gap: .35rem;
+  cursor: pointer;
+}
+
+.cpd-monitor-panel__backfill-platform {
+  text-transform: capitalize;
+}
+
+.cpd-monitor-panel__backfill-count,
+.cpd-monitor-panel__backfill-cost {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.cpd-monitor-panel__backfill-status {
+  text-align: right;
+  font-size: .78rem;
+}
+
+.cpd-monitor-panel__backfill-running {
+  color: var(--ink-muted, #95a3b8);
+  font-style: italic;
+}
+
+.cpd-monitor-panel__backfill-ok {
+  color: #5fc864;
+}
+
+.cpd-monitor-panel__backfill-err {
+  color: #ff7a7a;
+}
+
+/* ── /account/monitoring dashboard ───────────────────────────────── */
+
+/* Page header — clean vertical stack, no flex-side-by-side. */
+.cpd-monitoring__page-head {
+  margin: 0 0 1.5rem;
+}
+
+.cpd-monitoring__page-head h2 {
+  margin: 0 0 .35rem;
+  font-size: 1.5rem;
+  line-height: 1.2;
+}
+
+.cpd-monitoring__page-sub {
+  margin: 0;
+  color: var(--ink-muted, #95a3b8);
+  font-size: .9rem;
+  max-width: 50rem;
+}
+
+.cpd-monitoring__page-sub strong {
+  color: var(--ink);
+}
+
+.cpd-monitoring__section-title {
+  margin: 1.5rem 0 .65rem;
+  font-size: .85rem;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--ink-muted, #95a3b8);
+  font-weight: 600;
+}
+
+.cpd-monitoring__section-title:first-of-type {
+  margin-top: 0;
+}
+
+.cpd-monitoring__count {
+  color: var(--ink-muted, #95a3b8);
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.cpd-monitoring__list {
+  list-style: none;
+  padding: 0;
+  margin: .5rem 0 1rem;
+  display: grid;
+  gap: .75rem;
+}
+
+.cpd-monitoring__row {
+  padding: .9rem 1.1rem;
+  background: var(--panel-2, #242a38);
+  border: 1px solid #3a4658;
+  border-radius: 8px;
+}
+
+.cpd-monitoring__row--paused {
+  border-color: rgba(210, 196, 120, .4);
+  background: rgba(210, 196, 120, .05);
+}
+
+.cpd-monitoring__row-head {
+  display: flex;
+  align-items: baseline;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: .5rem;
+}
+
+.cpd-monitoring__row-head strong {
+  font-size: 1rem;
+}
+
+.cpd-monitoring__pol-link {
+  font-size: .85rem;
+  color: var(--accent, #4a9eff);
+  text-decoration: none;
+}
+
+.cpd-monitoring__pol-link:hover { text-decoration: underline; }
+
+.cpd-monitoring__row-meta {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: .65rem 1.25rem;
+  margin: .25rem 0 .5rem;
+}
+
+@media (max-width: 36rem) {
+  .cpd-monitoring__row-meta {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.cpd-monitoring__row-meta dt {
+  font-size: .75rem;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--ink-muted, #95a3b8);
+}
+
+.cpd-monitoring__row-meta dd {
+  margin: .1rem 0 0;
+  font-size: .9rem;
+}
+
+.cpd-monitoring__paused-banner {
+  margin: .5rem 0;
+  padding: .55rem .75rem;
+  background: rgba(210, 196, 120, .12);
+  border: 1px solid rgba(210, 196, 120, .35);
+  border-radius: 6px;
+  font-size: .85rem;
+}
+
+.cpd-monitoring__paused-banner code {
+  background: rgba(0,0,0,.2);
+  padding: 0 .3rem;
+  border-radius: 3px;
+}
+
+.cpd-monitoring__row-actions {
+  display: flex;
+  gap: .5rem;
+  margin-top: .35rem;
+}
+
+.cpd-monitoring__danger {
+  /* min-height: 44px to meet Apple HIG / Material tap-target minimum
+     — this is a destructive action on a paid subscription, easy to
+     mis-tap on mobile if it's too small. */
+  padding: .55rem .85rem;
+  min-height: 44px;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink-muted, #95a3b8);
+  border: 1px solid #3a4658;
+  cursor: pointer;
+  font: inherit;
+  font-size: .82rem;
+}
+
+.cpd-monitoring__danger:hover {
+  color: #ff7a7a;
+  border-color: #5a3a3a;
+  background: rgba(255, 122, 122, .06);
+}
+
+.cpd-monitoring__jobs-wrap {
+  overflow-x: auto;
+}
+
+.cpd-monitoring__jobs {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: .85rem;
+  margin: .5rem 0 1.5rem;
+  table-layout: fixed;
+  /* min-width = sum of all column widths so the wrap can scroll
+     horizontally if the card is narrower than the table. Without
+     this the Politician column would collapse to 0 (table-layout:
+     fixed gives leftover space to `width: auto` cols; when the
+     container is narrow there's no leftover). */
+  min-width: 46rem;
+}
+
+/* Column-width tuning for the recent-activity table. WHEN needs
+   breathing room so "4 hours ago" stays on one line; POSTS/CREDITS
+   are small numbers; EXPORT shows two short chips. Politician is
+   fixed-width too (not `auto`) for the reason called out above. */
+.cpd-monitoring__jobs col.cpd-monitoring__col-when     { width: 6.5rem; }
+.cpd-monitoring__jobs col.cpd-monitoring__col-pol      { width: 8rem; }
+.cpd-monitoring__jobs col.cpd-monitoring__col-platform { width: 6rem; }
+.cpd-monitoring__jobs col.cpd-monitoring__col-kind     { width: 6rem; }
+.cpd-monitoring__jobs col.cpd-monitoring__col-status   { width: 5.5rem; }
+.cpd-monitoring__jobs col.cpd-monitoring__col-posts    { width: 3.5rem; }
+.cpd-monitoring__jobs col.cpd-monitoring__col-credits  { width: 4rem; }
+.cpd-monitoring__jobs col.cpd-monitoring__col-export   { width: 6.5rem; }
+
+.cpd-monitoring__jobs th,
+.cpd-monitoring__jobs td {
+  padding: .45rem .6rem;
+  border-bottom: 1px solid #2a3242;
+  text-align: left;
+  vertical-align: middle;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cpd-monitoring__jobs th {
+  font-size: .75rem;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--ink-muted, #95a3b8);
+  font-weight: 600;
+}
+
+.cpd-monitoring__pill {
+  display: inline-block;
+  padding: .1rem .55rem;
+  border-radius: 999px;
+  font-size: .75rem;
+  background: rgba(74, 158, 255, .15);
+  color: var(--accent, #4a9eff);
+}
+
+.cpd-monitoring__pill--succeeded {
+  background: rgba(95, 200, 100, .15);
+  color: #5fc864;
+}
+
+.cpd-monitoring__pill--failed {
+  background: rgba(255, 122, 122, .15);
+  color: #ff7a7a;
+}
+
+.cpd-monitoring__pill--running,
+.cpd-monitoring__pill--queued {
+  background: rgba(210, 196, 120, .15);
+  color: #d2c478;
+}
+
+.cpd-monitoring__pill--cancelled,
+.cpd-monitoring__pill--refunded {
+  background: rgba(160, 160, 160, .15);
+  color: var(--ink-muted, #95a3b8);
+}
+
+.cpd-monitoring__export-link {
+  display: inline-block;
+  padding: .08rem .45rem;
+  border: 1px solid #3a4658;
+  border-radius: 4px;
+  color: var(--accent, #4a9eff);
+  font-size: .72rem;
+  text-decoration: none;
+  font-weight: 600;
+  letter-spacing: .02em;
+}
+
+.cpd-monitoring__export-link:hover {
+  background: rgba(74, 158, 255, .08);
+  border-color: var(--accent, #4a9eff);
+}
+
+.cpd-monitoring__export-na {
+  color: var(--ink-muted, #95a3b8);
+  font-size: .8rem;
+}
+
+/* ── ActiveProbesIndicator — persistent in-flight scrape pill ─── */
+/* Renders top-right of viewport while any of the user's scrape_jobs
+   are in status='queued' or 'running'. Anchored above the drawer
+   close-button (z-index 102 > drawer's 101) so it stays visible even
+   when the user re-opens the wizard mid-probe. Click → /account/
+   monitoring for per-job detail. */
+
+.cpd-jobs-indicator {
+  position: fixed;
+  top: 1rem;
+  right: 1rem;
+  z-index: 102;
+  display: inline-flex;
+  align-items: center;
+  gap: .55rem;
+  padding: .55rem .9rem;
+  background: var(--panel-2, #242a38);
+  border: 1px solid var(--accent, #4a9eff);
+  border-radius: 999px;
+  color: var(--ink);
+  font-size: .82rem;
+  text-decoration: none;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .3);
+  animation: cpd-jobs-fade-in .2s ease-out;
+}
+
+.cpd-jobs-indicator:hover {
+  background: rgba(74, 158, 255, .12);
+}
+
+.cpd-jobs-indicator__spinner {
+  display: inline-block;
+  width: .8rem;
+  height: .8rem;
+  border-radius: 50%;
+  border: 2px solid rgba(74, 158, 255, .25);
+  border-top-color: var(--accent, #4a9eff);
+  animation: cpd-jobs-spin .9s linear infinite;
+}
+
+.cpd-jobs-indicator__text {
+  font-weight: 500;
+  /* Truncate long politician names so the pill stays compact. */
+  max-width: 18rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cpd-jobs-indicator__more {
+  display: inline-block;
+  padding: .08rem .45rem;
+  background: rgba(74, 158, 255, .2);
+  color: var(--accent, #4a9eff);
+  border-radius: 999px;
+  font-size: .72rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+@keyframes cpd-jobs-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes cpd-jobs-fade-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* On phones, slide the indicator to the bottom — top-right collides
+   with the drawer close button + the browser chrome address bar. */
+@media (max-width: 30rem) {
+  .cpd-jobs-indicator {
+    top: auto;
+    bottom: 4.5rem;  /* clears MobileBottomNav */
+    left: 50%;
+    right: auto;
+    transform: translateX(-50%);
+  }
+
+  @keyframes cpd-jobs-fade-in {
+    from { opacity: 0; transform: translate(-50%, 4px); }
+    to   { opacity: 1; transform: translate(-50%, 0); }
+  }
+}
+
+/* ── /account/api-keys table ───────────────────────────────────── */
+
+.cpd-auth__table-wrap {
+  overflow-x: auto;
+}
+
+.cpd-auth__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: .85rem;
+}
+
+.cpd-auth__table th,
+.cpd-auth__table td {
+  padding: .5rem .65rem;
+  border-bottom: 1px solid #2a3242;
+  text-align: left;
+  vertical-align: middle;
+}
+
+.cpd-auth__table th {
+  font-size: .75rem;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--ink-muted, #95a3b8);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.cpd-auth__table--keys {
+  table-layout: fixed;
+  min-width: 52rem;
+}
+
+.cpd-auth__table--keys col.cpd-auth__col-name     { width: 8rem; }
+.cpd-auth__table--keys col.cpd-auth__col-prefix   { width: 13rem; }
+.cpd-auth__table--keys col.cpd-auth__col-tier     { width: 4rem; }
+.cpd-auth__table--keys col.cpd-auth__col-status   { width: 5.5rem; }
+.cpd-auth__table--keys col.cpd-auth__col-date     { width: 6.5rem; }
+.cpd-auth__table--keys col.cpd-auth__col-actions  { width: 10rem; }
+
+.cpd-auth__table--keys td {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Prefix is a long monospaced token; allow wrapping inside its
+   fixed-width column instead of truncating with ellipsis. */
+.cpd-auth__prefix {
+  display: inline-block;
+  max-width: 100%;
+  white-space: normal;
+  word-break: break-all;
+  font-size: .78rem;
+  background: rgba(0, 0, 0, .15);
+  padding: .1rem .35rem;
+  border-radius: 4px;
+}
+
+.cpd-auth__actions {
+  display: inline-flex;
+  gap: .35rem;
+  flex-wrap: wrap;
+}
+
+.cpd-auth__actions button {
+  padding: .25rem .55rem;
+  border-radius: 4px;
+  background: var(--panel-2, #242a38);
+  color: var(--ink);
+  border: 1px solid #3a4658;
+  font: inherit;
+  font-size: .78rem;
+  cursor: pointer;
+}
+
+.cpd-auth__actions button:hover {
+  border-color: var(--accent, #4a9eff);
+}
+
+.cpd-auth__actions button:disabled {
+  opacity: .5;
+  cursor: wait;
+}
+
+/* ── Token-reveal flow on /account/api-keys ────────────────────── */
+/* These classes were defined inline in the JSX but had no CSS
+   definitions until now. Render only when a user creates or rotates
+   a key (the showToken state); the token_box especially needs
+   overflow control so a long token doesn't blow out the layout on
+   mobile. */
+
+.cpd-auth__notice {
+  margin: 1rem 0;
+  padding: .85rem 1rem;
+  background: rgba(245, 158, 11, .1);
+  border: 1px solid rgba(245, 158, 11, .4);
+  border-radius: 8px;
+}
+
+.cpd-auth__notice--warn strong {
+  color: #f59e0b;
+}
+
+.cpd-auth__token-box {
+  overflow-x: auto;
+  padding: .65rem .85rem;
+  background: rgba(0, 0, 0, .25);
+  border-radius: 6px;
+  font-size: .82rem;
+  word-break: break-all;
+  white-space: pre-wrap;
+  margin: .65rem 0;
+}
+
+.cpd-auth__row {
+  display: flex;
+  gap: .65rem;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-top: .75rem;
+}
+
+.cpd-auth__fieldset {
+  border: 1px solid #3a4658;
+  border-radius: 6px;
+  padding: .65rem .85rem;
+  margin: .75rem 0 0;
+}
+
+.cpd-auth__fieldset legend {
+  font-size: .85rem;
+  font-weight: 600;
+  color: var(--ink-muted, #95a3b8);
+  padding: 0 .35rem;
+}
+
+/* Note: base `.cpd-auth__chip` is defined further down for the
+   balance chip on /account. The modifier classes below ride on top
+   of that base; they override the colour palette only. */
+
+.cpd-auth__chip--ok {
+  background: rgba(95, 200, 100, .15);
+  color: #5fc864;
+  border-color: rgba(95, 200, 100, .35);
+}
+
+.cpd-auth__chip--warn {
+  background: rgba(210, 196, 120, .15);
+  color: #d2c478;
+  border-color: rgba(210, 196, 120, .35);
+}
+
+.cpd-auth__chip--muted {
+  background: rgba(160, 160, 160, .15);
+  color: var(--ink-muted, #95a3b8);
+  border-color: rgba(160, 160, 160, .25);
+}
+
 /* Save-search preview list */
 .cpd-save-search__preview {
   margin: .5rem 0;

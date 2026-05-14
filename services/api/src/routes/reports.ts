@@ -420,11 +420,19 @@ export default async function reportsRoutes(app: FastifyInstance) {
 }
 
 export async function meReportsRoutes(app: FastifyInstance) {
-  app.get(
+  app.get<{ Querystring: { active?: string } }>(
     "/",
     { preHandler: [requireUser] },
     async (req, reply) => {
       const userId = getUser(req)!.sub;
+      // `?active=true` shortcuts to in-flight rows only — powers the
+      // global ActiveJobsIndicator at viewport-level. Same convention
+      // as /me/scrape-jobs?active=true (see CLAUDE.md § User-facing
+      // async jobs).
+      const activeOnly = req.query.active === "true";
+      const activeFilter = activeOnly
+        ? `AND rj.status IN ('queued', 'running')`
+        : "";
       const rows = await query<{
         id: string;
         kind: string;
@@ -472,6 +480,7 @@ export async function meReportsRoutes(app: FastifyInstance) {
            FROM private.report_jobs rj
            LEFT JOIN public.politicians p ON p.id = rj.politician_id
           WHERE rj.user_id = $1
+            ${activeFilter}
           ORDER BY rj.created_at DESC
           LIMIT 50`,
         [userId]

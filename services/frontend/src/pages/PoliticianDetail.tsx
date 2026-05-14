@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { usePolitician, usePoliticianOpenparliament } from "../hooks/usePolitician";
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
+import { useRssAutoDiscovery } from "../hooks/useRssAutoDiscovery";
 import { PoliticianDetailHeader } from "../components/PoliticianDetailHeader";
 import { PoliticianSocialsTab } from "../components/PoliticianSocialsTab";
 import { PoliticianOfficesTab } from "../components/PoliticianOfficesTab";
@@ -15,7 +16,7 @@ import "../styles/hansard-search.css";
 type TabKey = "socials" | "offices" | "terms" | "changes" | "speeches" | "parliament";
 
 const BASE_TABS: Array<{ key: TabKey; label: string }> = [
-  { key: "socials", label: "Socials" },
+  { key: "socials", label: "Socials & posts" },
   { key: "offices", label: "Offices" },
   { key: "terms",   label: "Terms" },
   { key: "changes", label: "Changes" },
@@ -27,6 +28,10 @@ const ALL_TAB_KEYS: TabKey[] = ["socials", "offices", "terms", "changes", "speec
 function parseTabFromHash(): TabKey {
   if (typeof window === "undefined") return "socials";
   const h = window.location.hash.replace(/^#/, "");
+  // Legacy hash redirect: #posts was a separate tab pre-v4; now folded
+  // into #socials. Keep the alias so existing /login?from=...#posts
+  // links + bookmarks still land somewhere useful.
+  if (h === "posts") return "socials";
   return (ALL_TAB_KEYS as string[]).includes(h) ? (h as TabKey) : "socials";
 }
 
@@ -45,6 +50,14 @@ export default function PoliticianDetail() {
 
   // Use the politician's name as the document title once loaded.
   useDocumentTitle(data?.politician?.name ?? null);
+
+  // Auto-discoverable per-politician RSS feed: speeches + scraped
+  // social posts merged by date. Lets RSS readers + the browser's
+  // built-in feed affordance pick it up without a visible UI element.
+  useRssAutoDiscovery(
+    data?.politician?.id ? `/api/v1/feeds/politicians/${data.politician.id}.rss` : null,
+    data?.politician?.name ? `${data.politician.name} — Canadian Political Data` : undefined,
+  );
 
   const tabs = useMemo(() => (
     showParliamentTab

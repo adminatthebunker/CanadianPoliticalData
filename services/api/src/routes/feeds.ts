@@ -222,7 +222,162 @@ export function feedToken(savedSearchId: string): string {
     .digest("hex");
 }
 
+// ── Public politician feeds (v7c-6) ─────────────────────────────────
+// Anonymous, public-read RSS of every politician's recent legislative
+// + social activity. No token required — politician identity is
+// public data, the feed is a derivative of already-public surfaces.
+// Cacheable for 10 minutes (matches the saved-search feed cadence).
+//
+// Why this lives in feeds.ts and not politicians.ts: every RSS-rendering
+// helper (xmlEscape, rssDate, rss envelope) is here. The route prefix
+// /api/v1/feeds/ is also the right semantic home for feed URLs.
+
+const POL_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+interface PoliticianForFeed {
+  id: string;
+  name: string;
+}
+
+interface PoliticianFeedItem {
+  kind: "speech" | "post";
+  id: string;             // chunk_id or social_posts.id — stable per item
+  link: string;           // permalink: speeches/<id> or post.url
+  title: string;
+  description: string;    // snippet for the feed reader
+  pub_date: string | null;
+}
+
+async function fetchPoliticianSpeeches(
+  politicianId: string,
+  limit: number,
+): Promise<PoliticianFeedItem[]> {
+  const rows = await query<{
+    id: string;
+    speech_id: string;
+    text: string;
+    spoken_at: string | null;
+    source_url: string | null;
+  }>(
+    `SELECT s.id AS speech_id, s.text, s.spoken_at, s.source_url, s.id
+       FROM speeches s
+      WHERE s.politician_id = $1
+        AND s.text IS NOT NULL AND length(s.text) > 0
+      ORDER BY s.spoken_at DESC NULLS LAST
+      LIMIT $2`,
+    [politicianId, limit],
+  );
+  return rows.map(r => ({
+    kind: "speech" as const,
+    id: r.speech_id,
+    link: `${config.publicSiteUrl}/speeches/${r.speech_id}`,
+    title: `Speech · ${rssDate(r.spoken_at).slice(0, 16)}`,
+    description: (r.text || "").trim().slice(0, 800),
+    pub_date: r.spoken_at,
+  }));
+}
+
+async function fetchPoliticianPosts(
+  politicianId: string,
+  limit: number,
+): Promise<PoliticianFeedItem[]> {
+  const rows = await query<{
+    id: string;
+    platform: string;
+    text: string | null;
+    url: string | null;
+    posted_at: string | null;
+  }>(
+    `SELECT id::text, platform, text, url, posted_at
+       FROM public.social_posts
+      WHERE politician_id = $1
+      ORDER BY posted_at DESC NULLS LAST
+      LIMIT $2`,
+    [politicianId, limit],
+  );
+  return rows.map(r => ({
+    kind: "post" as const,
+    id: `post:${r.id}`,
+    link: r.url ?? `${config.publicSiteUrl}/politicians/${politicianId}#socials`,
+    title: `${r.platform} post · ${rssDate(r.posted_at).slice(0, 16)}`,
+    description: (r.text || "").trim().slice(0, 800),
+    pub_date: r.posted_at,
+  }));
+}
+
+function renderPoliticianRss(
+  pol: PoliticianForFeed,
+  items: PoliticianFeedItem[],
+): string {
+  const feedUrl = `${config.publicSiteUrl}/api/v1/feeds/politicians/${pol.id}.rss`;
+  const profileUrl = `${config.publicSiteUrl}/politicians/${pol.id}`;
+  const title = `${pol.name} — Canadian Political Data`;
+  const desc = `Recent speeches and social-media activity for ${pol.name}, from Canadian Political Data.`;
+  const renderedItems = items.map(it => {
+    return `    <item>
+      <title>${xmlEscape(it.title)}</title>
+      <link>${xmlEscape(it.link)}</link>
+      <guid isPermaLink="false">${xmlEscape(it.id)}</guid>
+      <pubDate>${rssDate(it.pub_date)}</pubDate>
+      <description>${xmlEscape(it.description)}</description>
+    </item>`;
+  }).join("\n");
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>${xmlEscape(title)}</title>
+    <link>${xmlEscape(profileUrl)}</link>
+    <atom:link href="${xmlEscape(feedUrl)}" rel="self" type="application/rss+xml" />
+    <description>${xmlEscape(desc)}</description>
+    <language>en-ca</language>
+    <lastBuildDate>${new Date().toUTCString()}</lastBuildDate>
+${renderedItems}
+  </channel>
+</rss>
+`;
+}
+
 export default async function feedRoutes(app: FastifyInstance) {
+  // ── GET /feeds/politicians/:id.rss ───────────────────────────
+  // Public per-politician feed: latest speeches + scraped social
+  // posts. No auth. Pre-/post-merge: pull each kind separately,
+  // merge by posted/spoken date, return the 50 most recent.
+  app.get<{ Params: { id: string } }>(
+    "/politicians/:id.rss",
+    {
+      config: { rateLimit: { max: 60, timeWindow: "1 minute" } },
+    },
+    async (req, reply) => {
+      const { id } = req.params;
+      if (!POL_UUID_RE.test(id)) {
+        return reply.code(400).send({ error: "invalid politician id" });
+      }
+      const pol = await queryOne<PoliticianForFeed>(
+        `SELECT id::text, name FROM politicians WHERE id = $1`,
+        [id],
+      );
+      if (!pol) return reply.code(404).send({ error: "politician not found" });
+
+      const [speeches, posts] = await Promise.all([
+        fetchPoliticianSpeeches(pol.id, 50),
+        fetchPoliticianPosts(pol.id, 25),
+      ]);
+      const merged = [...speeches, ...posts]
+        .sort((a, b) => {
+          const ta = a.pub_date ? new Date(a.pub_date).getTime() : 0;
+          const tb = b.pub_date ? new Date(b.pub_date).getTime() : 0;
+          return tb - ta;
+        })
+        .slice(0, 50);
+
+      const xml = renderPoliticianRss(pol, merged);
+      reply
+        .header("Content-Type", "application/rss+xml; charset=utf-8")
+        .header("Cache-Control", "public, max-age=600")
+        .send(xml);
+    },
+  );
+
   // ── GET /feeds/:token.rss ────────────────────────────────────
   app.get<{ Params: { token: string } }>(
     "/:token.rss",
