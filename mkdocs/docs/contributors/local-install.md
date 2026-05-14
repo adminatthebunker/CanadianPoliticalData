@@ -329,6 +329,49 @@ docker compose run --rm scanner python -m src <subcommand>
 The full list of subcommands lives in
 `services/scanner/src/__main__.py`.
 
+### Optional: scheduled headless Claude Code enrichment
+
+The repo ships an optional cron-driven task that uses an authenticated
+[Claude Code](https://docs.claude.com/en/docs/claude-code) CLI on the
+host to enrich missing politician social-media handles via web search.
+It is not required to run the stack, but it's a useful pattern if you
+have a Claude Code subscription and want to keep handle coverage warm
+without paying for per-token Anthropic API calls.
+
+Each daily run targets the 25 active politicians with the worst gaps,
+web-searches each, inserts evidence-scored rows into
+`public.politician_socials` with `source='claude-code-agent'`,
+liveness-checks the new rows, writes a runbook, and emails a summary
+to the operator via the existing SMTP creds in your `.env`.
+
+Set-up (one-time):
+
+```bash
+# 1. Authenticate Claude Code on the host as the user that cron will run as.
+claude --help            # one-time login if not already authenticated
+
+# 2. Confirm the wrapper is on disk and executable.
+ls -l scripts/scheduled-tasks/run-socials-weekly.sh
+
+# 3. Add the cron line. Picks an off-minute (:07) so it doesn't clump
+#    with hourly tasks across the fleet.
+crontab -e
+#  → add: 7 9 * * * /path/to/your/sovpro/scripts/scheduled-tasks/run-socials-weekly.sh
+
+# 4. (Optional) trigger a manual first run to verify wiring + watch live.
+./scripts/scheduled-tasks/run-socials-weekly.sh
+tail -f docs/runbooks/socials-agent-logs/$(ls -t docs/runbooks/socials-agent-logs/ | head -1)
+```
+
+Edit the prompt at `scripts/scheduled-tasks/socials-weekly-enrichment.md`
+to change targeting rules, confidence threshold, or per-run budget.
+Disable by commenting out the cron line. Revert any run with
+`DELETE FROM public.politician_socials WHERE source='claude-code-agent'`.
+
+For the operator-grade details (failure modes, alternative API-billed
+variant, the `CPD_OPS_EMAIL` recipient override), see
+`docs/operations.md` § *Daily socials enrichment*.
+
 ## Updating the stack
 
 ```bash

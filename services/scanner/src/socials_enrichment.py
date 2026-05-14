@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 import unicodedata
 from collections import Counter
@@ -213,6 +214,122 @@ async def _load_politician_index(
     return idx
 
 
+# ── Wikidata SPARQL retry/backoff ──────────────────────────────────────
+# WDQS aggressively rate-limits during outages (their incident 797a132
+# capped to 1 req/min). The enricher only issues ONE bulk request per
+# run, so retrying through the rate-limit window costs minutes, not
+# hours, and removes the operator step of "re-run later when WDQS is
+# back" for transient outages.
+#
+# Knobs (env, defaults are sensible for an interactive run):
+#   ENRICH_WIKIDATA_MAX_ATTEMPTS    (5)
+#   ENRICH_WIKIDATA_RETRY_FLOOR_S   (65)  default wait if no Retry-After
+#   ENRICH_WIKIDATA_RETRY_CAP_S     (600) absolute upper bound per wait
+#
+# Why a 65s floor: Wikidata's outage rule was "1 req/min". A 60s wait
+# can race the bucket refill; 65s gives a 5s margin without
+# meaningfully extending operator time.
+
+WIKIDATA_MAX_ATTEMPTS = int(os.environ.get("ENRICH_WIKIDATA_MAX_ATTEMPTS", "5"))
+WIKIDATA_RETRY_FLOOR_S = float(os.environ.get("ENRICH_WIKIDATA_RETRY_FLOOR_S", "65"))
+WIKIDATA_RETRY_CAP_S = float(os.environ.get("ENRICH_WIKIDATA_RETRY_CAP_S", "600"))
+
+
+def _parse_retry_after(value: Optional[str]) -> Optional[float]:
+    """Parse a Retry-After header (seconds or HTTP-date). Returns None
+    on parse failure so the caller falls back to the floor."""
+    if not value:
+        return None
+    value = value.strip()
+    # Seconds form: a bare integer.
+    if value.isdigit():
+        return float(value)
+    # HTTP-date form: parse + diff against now.
+    try:
+        from email.utils import parsedate_to_datetime
+        from datetime import datetime, timezone
+        when = parsedate_to_datetime(value)
+        delta = (when - datetime.now(timezone.utc)).total_seconds()
+        return max(delta, 0.0)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+async def _wikidata_sparql_with_retry(
+    client: httpx.AsyncClient,
+    sparql: str,
+) -> Optional[dict[str, Any]]:
+    """Issue the SPARQL request, honoring Retry-After on 429s.
+
+    Returns the parsed JSON on success, None when the retry budget is
+    exhausted (so enrich_from_wikidata exits cleanly with 0 inserts,
+    same as the pre-retry behaviour did on any failure).
+    """
+    for attempt in range(1, WIKIDATA_MAX_ATTEMPTS + 1):
+        try:
+            resp = await client.get(WIKIDATA_SPARQL, params={"query": sparql})
+        except httpx.HTTPError as exc:
+            # Network-layer failure (DNS, connect timeout, etc.). Treat
+            # as retryable with the floor wait.
+            if attempt >= WIKIDATA_MAX_ATTEMPTS:
+                console.print(
+                    f"[red]Wikidata SPARQL network failure after "
+                    f"{attempt} attempt(s): {exc}[/red]"
+                )
+                return None
+            console.print(
+                f"[yellow]Wikidata SPARQL network failure (attempt "
+                f"{attempt}/{WIKIDATA_MAX_ATTEMPTS}): {exc}. "
+                f"Retrying in {WIKIDATA_RETRY_FLOOR_S:.0f}s…[/yellow]"
+            )
+            await asyncio.sleep(WIKIDATA_RETRY_FLOOR_S)
+            continue
+
+        if resp.status_code == 429:
+            retry_after = _parse_retry_after(resp.headers.get("Retry-After"))
+            wait = max(retry_after or WIKIDATA_RETRY_FLOOR_S, WIKIDATA_RETRY_FLOOR_S)
+            wait = min(wait, WIKIDATA_RETRY_CAP_S)
+            if attempt >= WIKIDATA_MAX_ATTEMPTS:
+                console.print(
+                    f"[red]Wikidata SPARQL 429-rate-limited after "
+                    f"{attempt} attempt(s); giving up. "
+                    f"Re-run when their service recovers.[/red]"
+                )
+                return None
+            # Surface the upstream's outage marker if present — useful
+            # for operator situational awareness.
+            note = resp.headers.get("Retry-After") or "no Retry-After header"
+            console.print(
+                f"[yellow]Wikidata SPARQL 429 (attempt "
+                f"{attempt}/{WIKIDATA_MAX_ATTEMPTS}, {note}). "
+                f"Waiting {wait:.0f}s before retry…[/yellow]"
+            )
+            await asyncio.sleep(wait)
+            continue
+
+        try:
+            resp.raise_for_status()
+            return resp.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            # 5xx / parse error. Retry with floor wait — Wikidata 5xx
+            # tends to be transient.
+            if attempt >= WIKIDATA_MAX_ATTEMPTS:
+                console.print(
+                    f"[red]Wikidata SPARQL failed after "
+                    f"{attempt} attempt(s): {exc}[/red]"
+                )
+                return None
+            console.print(
+                f"[yellow]Wikidata SPARQL {resp.status_code} "
+                f"(attempt {attempt}/{WIKIDATA_MAX_ATTEMPTS}): {exc}. "
+                f"Retrying in {WIKIDATA_RETRY_FLOOR_S:.0f}s…[/yellow]"
+            )
+            await asyncio.sleep(WIKIDATA_RETRY_FLOOR_S)
+            continue
+
+    return None
+
+
 async def enrich_from_wikidata(
     db: Database,
     *,
@@ -252,12 +369,8 @@ async def enrich_from_wikidata(
             "Accept": "application/sparql-results+json",
         },
     ) as client:
-        try:
-            resp = await client.get(WIKIDATA_SPARQL, params={"query": sparql})
-            resp.raise_for_status()
-            data = resp.json()
-        except httpx.HTTPError as exc:
-            console.print(f"[red]Wikidata SPARQL request failed: {exc}[/red]")
+        data = await _wikidata_sparql_with_retry(client, sparql)
+        if data is None:
             return 0
 
     bindings = data.get("results", {}).get("bindings", [])

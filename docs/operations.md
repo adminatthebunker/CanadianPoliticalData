@@ -205,6 +205,73 @@ VALUES ('agent-missing-socials',
 
 Roster-hygiene caveat: until the QC/MB/SK enrichers close `politician_terms.ended_at` on defeated/retired members + flip `politicians.is_active`, both agents will spend Sonnet credits chasing handles for ex-politicians. Estimated waste: ~25–30% of QC + MB + SK candidates per run. Fix that first if budget is tight (see `TODO.md` § Always-on → *Roster hygiene*).
 
+### Daily socials enrichment (Claude Code subscription, headless cron)
+
+The **subscription-billed counterpart** to `agent-missing-socials` above. An OS cron entry fires the Claude Code CLI in headless mode (`claude -p`), running against the operator's Claude Code subscription. Same kind of work (web-research enrichment of missing handles), different billing model — no per-token Anthropic API spend.
+
+| | API-billed (`agent-missing-socials`) | Subscription-billed (this) |
+|---|---|---|
+| Where it runs | Inside the scanner Python process via Anthropic SDK | A fresh headless `claude -p` session per fire |
+| Billing | Per-token, ANTHROPIC_API_KEY required | Claude Code subscription quota |
+| Schedule home | `scanner_schedules` (admin panel cron) | OS cron (`crontab -l`) |
+| Default cadence | None (admin-runnable) | Daily 09:07 local |
+| Source tag on inserts | `source='agent_sonnet'` | `source='claude-code-agent'` |
+| Auto-promotion threshold | `confidence ≥ 0.85` | All inserts persist (0.3 floor; `verify-socials` handles liveness) |
+
+**File map**:
+- `scripts/scheduled-tasks/socials-weekly-enrichment.md` — version-controlled prompt body + wiring docs (filename retains "weekly" suffix from original design; the script is cadence-neutral, OS cron dictates frequency).
+- `scripts/scheduled-tasks/run-socials-weekly.sh` — bash wrapper that strips frontmatter, sets cron-safe `PATH`, invokes `claude -p --model sonnet --permission-mode acceptEdits`, logs to a timestamped file, captures `claude`'s exit code, then calls the email helper.
+- `scripts/scheduled-tasks/send-run-summary.py` — emails a one-paragraph summary to `admin@thebunkerops.ca` (overridable via `CPD_OPS_EMAIL`) via the project's Proton SMTP creds (.env). Silently skips when SMTP isn't configured.
+- `~/.claude/scheduled-tasks/socials-weekly-enrichment/SKILL.md` — Desktop-app convention file (unused on Linux CLI; kept for future portability if the operator migrates to Claude Code Desktop).
+- `docs/runbooks/socials-agent-logs/<timestamp>.log` — per-run captured stdout/stderr + email-helper output. Auto-pruned >84 days.
+- `docs/runbooks/socials-agent-<YYYY>-W<week>.md` — per-run markdown summary written by the agent itself.
+- Cron line: `7 9 * * * /home/bunker-admin/sovpro/scripts/scheduled-tasks/run-socials-weekly.sh`
+
+**What each run does**: ranks the top-25 politicians by `has_active_term × recent_speech_count × inverse(confident_platforms)`, web-searches each, evidence-weights handles (0.3 / 0.5 / 0.7 / 0.9), inserts via `INSERT INTO public.politician_socials ... source='claude-code-agent'`, calls `verify-socials --limit 200` to liveness-check the new rows, writes a runbook. Search budget is hard-capped at 75 calls per run (3 × 25); typical usage is 30–50.
+
+**Operator runbook**:
+```bash
+# Manual run (mirrors what daily 09:07 cron will do)
+/home/bunker-admin/sovpro/scripts/scheduled-tasks/run-socials-weekly.sh
+
+# Watch live (in a second terminal)
+tail -f /home/bunker-admin/sovpro/docs/runbooks/socials-agent-logs/$(ls -t /home/bunker-admin/sovpro/docs/runbooks/socials-agent-logs/ | head -1)
+
+# See what landed
+docker exec sw-db psql -U sw -d sovereignwatch -c \
+  "SELECT p.name, ps.platform, ps.handle, ps.confidence, ps.evidence_url
+     FROM public.politician_socials ps
+     JOIN politicians p ON p.id = ps.politician_id
+    WHERE ps.source = 'claude-code-agent'
+    ORDER BY ps.created_at DESC LIMIT 25"
+
+# Pause (comment out the cron line)
+crontab -e
+
+# Revert a bad run (date-scoped — adjust window to the run you want gone)
+docker exec sw-db psql -U sw -d sovereignwatch -c \
+  "DELETE FROM public.politician_socials
+    WHERE source = 'claude-code-agent'
+      AND created_at > now() - interval '24 hours'"
+
+# Re-send the email for an existing log (e.g., if SMTP was down during the run)
+/home/bunker-admin/sovpro/scripts/scheduled-tasks/send-run-summary.py \
+  /home/bunker-admin/sovpro/docs/runbooks/socials-agent-logs/<TIMESTAMP>.log 0
+```
+
+**Email summary**: after each run, the wrapper calls `send-run-summary.py` which extracts everything from the agent's `socials enrichment complete` signal line onward (the canonical summary block the prompt instructs the agent to emit) and emails it to `admin@thebunkerops.ca`. Subject pattern: `[CPD socials enrichment] ✓ run <timestamp> (exit=0)` for success, `✗` for non-zero exits. The `CPD_OPS_EMAIL` env var (settable in `.env`) overrides the recipient.
+
+**Edit the prompt**: change `scripts/scheduled-tasks/socials-weekly-enrichment.md` in-repo (version-controlled). The wrapper extracts the body via `awk` on every fire, so no sync step is needed for the Linux variant. (If you ever port this to Claude Code Desktop, re-paste the body into `~/.claude/scheduled-tasks/socials-weekly-enrichment/SKILL.md` as well.)
+
+**Failure modes**:
+- `claude` CLI not on cron's PATH → wrapper explicitly extends PATH at the top; if you reinstall Claude Code to a non-standard path, edit the wrapper.
+- Docker daemon down at fire time → wrapper exits early with `FATAL: docker CLI not on PATH` in the log; the run is skipped, not retried. Next day picks up where you left off (target query re-ranks every run).
+- Subscription quota exhausted mid-run → `claude -p` returns a quota error; partial inserts persist (idempotent — the next run won't re-insert what's already there).
+- Search budget exhausted (75 calls) → agent stops gracefully, writes a partial runbook. Next run continues with the still-uncovered politicians (they re-rank to the top).
+- SMTP send failure → run completes successfully, email helper logs `SMTP send failed:` to the run log but exits 0 (silent on the runbook-side). Re-send manually with the operator command above.
+
+**The `agent-missing-socials` (API-billed) variant remains the right tool when**: you want one-off targeted enrichment, you want results within minutes instead of waiting for tomorrow's run, or you have ANTHROPIC_API_KEY but no active Claude Code subscription.
+
 ## Billing rail (premium reports phase 1a)
 
 Full design + deploy sequence in `docs/plans/premium-reports.md`. Operational quick-ref below.
@@ -481,6 +548,11 @@ No migration needed. Cost-formula knobs persist across model swaps; revisit them
 - Quick scan every hour for sites stale > 6h
 - Full sweep daily at 06:00 UTC
 - Re-ingest from Open North weekly Sunday 02:00 UTC
+
+OS-level cron entries (the operator's user crontab, `crontab -l`):
+- `0 0 * * *` — daily Postgres backup (`scripts/backup-database.sh`).
+- `0 2 * * 0` — Sunday weekly public dataset dump (`scripts/make-public-dump.sh`).
+- `7 9 * * *` — daily socials enrichment via headless Claude Code (`scripts/scheduled-tasks/run-socials-weekly.sh`). See § *Daily socials enrichment* above for the runbook.
 
 ## Backups
 

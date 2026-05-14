@@ -167,6 +167,45 @@ The migration from React MDX (`services/frontend/src/content/blog/`) happened on
 
 The fit→cluster→label→promote→gc pipeline (Click stages on `project-embeddings`), the run-id + `is_current` promotion discipline, the `cluster_level` vs `level` API param distinction, the 3D-vs-2D renderer split, and the file map live in the **`semantic-map` skill** at `.claude/skills/semantic-map/SKILL.md` — auto-loads when you ask about projection runs, clusters, or the explore page. Guardrails: `docs/gotchas.md` § Semantic mind-map / Explore and § Embeddings & vector storage.
 
+## Scrape monitoring (paid Apify-backed politician monitoring)
+
+User-facing paid feature shipped 2026-05-12: signed-in users subscribe to scheduled scrapes of monitored politicians' social-content (Twitter / Bluesky / Instagram / Mastodon), debited per-refresh from the credit ledger. Three job kinds — **monitoring** (recurring, cadence-driven), **preflight** (one-shot profile probe), **archive** (one-shot volume-priced deep history). **v2** (same day) flipped the visibility gate to public-read once the governance docs (DSAR / takedown / disclaimer at `mkdocs/docs/about/*`) shipped; scraped posts now appear on every politician's profile in a *Recent posts* tab visible to anyone. **v3** (also same day) added sponsorship discoverability + linkable attribution: a CTA banner on the Posts tab routes anon → `/login` with a return URL and signed-in users → the Monitor panel via a `#monitor` hash, the attribution opt-in gained an optional `https://` URL so "Funded by @handle" can render as a clickable link with `rel="nofollow noopener external"`, and admin one-shot scrapes auto-link to the operator anchor saved_search so future runs surface attribution publicly without manual backfill. Subscribers can opt in to public attribution ("Funded by @handle" with optional URL) on their subscription; default is anonymous ("Scraped via paid monitoring").
+
+Billing is the same fabric as the report-worker hold/commit/release pattern, extended with three new `credit_ledger.kind` values (`scrape_hold` / `scrape_commit` / `scrape_refund`). Pricing constants live in `services/api/src/lib/scrape-pricing.ts` (UI-facing estimates) and `services/scanner/src/scrape_worker.py` (worker-side debits) — **the two must stay in sync**; if they drift, displayed estimates and actual debits disagree. Twitter monitoring = 5 cr/refresh, IG = 8, Bluesky = Mastodon = 1; preflight = 1 cr on Apify platforms / free on Bluesky+Mastodon; archive uses a tiered curve against the cached `politician_socials.lifetime_post_count`.
+
+Subscription model: extends `private.saved_searches` with `scrape_platforms[]` / `scrape_cadence` / `scrape_next_run_at` / `scrape_paused_reason` — same row holds both speech-alert cadence and social-scrape cadence. Worker daemon (`sw-scrape-worker` compose service) ticks every `SCRAPE_DISPATCH_INTERVAL=60s`; daily-USD circuit breaker (`SCRAPE_DAILY_USD_CAP=$5`) is platform-level, independent of per-user balance. Local cost floors per platform (Twitter $0.02/run, IG `result_count × $0.0015`) keep the cap accurate when actors report `usageTotalUsd=0` synchronously.
+
+The full subsystem — three job kinds + ledger discipline + pricing constants + dispatcher loop + daily-cap circuit breaker + file map + the v1-subscriber-only visibility gate that's enforced in SQL via `EXISTS (SELECT 1 FROM private.scrape_jobs sj WHERE sj.user_id = $auth)` — lives in the **`scrape-monitoring` skill** at `.claude/skills/scrape-monitoring/SKILL.md`. That skill auto-loads when you ask about scrape jobs, the monitor button, or cadence-driven monitoring. Plan + design history: `~/.claude/plans/okay-lets-do-purring-hearth.md`. Per-jurisdiction handle data lives on `politician_socials` (with cached `lifetime_post_count` / `follower_count` / `last_profile_check_at` for the cost calculator).
+
+## User-facing async jobs
+
+Several user-facing features kick off async work that takes seconds-to-minutes to complete: premium **reports** (`private.report_jobs`, LLM map-reduce, 2–10 min) and **scrape jobs** (`private.scrape_jobs`, Apify probes / archives, seconds–minutes). A persistent viewport-level **`ActiveJobsIndicator`** at `services/frontend/src/components/ActiveJobsIndicator.tsx` (mounted in `Layout.tsx`) renders a fixed-position pill whenever the signed-in user has any of these in flight. It polls each job table's listing endpoint with `?active=true` in parallel, merges the results, and shows the lead item ("Probing X's twitter…" / "Generating stance map: Pierre Poilievre…") with a `+N more` badge if multiple jobs are running.
+
+**Convention for new async job surfaces**:
+
+1. **Backend**: the per-user listing endpoint (`GET /me/<job-kind>`) must support `?active=true` as a shortcut for `status IN ('queued', 'running')`. The shape lives next to existing per-job filters; precedence rule is explicit `?status=` wins. Examples in `services/api/src/routes/me.ts` (`/me/scrape-jobs`) and `services/api/src/routes/reports.ts` (`/me/reports`).
+2. **Frontend**: extend `ActiveJobsIndicator`'s `tick()` parallel fetch with the new endpoint, add a `*-to-active` mapper that emits `{ kind, id, label, href, created_at }`. The merge sorts by `created_at DESC` so the most-recently-started job leads. New job kinds get a new `ActiveJob.kind` string literal.
+3. **Polling discipline**: 3.5s cadence when ≥1 active, 25s when idle, suspended while tab hidden (Page Visibility API). Don't add new polling loops outside the indicator's `tick()` — the merge in one place is the convention.
+4. **DB-driven, not React state**: the indicator reads from listing endpoints, not from local state set by job-triggering components. This is what lets the indicator survive page reloads, cross-tab activity, and out-of-band probe triggers (e.g. CLI / cron / another tab).
+
+Skipping the convention is what causes "did my job actually start?" support tickets. Anytime you add a new long-running per-user job table, also extend the indicator.
+
+## Headless Claude Code scheduled tasks
+
+Some maintenance work is best done by a Claude Code session itself — web research, evidence-weighing, narrative reporting — rather than a deterministic Python script. The first instance is **daily socials enrichment** (`scripts/scheduled-tasks/run-socials-weekly.sh`, fires at 09:07 local via OS cron): a `claude -p` invocation that targets the top-25 actively-sitting politicians with missing handles, web-searches each, inserts evidence-scored rows into `politician_socials` with `source='claude-code-agent'`, runs `verify-socials`, writes a runbook, and emails a one-paragraph summary to admin via the project's Proton SMTP creds.
+
+This is the **subscription-billed** counterpart to the API-billed `agent-missing-socials` Click command in `services/scanner/src/__main__.py`. Same kind of work; different billing. See `docs/operations.md` § *Daily socials enrichment* for the full runbook (cron line, prompt edit workflow, revert SQL, failure modes).
+
+Pattern for adding more headless-Code scheduled tasks:
+
+1. **Prompt body** lives at `scripts/scheduled-tasks/<task>.md` (version-controlled). It must be self-contained — the scheduled session starts cold with no chat history. Include DB credentials, target SQL, decision rubrics, and explicit safety rails ("never UPDATE/DELETE existing rows", "never git commit", "stop on error", "search budget cap").
+2. **Wrapper bash script** at `scripts/scheduled-tasks/run-<task>.sh` strips frontmatter from the prompt file, sets cron-safe `PATH`, invokes `claude -p --model sonnet --permission-mode acceptEdits --add-dir /home/bunker-admin/sovpro`, captures the exit code, calls `send-run-summary.py` to email a summary, prunes old logs.
+3. **Source tag on inserts** is the audit primitive — `source='claude-code-agent'` for the socials task; pick a distinct value per task. Lets the operator SQL-revert a whole batch with `DELETE FROM <table> WHERE source = '<tag>'`.
+4. **OS cron line** runs as the `bunker-admin` user, at an off-:00 minute (the existing fleet picks `:07`).
+5. **Email summary helper** at `scripts/scheduled-tasks/send-run-summary.py` is reusable — it reads any log file, extracts everything after the agent's `<task> complete` signal line, sends via the existing SMTP creds. Have new tasks emit a matching signal line so the helper picks it up.
+
+Guardrails specific to this pattern: never give `--dangerously-skip-permissions` to a headless session that touches more than the public schema or `docs/runbooks/`. `acceptEdits` is the right ceiling — it auto-approves file edits and `docker exec`-style commands but still gates network-altering / destructive operations. If a headless task needs `private` schema write access for any reason, that's a discussion before shipping.
+
 ## Database reference
 
 For current row counts, ingestion coverage, or what's shipped: query the DB or read `jurisdiction_sources`. Don't trust counts in this file.
