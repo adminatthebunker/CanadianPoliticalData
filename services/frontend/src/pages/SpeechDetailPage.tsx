@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useParams, useSearchParams } from "react-router-dom";
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
 import { useRelatedSpeeches, useSpeech, useSpeechContext } from "../hooks/useSpeech";
+import { CitationButton } from "../components/CitationButton";
 import { ExchangeSpeechRow } from "../components/ExchangeSpeechRow";
 import { RelatedSpeechesPanel } from "../components/RelatedSpeechesPanel";
 import { isProcedural } from "../lib/speechHelpers";
@@ -191,6 +192,7 @@ export default function SpeechDetailPage() {
           >
             ?
           </button>
+          <CitationButton speech={speech} />
         </div>
       </header>
 
