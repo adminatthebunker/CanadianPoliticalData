@@ -4,7 +4,7 @@
 
 **Legislature:** Legislative Assembly of Ontario | **Website:** https://www.ola.org | **Seats:** 124 | **Next election:** 2030-04-11
 
-**Status snapshot (2026-04-24):** ✅ **Bills + Hansard live** for Parliament 44, Session 1. Bills via ola.org HTML scrape (102 bills, 595 events, 102 sponsors — 100% FK-linked). Hansard via `?_format=json` JSON node — name-based speaker resolution against politicians (no per-speaker slug anchors in ON markup), parens-name extraction handles presiding-officer attributions exactly. Votes / committees not yet built.
+**Status snapshot (2026-05-14):** ✅ **Bills + Hansard live** across Parliament 36 → 44 (1981 → present). Bills via ola.org HTML scrape (3,412 bills across P36-P44 from the `--all-sessions` walker, all events + sponsors). Hansard via `?_format=json` JSON node — name-based speaker resolution against politicians (no per-speaker slug anchors in ON markup), parens-name extraction handles presiding-officer attributions exactly. **946,424 speeches, 92.45% resolved to politicians** as of the 2026-05-14 cycle that landed the historical Speaker roster (Turner / Edighoffer / Warner / McLean / Stockwell / Carr / Curling / Brown / Peters / Levac / Arnott / Skelly, 32L-44L) — pre-2008 bare-`The Speaker` rows (46,415 total) attribute via date-windowed lookup. Votes / committees not yet built.
 
 ---
 
