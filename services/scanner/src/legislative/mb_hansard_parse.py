@@ -158,6 +158,36 @@ _HEADING_ONLY_RE = re.compile(
 )
 _HEADING_CLASS_RE = re.compile(r"MsoHeading\d+", re.IGNORECASE)
 
+# Text-shape catch for section headings that slip past the structural
+# detection (paragraphs that have a trailing colon, embedded styling, or
+# a "Heading:" shape that gets misclassified as a speaker line). Each
+# alternation pins a known committee-transcript section name observed in
+# the corpus. Keep this list extension-only — adding new shapes is
+# safe; tightening existing ones risks tagging real speeches as headings.
+_HEADING_TEXT_RE = re.compile(
+    r"^(?:"
+    r"Meetings|"
+    r"Committee Membership|"
+    r"Sub-Committee (?:Membership|Agreements|Activities)|"
+    r"Matters [Uu]nder Consideration|"
+    r"Public Presentations|"
+    r"Bills? Considered and Reported|"
+    r"Reports? Considered (?:but not Passed|and Adopted|but not Adopted|and Concluded)|"
+    r"Agreements|"
+    r"Written Submissions|"
+    r"Motions|"
+    r"Non-Committee Members Speaking on Record|"
+    r"Officials [Ss]peaking on (?:the )?[Rr]ecord(?: at the .+ meeting)?|"
+    r"Officials from .+ speaking on the record at the .+ meeting|"
+    r"Roles? and Responsibilities|"
+    r"Purpose|"
+    r"Membership Resignations\s*/\s*Elections|"
+    r"Staff present for all Sub-Committee meetings|"
+    r"Legislative Assembly Human Resource Services Activities"
+    r")\s*:?\s*$",
+    re.IGNORECASE,
+)
+
 
 def _is_heading(paragraph_attrs: str, inner_html: str) -> tuple[bool, Optional[str]]:
     # MsoHeading<N> paragraphs are always headings.
@@ -185,6 +215,11 @@ def _looks_like_speaker_name(name_text: str) -> bool:
 
 def _clean_speaker(name_text: str) -> str:
     text = _decode_entities(_TAG_RE.sub("", name_text))
+    # Strip U+00AD SOFT HYPHEN — Word HTML occasionally embeds these
+    # invisible hyphenation hints inside speaker labels (e.g.
+    # `An Hon­our­able Member`) which blocks _GROUP_RAW_RE from
+    # tagging the row as `speech_type='group'`.
+    text = text.replace("­", "")
     text = _WS_RE.sub(" ", text).strip()
     return _TRAILING_COLON_RE.sub("", text).strip()
 
@@ -202,6 +237,20 @@ _ROLE_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"^the\s+chair.*$"),                       "The Chair"),
     # Presiding officer of Committee of Supply / Committee of the Whole.
     (re.compile(r"^the\s+deputy\s+chair.*$"),              "The Deputy Chair"),
+    # Honorific-prefixed presiding-officer forms. MB Hansard pre-43L
+    # uses "Mr./Madam Deputy Speaker" / "Mr./Madam Chairperson" instead
+    # of the "The"-prefixed forms above; same semantic roles, routed to
+    # identical canonical strings so downstream Pass-3 lookup keys match.
+    # _norm() lowercases + strips the trailing period from "Mr." so the
+    # pattern operates on "mr deputy speaker", "madam chairperson", etc.
+    # "Mr./Madam Deputy Chairperson" routes to "The Deputy Chair" (same
+    # canonical the existing "the deputy chair" pattern emits) for join
+    # with ROLE_ONLY_OFFICE_MAP["MB"]["The Deputy Chair"] when that
+    # rotating-role roster eventually lands.
+    (re.compile(r"^(?:mr|mrs|ms|madam)\s+speaker$"),                "The Speaker"),
+    (re.compile(r"^(?:mr|mrs|ms|madam)\s+deputy\s+speaker$"),       "The Deputy Speaker"),
+    (re.compile(r"^(?:mr|mrs|ms|madam)\s+chairperson.*$"),          "The Chairperson"),
+    (re.compile(r"^(?:mr|mrs|ms|madam)\s+deputy\s+chairperson.*$"), "The Deputy Chair"),
     # Head of government — either person resolution (by paren) or role-only.
     (re.compile(r"^the\s+premier\s*$"),                    "The Premier"),
     (re.compile(r"^the\s+hon(?:ourable)?\s+premier\s*$"),  "The Premier"),
@@ -237,8 +286,12 @@ _STAFF_RAW_RE = re.compile(
 # Patterns that identify group / heckle turns. The MB chamber parser
 # was previously hardcoded to speech_type='floor' for everything; this
 # check recovers ~29K MB rows that should have been speech_type='group'.
+# The optional period after `Hon` is critical — MB Hansard alternates
+# between `Hon` (full word), `Honourable` (full word), and `Hon.`
+# (abbreviated with period). Without `Hon\.?` the abbreviated form
+# fails to match and leaks into `speech_type='floor'` (~65K rows).
 _GROUP_RAW_RE = re.compile(
-    r"^\s*(?:An|Some|Several)\s+Hon(?:ourable)?\s+Members?:?\s*$|"
+    r"^\s*(?:An|Some|Several)\s+Hon\.?(?:ourable)?\s+Members?\.?:?\s*$|"
     r"^\s*Voices?:?\s*$",
     re.IGNORECASE,
 )
@@ -379,9 +432,13 @@ _MONTHS_LONG = {
     "aug": 8, "sep": 9, "sept": 9, "oct": 10, "nov": 11, "dec": 12,
 }
 # Fallback: look in the first bold paragraph for "Tuesday, November 18, 2025".
+# Comma after the month is intentionally optional — at least one MB sitting
+# (39_2 vol_38a) has a typo "Thursday,  May, 8, 2008" with a stray comma
+# between month and day; allowing the optional comma rescues those rows
+# without hurting the common shape.
 _HEADER_DATE_RE = re.compile(
     r"(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),?\s+"
-    r"(?P<mon>\w+)\s+(?P<day>\d{1,2}),\s+(?P<year>\d{4})",
+    r"(?P<mon>\w+),?\s+(?P<day>\d{1,2}),\s+(?P<year>\d{4})",
     re.IGNORECASE,
 )
 
@@ -407,7 +464,15 @@ def extract_sitting_date(html: str) -> Optional[date]:
     #    No byte limit — early sittings often have ~30 KB of CSS
     #    font-face definitions before any body content, pushing the
     #    header date past a small window. Full-page strip is cheap.
+    #
+    #    Entity decode is critical: legacy MB sittings format the date
+    #    header as "Tuesday,&nbsp;June 12, 2007" — without decoding,
+    #    `&nbsp;` survives between the day-of-week and the month and
+    #    blocks the regex from matching, sending the parser into the
+    #    None → date(1970,1,1) fallback. This was the root cause of
+    #    ~1,800 historical-sitting rows landing with spoken_at='1970-01-01'.
     stripped = re.sub(r"<[^>]+>", " ", html)
+    stripped = _decode_entities(stripped)
     stripped = re.sub(r"\s+", " ", stripped)
     m = _HEADER_DATE_RE.search(stripped)
     if m:
@@ -535,6 +600,17 @@ def extract_speeches(html_text: str, url: str) -> ParseResult:
             flush_turn()
             raw_name = _clean_speaker(m_speaker.group("name"))
             if not raw_name:
+                continue
+            # Text-shape catch for section headings that slipped past
+            # _is_heading() above (committee-transcript section names
+            # that have trailing colons or embedded styling — treated
+            # by the speaker-line regex as a name + colon shape but are
+            # really headings). Updates current_section instead of
+            # opening a turn so downstream speeches in this section
+            # carry the right `section` raw field.
+            if _HEADING_TEXT_RE.match(raw_name):
+                current_section = raw_name
+                section_hits[raw_name] = section_hits.get(raw_name, 0) + 1
                 continue
             attr = parse_attribution(raw_name)
             tail_text = _strip_tags(m_speaker.group("tail"))

@@ -589,6 +589,26 @@ COMMANDS: dict[str, dict[str, Any]] = {
              "help": "Cap candidate speeches scanned (smoke-test aid)."},
         ],
     },
+    "resolve-role-only-presiding-officers": {
+        "description": "Tier-2 attribution Pass 3 — resolve role-only presiding-officer rows (e.g. `The Deputy Speaker` with no inline name) by date-windowed lookup against ROLE_ONLY_PRESIDING_ROSTER. Covers single-person date-determined offices (Deputy Speaker, Deputy Chair of Committees). Provinces: AB / BC / MB / SK. Idempotent.",
+        "cli": "resolve-role-only-presiding-officers", "category": "hansard",
+        "args": [
+            {"name": "province", "type": "str", "required": False,
+             "help": "2-letter code (AB/BC/MB/SK) to scope the run. Default: all provinces with a role-only roster."},
+            {"name": "limit", "type": "int", "required": False,
+             "help": "Cap candidate speeches scanned (smoke-test aid)."},
+        ],
+    },
+    "relink-mb-speaker-roles": {
+        "description": "Backfill speaker_role on MB rows where the chamber parser left both speaker_role and politician_id NULL. Applies the current `_ROLE_PATTERNS` from `mb_hansard_parse` to each row's `speaker_name_raw`. Idempotent; safe to schedule daily. Closes the pre-43L empty-role bucket (`Mr./Madam Deputy Speaker` / `Mr./Madam Chairperson` shapes).",
+        "cli": "relink-mb-speaker-roles", "category": "hansard",
+        "args": [
+            {"name": "limit", "type": "int", "required": False,
+             "help": "Cap candidate rows scanned (smoke-test aid)."},
+            {"name": "dry_run", "type": "bool", "required": False, "default": False,
+             "help": "Run SELECT + regex pass without writing UPDATEs."},
+        ],
+    },
     "ingest-sk-bills": {
         "description": "Ingest SK bills from progress-of-bills.pdf (legassembly.sk.ca/legislative-business/bills/). Discovery scrapes the bills page; identifies each PDF's (parliament, session) from its first-page header. Parses tabular text via pdftotext -layout; upserts bills + bill_events + bill_sponsors. Idempotent. --all-sessions walks every recent PDF (excludes 1998–2017 yearly-span legacy era). Run before ingest-sk-hansard so sponsor FKs land on already-populated MLAs.",
         "cli": "ingest-sk-bills", "category": "bills",

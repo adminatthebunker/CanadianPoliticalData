@@ -3222,6 +3222,39 @@ def cmd_resolve_mb_speakers_dated(ctx: click.Context, limit: Optional[int]) -> N
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 
 
+@cli.command("relink-mb-speaker-roles")
+@click.option("--limit", type=int, default=None,
+              help="Cap candidate rows scanned (smoke-test aid).")
+@click.option("--dry-run", is_flag=True, default=False,
+              help="Run SELECT + regex pass without writing UPDATEs.")
+@click.pass_context
+def cmd_relink_mb_speaker_roles(
+    ctx: click.Context, limit: Optional[int], dry_run: bool,
+) -> None:
+    """Backfill speaker_role on MB rows where the parser left both
+    speaker_role and politician_id NULL.
+
+    Applies the current `_ROLE_PATTERNS` from `mb_hansard_parse` to each
+    row's `speaker_name_raw`. Originally closed the pre-43L empty-role
+    bucket (~21K rows of `Mr./Madam Deputy Speaker` / `Mr./Madam
+    Chairperson` shapes the old regex set didn't catch). Idempotent and
+    additive — re-running picks up any new patterns added to the parser
+    without code-side coordination. Safe to schedule daily.
+    """
+    from .legislative.mb_speaker_role_relink import relink_mb_speaker_roles
+
+    async def _wrap(db: Database) -> None:
+        stats = await relink_mb_speaker_roles(db, limit=limit, dry_run=dry_run)
+        console.print(
+            f"[green]relink-mb-speaker-roles[/green]: "
+            f"scanned={stats.scanned} role_assigned={stats.role_assigned} "
+            f"dry_run={dry_run}"
+        )
+        if stats.by_role:
+            console.print(f"[dim]by_role:[/dim] {stats.by_role}")
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
 @cli.command("ingest-bc-former-mlas")
 @click.option("--parliaments", type=str, default=None,
               help="Comma-separated parliament numbers (e.g. '29,30,31'). Default: 29-34.")

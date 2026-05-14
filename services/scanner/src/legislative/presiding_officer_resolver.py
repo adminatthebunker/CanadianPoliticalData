@@ -205,15 +205,34 @@ SPEAKER_ROSTER: dict[str, list[SpeakerTerm]] = {
         SpeakerTerm("Derek Bennett",    "Derek",    "Bennett",  date(2021,  4, 15), date(2025, 11,  3)),
         SpeakerTerm("Paul Lane",        "Paul",     "Lane",     date(2025, 11,  3), None),
     ],
-    # Ontario: parliament 44 onwards. Modern ON Hansard markup includes
-    # the actual Speaker's name inline as parens — `<strong>The Speaker
-    # (Hon. Donna Skelly):</strong>` — so the on_hansard parser resolves
-    # most presiding-officer turns directly via the parens-name path.
-    # This roster only matters for the rarer bare "The Speaker:" rows.
-    # Initial scope: parliament 44 only. Backfill earlier Speakers as
-    # historical-Hansard ingest expands.
+    # Ontario: full historical roster 32L (1981) → 44L (current). Modern
+    # (2008+) ON Hansard markup embeds the Speaker's name inline as parens
+    # — `<strong>The Speaker (Hon. Donna Skelly):</strong>` — so the
+    # on_hansard parser resolves those turns directly via the parens-name
+    # path. Pre-2008 transcripts use bare `The Speaker:` labels which this
+    # roster attributes via date-windowed lookup. Boundary dates from
+    # Wikipedia "Speaker of the Legislative Assembly of Ontario";
+    # consecutive entries chain via next-Speaker-start = previous-Speaker-end
+    # so brief acting-Speaker windows during transitions resolve to the
+    # outgoing Speaker (rare; ~handful of sitting days per transition).
+    # The Al McLean → Chris Stockwell mid-36L succession (McLean resigned
+    # 1996-09-30 amid scandal; Stockwell elected 1996-10-03) and the Alvin
+    # Curling → Mike Brown mid-38L succession (Curling resigned 2005-08-16
+    # to become Ambassador to the Dominican Republic; Brown elected
+    # 2005-10-11) are the two intra-Legislature transitions.
     "ON": [
-        SpeakerTerm("Donna Skelly",     "Donna",    "Skelly",   date(2025, 4, 15), None),
+        SpeakerTerm("John Melville Turner",   "John",   "Turner",     date(1981,  4, 21), date(1985,  6,  4)),  # 32L
+        SpeakerTerm("Hugh Alden Edighoffer",  "Hugh",   "Edighoffer", date(1985,  6,  4), date(1990, 11, 20)),  # 33L+34L
+        SpeakerTerm("David William Warner",   "David",  "Warner",     date(1990, 11, 20), date(1995,  9, 26)),  # 35L
+        SpeakerTerm("Allan Kenneth McLean",   "Allan",  "McLean",     date(1995,  9, 26), date(1996, 10,  3)),  # 36L (1st)
+        SpeakerTerm("Chris Stockwell",        "Chris",  "Stockwell",  date(1996, 10,  3), date(1999, 10, 21)),  # 36L (2nd)
+        SpeakerTerm("Gary Carr",              "Gary",   "Carr",       date(1999, 10, 21), date(2003, 11, 19)),  # 37L
+        SpeakerTerm("Alvin Curling",          "Alvin",  "Curling",    date(2003, 11, 19), date(2005, 10, 11)),  # 38L (1st)
+        SpeakerTerm("Michael A. Brown",       "Michael", "Brown",     date(2005, 10, 11), date(2007, 11, 29)),  # 38L (2nd)
+        SpeakerTerm("Steve Peters",           "Steve",  "Peters",     date(2007, 11, 29), date(2011, 11, 21)),  # 39L
+        SpeakerTerm("Dave Levac",             "Dave",   "Levac",      date(2011, 11, 21), date(2018,  7, 11)),  # 40L+41L
+        SpeakerTerm("Ted Arnott",             "Ted",    "Arnott",     date(2018,  7, 11), date(2025,  4, 15)),  # 42L+43L
+        SpeakerTerm("Donna Skelly",           "Donna",  "Skelly",     date(2025,  4, 15), None),                # 44L
     ],
     # Northwest Territories: covers the 13th Assembly (1995) through
     # current 20th Assembly. NT runs consensus government — Speakers
@@ -343,6 +362,7 @@ async def _find_politician_id(
            AND province_territory = $1
            AND lower(first_name) = lower($2)
            AND lower(last_name)  = lower($3)
+         ORDER BY is_active DESC, created_at ASC
          LIMIT 1
         """,
         province, first_name, last_name,
@@ -360,6 +380,7 @@ async def _find_politician_id(
          WHERE level = 'provincial'
            AND province_territory = $1
            AND lower(last_name) = lower($2)
+         ORDER BY is_active DESC, created_at ASC
         """,
         province, last_name,
     )
@@ -675,16 +696,48 @@ ROLE_ONLY_PRESIDING_ROSTER: dict[str, dict[str, list[SpeakerTerm]]] = {
             SpeakerTerm("Mable Elmore",            "Mable",            "Elmore",  date(2025,  3,  1), None),                 # 43L
         ],
     },
-    # Manitoba: Deputy Speaker. The MB chamber parser only emits the
-    # role-only `The Deputy Speaker` shape for the 43rd Legislature
-    # (2023+); pre-43L Deputy Speaker turns came with inline names
-    # (`Madam Deputy Speaker (NAME)` / `Mr. Deputy Speaker (NAME)`)
-    # already caught by Pass 1. Single-entry roster covers the entire
-    # 43L role-only bucket (~1,027 rows). Source: confirmed via in-
-    # Hansard attributed turns + media reporting on the appointment.
+    # Manitoba: Deputy Speaker. Pre-43L MB chamber parser emitted both
+    # `Mr./Madam Deputy Speaker` (no inline name) AND `Mr./Madam Deputy
+    # Speaker (NAME)` (inline name) shapes; Pass 1 attributed the inline
+    # ones, this Pass 3 roster covers the role-only remainder. Roster
+    # built from Pass-1-attributed rows: each historical Deputy Speaker
+    # surfaced as a politician_id with a date window from inline-paren
+    # turns, then verified against Wikipedia per-Legislature articles.
+    # Boundaries land at each Legislature's first-sitting day for full
+    # coverage of the role-only bucket; mid-Legislature acting deputies
+    # not separately rostered (acceptable trade-off — Acting Deputy
+    # Speaker turns are rare and not consistently labelled in Hansard).
+    # Cycle 2026-05-14 expansion closes the ~10,624-row pre-43L bucket
+    # surfaced when `relink-mb-speaker-roles` tagged the empty-role
+    # `Mr./Madam Deputy Speaker` shapes the parser previously missed.
     "MB": {
         "Deputy Speaker": [
-            SpeakerTerm("Tyler Blashko", "Tyler", "Blashko", date(2023, 11, 21), None),  # 43L
+            SpeakerTerm("Conrad Santos",       "Conrad",  "Santos",       date(1999, 10, 25), date(2007,  5, 22)),  # 37L+38L
+            SpeakerTerm("Marilyn Brick",       "Marilyn", "Brick",        date(2007,  5, 22), date(2011, 11, 15)),  # 39L
+            SpeakerTerm("Thomas Nevakshonoff", "Thomas",  "Nevakshonoff", date(2011, 11, 15), date(2016,  5, 16)),  # 40L
+            SpeakerTerm("Doyle Piwniuk",       "Doyle",   "Piwniuk",      date(2016,  5, 16), date(2019, 10,  2)),  # 41L
+            SpeakerTerm("Andrew Micklefield",  "Andrew",  "Micklefield",  date(2019, 10,  2), date(2023, 11, 21)),  # 42L
+            SpeakerTerm("Tyler Blashko",       "Tyler",   "Blashko",      date(2023, 11, 21), None),                # 43L
+        ],
+    },
+    # Saskatchewan: Deputy Speaker. The SK chamber parser emits
+    # `deputy_speaker` (lowercase snake) for bare role-only turns and
+    # learns inline names only for 30L (2024-11-26+), so the role-only
+    # bucket is confined to 28L3S–29L4S (2020-12 → 2024-11, ~2,174
+    # rows). All four transitions mined directly from in-Hansard
+    # election announcements ("it is my duty to inform you that …
+    # has been elected … as your Deputy Speaker"): Wilson 2020-12-01,
+    # Hargrave 2021-10-28, Bradshaw 2023-10-10, McLeod 2024-11-26.
+    # Nadine Wilson left the Sask Party caucus in September 2021 over
+    # vaccine policy; Hargrave's election on 2021-10-28 closes her
+    # term. McLeod entry covers the handful of 30L role-only rows the
+    # parser missed before its inline-name detection kicked in.
+    "SK": {
+        "Deputy Speaker": [
+            SpeakerTerm("Nadine Wilson", "Nadine", "Wilson",   date(2020, 12,  1), date(2021, 10, 28)),  # 29L (1st)
+            SpeakerTerm("Joe Hargrave",  "Joe",    "Hargrave", date(2021, 10, 28), date(2023, 10, 10)),  # 29L (2nd)
+            SpeakerTerm("Fred Bradshaw", "Fred",   "Bradshaw", date(2023, 10, 10), date(2024, 11, 26)),  # 29L (3rd)
+            SpeakerTerm("Blaine McLeod", "Blaine", "McLeod",   date(2024, 11, 26), None),                # 30L
         ],
     },
 }
@@ -703,6 +756,11 @@ ROLE_ONLY_OFFICE_MAP: dict[str, dict[str, str]] = {
     "MB": {
         # MB parser emits "The Deputy Speaker" (43L+ only).
         "The Deputy Speaker": "Deputy Speaker",
+    },
+    "SK": {
+        # SK parser emits lowercase snake "deputy_speaker" (28L3S–29L4S
+        # role-only bucket; 30L inline-name turns are parser-attributed).
+        "deputy_speaker": "Deputy Speaker",
     },
 }
 
