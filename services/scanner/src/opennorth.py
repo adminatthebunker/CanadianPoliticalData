@@ -534,14 +534,22 @@ async def _upsert_boundary(db: Database, set_def: OpenNorthSet, constituency_id:
           ST_MakeValid(ST_Simplify({geom_sql}, 0.005)),
           3))
     """
+    # Boundaries are temporal (migration 0021): the table's unique key is
+    # (constituency_id, boundaries_version), not constituency_id alone, so a
+    # naive ON CONFLICT (constituency_id) raises InvalidColumnReferenceError.
+    # Open North only ever serves the live redistribution, so every row this
+    # ingester writes is the 'current' version; future redistribution orders
+    # land as new rows with a new version string (see migration 0021).
     await db.execute(
         f"""
         INSERT INTO constituency_boundaries
           (constituency_id, name, level, province_territory, source_set,
-           boundary, boundary_simple, centroid, area_sqkm)
+           boundary, boundary_simple, centroid, area_sqkm,
+           boundaries_version, effective_from)
         VALUES ($1, $2, $3, $5, $6, {geom_sql}, {simple_sql}, ST_Centroid({geom_sql}),
-                ST_Area({geom_sql}::geography)/1000000)
-        ON CONFLICT (constituency_id) DO UPDATE SET
+                ST_Area({geom_sql}::geography)/1000000,
+                'current', DATE '2023-01-01')
+        ON CONFLICT (constituency_id, boundaries_version) DO UPDATE SET
           name = EXCLUDED.name,
           level = EXCLUDED.level,
           province_territory = EXCLUDED.province_territory,

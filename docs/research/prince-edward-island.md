@@ -6,6 +6,8 @@
 
 **Status snapshot (2026-04-19):** ⛔ **Bills blocked.** Server header `server: rdwr`, redirects to `captcha.perfdrive.com` — Radware ShieldSquare CAPTCHA. Same tier as Yukon (Cloudflare). **Re-rated to difficulty 5**. Bill content URLs themselves look ingestible if we can clear the bot challenge.
 
+**Re-probe (2026-05-14):** Still blocked. Surface looks subtly different — the bills page now returns `HTTP 200 OK` to a request with a realistic browser UA, but the body is a **1.4 KB perfdrive challenge stub** (sets `__uzma`/`__uzmb`/`__uzmc`/`__uzmd`/`__uzme`/`__uzmf` cookies) rather than the real bills content. `/rss`, `/feed`, and `?_format=json` are still hard 302s to `validate.perfdrive.com`. Net behaviour is unchanged: no server-side fetch retrieves real content. **Difficulty stays 5.** This re-probe also rules out a quick UA-only bypass — Radware is JS-solving the challenge before serving the real page.
+
 ---
 
 ## Bills & Legislation

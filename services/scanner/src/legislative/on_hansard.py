@@ -564,20 +564,30 @@ async def ingest(
 
     # Sync denormalised politician_id onto chunks so /search joins stay
     # consistent when we re-resolve speakers after more roster lands.
-    await db.execute(
-        """
-        UPDATE speech_chunks sc
-           SET politician_id = s.politician_id
-          FROM speeches s
-         WHERE sc.speech_id = s.id
-           AND s.level = 'provincial'
-           AND s.province_territory = 'ON'
-           AND s.source_system = $1
-           AND sc.politician_id IS DISTINCT FROM s.politician_id
-        """,
-        SOURCE_SYSTEM,
-        timeout=300,
-    )
+    # Scope to the date floor of just-processed sittings so the join
+    # hits idx_chunks_filters(level, province_territory, spoken_at DESC)
+    # instead of nested-looping over ~5M ON chunk rows — the unscoped
+    # form exceeded statement_timeout on every daily run.
+    min_sitting_date = min((r.sitting_date for r in refs), default=None)
+    if min_sitting_date is not None:
+        await db.execute(
+            """
+            UPDATE speech_chunks sc
+               SET politician_id = s.politician_id
+              FROM speeches s
+             WHERE sc.speech_id = s.id
+               AND sc.level = 'provincial'
+               AND sc.province_territory = 'ON'
+               AND sc.spoken_at >= $2::date
+               AND s.level = 'provincial'
+               AND s.province_territory = 'ON'
+               AND s.source_system = $1
+               AND sc.politician_id IS DISTINCT FROM s.politician_id
+            """,
+            SOURCE_SYSTEM,
+            min_sitting_date,
+            timeout=300,
+        )
 
     log.info(
         "on_hansard done: %d sittings, %d speeches "

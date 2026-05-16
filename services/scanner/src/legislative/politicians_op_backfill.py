@@ -70,17 +70,37 @@ class BackfillStats:
 
 
 async def _collect_missing_slugs(db: Database) -> list[str]:
-    """Unique politician slugs referenced by NULL-politician_id speeches
-    that aren't already in `politicians.openparliament_slug`."""
+    """Unique openparliament slugs needing backfill — those referenced by
+    NULL-politician_id rows in either speeches (Hansard) or vote_positions
+    (federal divisions) that aren't already in `politicians.openparliament_slug`.
+
+    federal_votes.py stores the openparliament slug as
+    `vote_positions.politician_name_raw`, so a newly-sitting MP can show up
+    in vote ballots before they appear in any speech. Including both
+    sources here lets the same backfill fix both surfaces.
+    """
     rows = await db.fetch(
         """
-        WITH referenced AS (
+        WITH from_speeches AS (
           SELECT DISTINCT
                  substring(raw->'op_speech'->>'politician_url'
                            FROM '^/politicians/([^/]+)/?$') AS slug
             FROM speeches
            WHERE politician_id IS NULL
              AND raw->'op_speech'->>'politician_url' IS NOT NULL
+        ),
+        from_vote_positions AS (
+          SELECT DISTINCT vp.politician_name_raw AS slug
+            FROM vote_positions vp
+            JOIN votes v ON v.id = vp.vote_id
+           WHERE vp.politician_id IS NULL
+             AND v.source_system = 'votes-federal'
+             AND vp.politician_name_raw ~ '^[a-z0-9-]+$'
+        ),
+        referenced AS (
+          SELECT slug FROM from_speeches
+          UNION
+          SELECT slug FROM from_vote_positions
         )
         SELECT r.slug
           FROM referenced r
@@ -299,6 +319,15 @@ async def resolve_missing(db: Database, *, batch_size: int = 5000) -> dict[str, 
     # speeches: resolve in batches keyed on primary id so each UPDATE
     # scans a bounded slice. We loop until an iteration makes no
     # progress (no more resolvable rows in that slice OR whole table).
+    #
+    # Scope: federal speeches whose raw payload carries a politician_url.
+    # The level + source_system filter eliminates ~280k provincial rows
+    # that don't have op_speech payloads at all; the politician_url IS
+    # NOT NULL filter eliminates ~140k collective-interjection rows
+    # ("Some hon. members") whose author by design can't be resolved.
+    # Without these the optimizer scans every NULL-politician_id speech
+    # across every jurisdiction looking for matches that don't exist and
+    # hits the asyncpg statement_timeout (60s).
     speeches_total = 0
     while True:
         tag = await db.execute(
@@ -311,6 +340,9 @@ async def resolve_missing(db: Database, *, batch_size: int = 5000) -> dict[str, 
                        s.raw->'op_speech'->>'politician_url'
                        FROM '^/politicians/([^/]+)/?$')
                WHERE s.politician_id IS NULL
+                 AND s.level = 'federal'
+                 AND s.source_system = 'openparliament'
+                 AND s.raw->'op_speech'->>'politician_url' IS NOT NULL
                  AND p.openparliament_slug IS NOT NULL
                LIMIT $1
             )
@@ -328,8 +360,10 @@ async def resolve_missing(db: Database, *, batch_size: int = 5000) -> dict[str, 
         if n < batch_size:
             break
 
-    # chunks: same pattern — batch from the set of chunks whose parent
-    # speech is now resolved but the chunk isn't.
+    # chunks: batch from the set of chunks whose parent speech is now
+    # resolved but the chunk isn't. Same scoping rationale as speeches
+    # — federal Hansard is the only path that produces this drift, since
+    # provincial pipelines stamp politician_id onto chunks at insert time.
     chunks_total = 0
     while True:
         tag = await db.execute(
@@ -340,6 +374,8 @@ async def resolve_missing(db: Database, *, batch_size: int = 5000) -> dict[str, 
                 JOIN speeches s ON s.id = sc.speech_id
                WHERE sc.politician_id IS NULL
                  AND s.politician_id IS NOT NULL
+                 AND s.level = 'federal'
+                 AND s.source_system = 'openparliament'
                LIMIT $1
             )
             UPDATE speech_chunks sc
@@ -355,7 +391,44 @@ async def resolve_missing(db: Database, *, batch_size: int = 5000) -> dict[str, 
         if n < batch_size:
             break
 
-    return {"speeches_resolved": speeches_total, "chunks_resolved": chunks_total}
+    # vote_positions: federal divisions store the openparliament slug in
+    # politician_name_raw. Same batched pattern as speeches. The
+    # idx_vote_pos_unresolved partial index on (vote_id) WHERE
+    # politician_id IS NULL keeps the candidate scan fast.
+    positions_total = 0
+    while True:
+        tag = await db.execute(
+            """
+            WITH target AS (
+              SELECT vp.vote_id, vp.politician_name_raw AS slug, p.id AS pid
+                FROM vote_positions vp
+                JOIN votes v ON v.id = vp.vote_id
+                JOIN politicians p
+                  ON p.openparliament_slug = vp.politician_name_raw
+               WHERE vp.politician_id IS NULL
+                 AND v.source_system = 'votes-federal'
+                 AND p.openparliament_slug IS NOT NULL
+               LIMIT $1
+            )
+            UPDATE vote_positions vp
+               SET politician_id = t.pid
+              FROM target t
+             WHERE vp.vote_id = t.vote_id
+               AND vp.politician_name_raw = t.slug
+            """,
+            batch_size,
+        )
+        n = _count(tag)
+        positions_total += n
+        log.info("resolve vote_positions batch: +%d (running total %d)", n, positions_total)
+        if n < batch_size:
+            break
+
+    return {
+        "speeches_resolved": speeches_total,
+        "chunks_resolved": chunks_total,
+        "vote_positions_resolved": positions_total,
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────

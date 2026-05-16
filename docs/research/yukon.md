@@ -6,6 +6,8 @@
 
 **Status snapshot (2026-04-19):** ⛔ **Bills blocked.** Cloudflare Bot Management returns HTTP 403 to all non-browser requests, confirmed April 2026. Requires Playwright/Selenium with realistic User-Agent + challenge-cookie handling. Alternative for bill text only: scrape `yukon.ca` government legislation portal.
 
+**Re-probe (2026-05-14):** Status unchanged. `yukonassembly.ca` returns `HTTP/2 403` with `cf-mitigated: challenge` to every path (`/`, `/rss`, `/feed`, `?_format=json`, `/robots.txt`, `/sitemap.xml`) even with a realistic Chrome UA. Cloudflare delivers its full JS challenge page (`cdn-cgi/challenge-platform/h/b/orchestrate/chl_page/v1`). **Additionally, `yukon.ca` is now also behind the same Cloudflare wall** — the "alternate bill-text fallback" path the April dossier flagged at `yukon.ca/en/your-government/legislation/order-legislative-documents` also returns 403 cf-mitigated. Net effect: **no server-side path to any YT legislative data**. Browser automation is the only avenue.
+
 ---
 
 ## Bills & Legislation

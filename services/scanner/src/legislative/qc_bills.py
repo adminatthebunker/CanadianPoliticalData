@@ -401,11 +401,42 @@ async def ingest_qc_bills_rss(db: Database) -> dict[str, int]:
     QC phase that records pre-current-stage history, so this is the
     natural place to roll up the bill_events timeline into the bill
     row's flat `introduced_date` column.
+
+    Two failure modes that both started ~2026-05-05:
+      1. assnat.qc.ca serves the leaf cert only — no intermediate.
+         Browsers chase the AIA URL to fetch Sectigo's
+         intermediate, httpx (like curl) does not, so verification
+         fails with "unable to get local issuer certificate".
+      2. Even with verify off, requests now hit a FortiADC WAF and
+         get a 403 with `waf_deny_rule_id=1190000001`. The body is
+         an iframe pointing at /fortiadc_error_page/waf_deny.html.
+         Browsers may pass; server-side httpx does not.
+
+    The CSV path (`ingest-qc-bills`) is unaffected and remains the
+    source of truth for QC bill discovery; the RSS feed only filled
+    in stage-transition events. Until we add browser automation
+    (Playwright) or QC relaxes the WAF, this job logs a warning and
+    returns empty stats so the daily scheduler doesn't accumulate
+    misleading failures.
     """
-    async with httpx.AsyncClient(headers=HEADERS, follow_redirects=True) as client:
-        r = await client.get(RSS_URL, timeout=REQUEST_TIMEOUT)
-        r.raise_for_status()
-        xml = r.content
+    stats: dict[str, int] = {
+        "items": 0, "matched": 0, "events_added": 0,
+        "unmatched": 0, "dated": 0,
+    }
+    try:
+        async with httpx.AsyncClient(
+            headers=HEADERS, follow_redirects=True, verify=False,
+        ) as client:
+            r = await client.get(RSS_URL, timeout=REQUEST_TIMEOUT)
+            r.raise_for_status()
+            xml = r.content
+    except (httpx.HTTPStatusError, httpx.HTTPError) as exc:
+        log.warning(
+            "ingest_qc_bills_rss: upstream unreachable (%s) — skipping "
+            "stage-event refresh; CSV path remains the bill-discovery source",
+            exc,
+        )
+        return stats
 
     root = ET.fromstring(xml)
     items = root.findall(".//item")

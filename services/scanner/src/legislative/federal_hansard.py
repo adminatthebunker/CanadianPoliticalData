@@ -128,7 +128,8 @@ FEDERAL_SESSION_DATES: list[tuple[int, int, date, date]] = [
     (42, 1, date(2015, 12,  3), date(2019,  9, 11)),
     (43, 1, date(2019, 12,  5), date(2020,  8, 18)),
     (43, 2, date(2020,  9, 23), date(2021,  8, 15)),
-    (44, 1, date(2021, 11, 22), date(2099, 12, 31)),   # open-ended; cap with --until when ended
+    (44, 1, date(2021, 11, 22), date(2024, 12, 17)),   # ended; parliament dissolved into 45th
+    (45, 1, date(2025,  5, 26), date(2099, 12, 31)),   # open-ended; cap with --until when ended
 ]
 
 
