@@ -31,6 +31,7 @@ from .committees import (
 )
 from .compare_politicians import backfill_initial_terms
 from .db import Database, get_dsn
+from .legislative._forward import forward_options as _forward_options
 from .enrich import (
     enrich_alberta_mlas,
     enrich_all_legislatures,
@@ -1051,6 +1052,9 @@ def cmd_ingest_ns_mlas(
               help="Session within the assembly. Default: latest.")
 @click.option("--since", type=str, default=None,
               help="Only ingest sittings on/after this ISO date (YYYY-MM-DD).")
+@click.option("--since-days", type=int, default=None,
+              help="Forward-incremental: clamp --since to today - N days "
+                   "(use in daily schedules).")
 @click.option("--until", type=str, default=None,
               help="Only ingest sittings on/before this ISO date (YYYY-MM-DD).")
 @click.option("--limit-sittings", type=int, default=None,
@@ -1062,7 +1066,7 @@ def cmd_ingest_ns_mlas(
 @click.pass_context
 def cmd_ingest_ns_hansard(
     ctx: click.Context, parliament, session,
-    since: Optional[str], until: Optional[str],
+    since: Optional[str], since_days: Optional[int], until: Optional[str],
     limit_sittings: Optional[int], limit_speeches: Optional[int],
     one_off_url: Optional[str],
 ) -> None:
@@ -1071,11 +1075,10 @@ def cmd_ingest_ns_hansard(
     When --parliament/--session are omitted, resolves the current session
     from legislative_sessions (populated by ingest-ns-bills).
     """
-    from datetime import date as _date
     from .legislative.current_session import current_session
+    from .legislative._forward import parse_iso_date, clamp_since_with_days
 
-    def _parse_d(s):
-        return _date.fromisoformat(s) if s else None
+    effective_since = clamp_since_with_days(parse_iso_date(since), since_days)
 
     async def _wrap(db: Database) -> None:
         nonlocal parliament, session
@@ -1087,12 +1090,17 @@ def cmd_ingest_ns_hansard(
                 f"[dim]auto-resolved current NS session: "
                 f"P{parliament}-S{session}[/dim]"
             )
+        if since_days is not None and effective_since is not None:
+            console.print(
+                f"[dim]forward-incremental: --since clamped to "
+                f"{effective_since.isoformat()} (since_days={since_days})[/dim]"
+            )
         stats = await ingest_ns_hansard(
             db,
             parliament=parliament,
             session=session,
-            since=_parse_d(since),
-            until=_parse_d(until),
+            since=effective_since,
+            until=parse_iso_date(until),
             limit_sittings=limit_sittings,
             limit_speeches=limit_speeches,
             one_off_url=one_off_url,
@@ -1136,6 +1144,9 @@ def cmd_resolve_ns_speakers(ctx: click.Context, limit: Optional[int]) -> None:
               help="Session within the parliament (e.g. 1). Default: latest.")
 @click.option("--since", type=str, default=None,
               help="Only ingest sittings on/after this ISO date (YYYY-MM-DD).")
+@click.option("--since-days", type=int, default=None,
+              help="Forward-incremental: clamp --since to today - N days "
+                   "(use in daily schedules).")
 @click.option("--until", type=str, default=None,
               help="Only ingest sittings on/before this ISO date (YYYY-MM-DD).")
 @click.option("--limit-sittings", type=int, default=None,
@@ -1146,7 +1157,7 @@ def cmd_resolve_ns_speakers(ctx: click.Context, limit: Optional[int]) -> None:
               help="Bypass discovery and ingest a single sitting URL directly.")
 @click.pass_context
 def cmd_ingest_on_hansard(
-    ctx: click.Context, parliament, session, since, until,
+    ctx: click.Context, parliament, session, since, since_days, until,
     limit_sittings, limit_speeches, one_off_url,
 ) -> None:
     """Ingest Ontario Hansard (HTML transcripts via ola.org JSON node) → speeches.
@@ -1163,12 +1174,11 @@ def cmd_ingest_on_hansard(
     When --parliament/--session are omitted, resolves the current
     session from legislative_sessions (populated by ingest-on-bills).
     """
-    from datetime import date as _date
     from .legislative.on_hansard import ingest as _ingest
     from .legislative.current_session import current_session
+    from .legislative._forward import parse_iso_date, clamp_since_with_days
 
-    def _parse_d(s):
-        return _date.fromisoformat(s) if s else None
+    effective_since = clamp_since_with_days(parse_iso_date(since), since_days)
 
     async def _wrap(db: Database) -> None:
         nonlocal parliament, session
@@ -1187,12 +1197,17 @@ def cmd_ingest_on_hansard(
             parliament, session = await current_session(
                 db, level="provincial", province_territory="ON",
             )
+        if since_days is not None and effective_since is not None:
+            console.print(
+                f"[dim]forward-incremental: --since clamped to "
+                f"{effective_since.isoformat()} (since_days={since_days})[/dim]"
+            )
         stats = await _ingest(
             db,
             parliament=parliament,
             session=session,
-            since=_parse_d(since),
-            until=_parse_d(until),
+            since=effective_since,
+            until=parse_iso_date(until),
             limit_sittings=limit_sittings,
             limit_speeches=limit_speeches,
             one_off_url=one_off_url,
@@ -1550,6 +1565,33 @@ def cmd_ingest_nl_former_mlas(ctx: click.Context) -> None:
         stats = await ingest_nl_former_mlas(db)
         console.print(
             f"[green]ingest-nl-former-mlas[/green]: "
+            f"legislatures={stats.legislatures_processed} "
+            f"unique_mlas={stats.unique_mlas} "
+            f"inserted={stats.politicians_inserted} "
+            f"matched={stats.politicians_matched_existing} "
+            f"terms_inserted={stats.terms_inserted} "
+            f"terms_skipped={stats.terms_skipped_existing}"
+        )
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
+@cli.command("ingest-nu-former-mlas")
+@click.pass_context
+def cmd_ingest_nu_former_mlas(ctx: click.Context) -> None:
+    """Seed NU 6th Assembly historical roster (2021-2025) from Wikipedia.
+
+    22 MLAs sourced from the `6th_Nunavut_Legislature` Wikipedia article.
+    Required for surname resolution on NU Hansard PDFs (2021-02-24 to
+    2024-05-31) — the existing direct-scraper only knows the 7th
+    Assembly that was sworn in Nov 2025. Fuzzier name match tolerates
+    multi-word surnames (`Pitsiulaaq Brewster` ⊇ `Brewster`).
+    """
+    from .legislative.nu_former_mlas import ingest_nu_former_mlas
+
+    async def _wrap(db: Database) -> None:
+        stats = await ingest_nu_former_mlas(db)
+        console.print(
+            f"[green]ingest-nu-former-mlas[/green]: "
             f"legislatures={stats.legislatures_processed} "
             f"unique_mlas={stats.unique_mlas} "
             f"inserted={stats.politicians_inserted} "
@@ -2133,9 +2175,10 @@ def cmd_ingest_nt_bills(ctx: click.Context, delay) -> None:
               help="Cap on votes processed (newest-first; smoke-test aid).")
 @click.option("--delay", type=float, default=0.5,
               help="Seconds between openparliament.ca API calls (politeness).")
+@_forward_options
 @click.pass_context
 def cmd_extract_federal_votes(
-    ctx: click.Context, session, limit_votes, delay,
+    ctx: click.Context, session, limit_votes, delay, since, since_days,
 ) -> None:
     """Extract federal votes + per-MP positions from openparliament.ca.
 
@@ -2149,12 +2192,33 @@ def cmd_extract_federal_votes(
     vote_positions upsert on (vote_id, politician_name_raw=slug). Re-runs
     UPDATE in place; politician_id can lift on subsequent passes if the
     roster fills.
+
+    Forward-incremental: --since / --since-days skip the per-vote
+    ballots fetch (the cost driver) for votes whose `occurred_at` is
+    older than the cutoff. With neither flag, the DB high-water on
+    `votes.occurred_at WHERE level='federal'` minus 14d overlap is used.
     """
     from .legislative.federal_votes import extract_federal_votes as _extract
+    from .legislative._forward import parse_iso_date, resolve_since
 
     async def _wrap(db: Database) -> None:
+        effective_since = await resolve_since(
+            db,
+            explicit_since=parse_iso_date(since),
+            since_days=since_days,
+            table="votes",
+            timestamp_column="occurred_at",
+            where="level=$1",
+            where_params=["federal"],
+        )
+        if effective_since is not None:
+            console.print(
+                f"[dim]forward-incremental: skipping votes before "
+                f"{effective_since.isoformat()}[/dim]"
+            )
         stats = await _extract(
             db, session=session, limit_votes=limit_votes, delay=delay,
+            since=effective_since,
         )
         console.print(
             f"[green]extract-federal-votes[/green]: "
@@ -2246,6 +2310,63 @@ _extract_nl_votes_cmd = _make_provincial_votes_cmd("nl", "NL", "hansard-nl")
 _extract_nb_votes_cmd = _make_provincial_votes_cmd("nb", "NB", "legnb-hansard")
 
 
+@cli.command("extract-sk-votes")
+@click.option("--journal-url", type=str, default=None,
+              help="Process a single Journal PDF by URL (smoke test).")
+@click.option("--all-journals", is_flag=True, default=False,
+              help="Process every Journal (historical backfill).")
+@click.option("--current-only", is_flag=True, default=True,
+              help="Process only the highest (legislature, session) Journal "
+                   "(default; use --all-journals to backfill).")
+@click.option("--limit-journals", type=int, default=None,
+              help="Cap journals processed (newest-first when capped).")
+@click.option("--delay", type=float, default=1.0,
+              help="Seconds between per-PDF fetches.")
+@click.pass_context
+def cmd_extract_sk_votes(
+    ctx: click.Context, journal_url, all_journals, current_only,
+    limit_journals, delay,
+) -> None:
+    """Extract SK votes from Journals PDFs with per-MLA roll-call.
+
+    SK Journals are session-aggregated PDFs at
+    /legislative-business/journals/ with structured YEAS / POUR — N
+    and NAYS / CONTRE — M grids. Surname-only with `(Constituency)`
+    parens for disambiguation when two MLAs share a surname.
+
+    Per-MLA YEA/NAY positions land in `vote_positions` (unlike the
+    consensus-shape extractors for MB / NL / NT). Tallies are
+    populated from the marker. Bill linkage via `Bill N` mention in
+    the motion text.
+
+    Default: current-session-only (forward-incremental, daily-friendly).
+    Use --all-journals for historical backfill (~117 PDFs back to 1L1S).
+    Idempotent: source_url is keyed on `<pdf_url>#page=N`.
+    """
+    from .legislative.sk_votes import extract_sk_votes as _extract
+
+    async def _wrap(db: Database) -> None:
+        stats = await _extract(
+            db, journal_url=journal_url, all_journals=all_journals,
+            current_only=current_only, limit_journals=limit_journals,
+            delay=delay,
+        )
+        console.print(
+            f"[green]extract-sk-votes[/green]: "
+            f"journals seen={stats.journals_seen} fetched={stats.journals_fetched} "
+            f"divisions={stats.divisions_seen} "
+            f"votes inserted={stats.votes_inserted} updated={stats.votes_updated} "
+            f"positions inserted={stats.positions_inserted} updated={stats.positions_updated} "
+            f"bill_links={stats.bill_links} "
+            f"pol_links={stats.politician_links} unresolved={stats.politicians_unresolved}"
+        )
+        if stats.failures:
+            console.print(
+                f"[yellow]sk_votes failures (first 5):[/yellow] {stats.failures[:5]}"
+            )
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
 @cli.command("extract-nt-votes")
 @click.option("--limit-sittings", type=int, default=None,
               help="Cap to most-recent N sittings (smoke-test aid).")
@@ -2279,18 +2400,81 @@ def cmd_extract_nt_votes(ctx: click.Context, limit_sittings) -> None:
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 
 
+@cli.command("ingest-nu-hansard")
+@click.option("--since", type=str, default=None,
+              help="Only ingest sittings on/after this ISO date (YYYY-MM-DD).")
+@click.option("--since-days", type=int, default=None,
+              help="Forward-incremental: clamp --since to today - N days "
+                   "(use in daily schedules).")
+@click.option("--until", type=str, default=None,
+              help="Only ingest sittings on/before this ISO date.")
+@click.option("--limit-sittings", type=int, default=None,
+              help="Cap sittings processed (newest-first when capped).")
+@click.option("--url", "one_off_url", type=str, default=None,
+              help="Bypass discovery and ingest a single PDF URL directly.")
+@click.option("--delay", type=float, default=1.0,
+              help="Seconds between per-PDF fetches.")
+@click.pass_context
+def cmd_ingest_nu_hansard(
+    ctx: click.Context, since, since_days, until, limit_sittings,
+    one_off_url, delay,
+) -> None:
+    """Ingest Nunavut Hansard PDFs into the `speeches` table.
+
+    Source: assembly.nu.ca/hansard, ~59 PDFs back to 2021-02-24. English-
+    primary with `(interpretation)` markers for Inuktitut passages.
+    Consensus government → no party affiliation. Speaker resolution
+    via politicians.last_name + constituency_name disambiguation.
+
+    Idempotent: upsert keyed on (source_system='hansard-nu', source_url, sequence).
+    """
+    from .legislative.nu_hansard import ingest_nu_hansard as _ingest
+    from .legislative._forward import parse_iso_date, clamp_since_with_days
+
+    effective_since = clamp_since_with_days(parse_iso_date(since), since_days)
+
+    async def _wrap(db: Database) -> None:
+        if since_days is not None and effective_since is not None:
+            console.print(
+                f"[dim]forward-incremental: --since clamped to "
+                f"{effective_since.isoformat()} (since_days={since_days})[/dim]"
+            )
+        stats = await _ingest(
+            db,
+            since=effective_since,
+            until=parse_iso_date(until),
+            limit_sittings=limit_sittings,
+            one_off_url=one_off_url,
+            delay=delay,
+        )
+        console.print(
+            f"[green]ingest-nu-hansard[/green]: "
+            f"sittings seen={stats.sittings_seen} fetched={stats.sittings_fetched} "
+            f"skipped={stats.sittings_skipped} "
+            f"speeches inserted={stats.speeches_inserted} updated={stats.speeches_updated} "
+            f"resolved={stats.speeches_resolved} presiding={stats.speeches_presiding} "
+            f"unresolved={stats.speeches_unresolved}"
+        )
+        if stats.failures:
+            console.print(f"[yellow]nu_hansard failures (first 3):[/yellow] {stats.failures[:3]}")
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
 @cli.command("ingest-nt-hansard")
 @click.option("--limit-sittings", type=int, default=None,
               help="Cap on sittings ingested (newest-first). Smoke-test friendly.")
 @click.option("--since", "since_hn_id", type=str, default=None,
               help="Only ingest sittings with hn_id sorting strictly above this (e.g. 'hn250101').")
+@click.option("--since-days", type=int, default=None,
+              help="Forward-incremental: derive --since hn_id from today - N days "
+                   "(use in daily schedules). Loses to explicit --since.")
 @click.option("--url", "only_url", type=str, default=None,
               help="Bypass discovery and ingest a single transcript URL directly.")
 @click.option("--delay", type=float, default=1.0,
               help="Seconds between per-sitting fetches.")
 @click.pass_context
 def cmd_ingest_nt_hansard(
-    ctx: click.Context, limit_sittings, since_hn_id, only_url, delay,
+    ctx: click.Context, limit_sittings, since_hn_id, since_days, only_url, delay,
 ) -> None:
     """Ingest Northwest Territories Hansard from ntlegislativeassembly.ca.
 
@@ -2301,6 +2485,17 @@ def cmd_ingest_nt_hansard(
     Idempotent: upsert keyed on (source_system, source_url, sequence).
     """
     from .legislative.nt_hansard import ingest_nt_hansard as _ingest
+
+    # NT's discovery filter is an opaque hn_id (hn{YYMMDD}); convert
+    # --since-days to that shape if no explicit --since provided.
+    if since_hn_id is None and since_days is not None:
+        from datetime import date as _date, timedelta as _td
+        cutoff = _date.today() - _td(days=int(since_days))
+        since_hn_id = f"hn{cutoff.strftime('%y%m%d')}"
+        console.print(
+            f"[dim]forward-incremental: --since clamped to {since_hn_id} "
+            f"(since_days={since_days})[/dim]"
+        )
 
     async def _wrap(db: Database) -> None:
         stats = await _ingest(
@@ -2404,6 +2599,9 @@ def cmd_ingest_sk_bills(
               help="Cap to first N sittings (newest-first ordering).")
 @click.option("--since", type=str, default=None,
               help="Only ingest sittings on or after YYYY-MM-DD.")
+@click.option("--since-days", type=int, default=None,
+              help="Forward-incremental: clamp --since to today - N days "
+                   "(use in daily schedules).")
 @click.option("--url", type=str, default=None,
               help="Bypass discovery; ingest one transcript URL.")
 @click.option("--delay", type=float, default=1.0,
@@ -2412,7 +2610,7 @@ def cmd_ingest_sk_bills(
               help="Cap discovery walker (defensive). Default: walk to empty.")
 @click.pass_context
 def cmd_ingest_sk_hansard(
-    ctx: click.Context, limit_sittings, since, url, delay, max_archive_pages,
+    ctx: click.Context, limit_sittings, since, since_days, url, delay, max_archive_pages,
 ) -> None:
     """Ingest SK Hansard from docs.legassembly.sk.ca.
 
@@ -2427,20 +2625,27 @@ def cmd_ingest_sk_hansard(
     """
     from .legislative.sk_hansard import ingest_sk_hansard as _ingest
     from datetime import date as _Date
+    from .legislative._forward import clamp_since_with_days
 
-    since_date = None
+    explicit_since = None
     if since:
         try:
-            since_date = _Date.fromisoformat(since)
+            explicit_since = _Date.fromisoformat(since)
         except ValueError:
             console.print(f"[red]invalid --since {since!r}; expected YYYY-MM-DD[/red]")
             raise click.exceptions.Exit(2)
+    effective_since = clamp_since_with_days(explicit_since, since_days)
+    if since_days is not None and effective_since is not None:
+        console.print(
+            f"[dim]forward-incremental: --since clamped to "
+            f"{effective_since.isoformat()} (since_days={since_days})[/dim]"
+        )
 
     async def _wrap(db: Database) -> None:
         stats = await _ingest(
             db,
             limit_sittings=limit_sittings,
-            since=since_date,
+            since=effective_since,
             url=url,
             delay=delay,
             max_archive_pages=max_archive_pages,
@@ -2665,9 +2870,15 @@ def cmd_harvest_personal_socials(ctx: click.Context, limit) -> None:
               help="Cap on bills processed (smoke-test friendly).")
 @click.option("--delay", "delay_secs", type=float, default=0.5,
               help="Seconds between per-bill detail fetches (be polite to openparliament.ca).")
+@click.option("--since", type=str, default=None,
+              help="Forward-incremental: skip detail fetch for bills introduced before this ISO date.")
+@click.option("--since-days", type=int, default=None,
+              help="Forward-incremental: --since = today - N days "
+                   "(use in daily schedules; defaults from DB high-water if neither given).")
 @click.pass_context
 def cmd_ingest_federal_bills(
     ctx: click.Context, parliament, session, all_sessions, limit, delay_secs,
+    since, since_days,
 ) -> None:
     """Ingest federal bills from openparliament.ca JSON API.
 
@@ -2677,20 +2888,42 @@ def cmd_ingest_federal_bills(
 
     No stage events (openparliament doesn't expose them on bills); status
     field carries the latest stage as a string.
+
+    Forward-incremental: --since / --since-days skip the per-bill detail
+    fetch (the cost driver) for bills whose `introduced` date is older
+    than the cutoff. With neither flag set, the DB high-water on
+    `bills.introduced_date WHERE level='federal'` minus 14d overlap is used.
     """
     from .legislative.federal_bills import ingest_federal_bills
+    from .legislative._forward import parse_iso_date, resolve_since
 
     async def _wrap(db: Database) -> None:
+        effective_since = await resolve_since(
+            db,
+            explicit_since=parse_iso_date(since),
+            since_days=since_days,
+            table="bills",
+            timestamp_column="introduced_date",
+            where="level=$1",
+            where_params=["federal"],
+        )
+        if effective_since is not None:
+            console.print(
+                f"[dim]forward-incremental: skipping bills introduced before "
+                f"{effective_since.isoformat()}[/dim]"
+            )
         stats = await ingest_federal_bills(
             db,
             parliament=parliament, session=session,
             all_sessions=all_sessions,
             limit=limit, delay_seconds=delay_secs,
+            since=effective_since,
         )
         console.print(
             f"[green]ingest-federal-bills[/green]: "
             f"sessions={stats['sessions_touched']} bills={stats['bills']} "
-            f"sponsors={stats['sponsors']} sponsors_linked={stats['sponsors_linked']}"
+            f"sponsors={stats['sponsors']} sponsors_linked={stats['sponsors_linked']} "
+            f"skipped_older={stats.get('skipped_older', 0)}"
         )
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 
@@ -2789,6 +3022,9 @@ def cmd_relink_bill_introduced_dates(
               help="Session number within the parliament (e.g. 1). Default: latest.")
 @click.option("--since", type=str, default=None,
               help="Only fetch debates on/after this ISO date (YYYY-MM-DD).")
+@click.option("--since-days", type=int, default=None,
+              help="Forward-incremental: narrow --since to today - N days "
+                   "(use in daily schedules to skip already-ingested sittings).")
 @click.option("--until", type=str, default=None,
               help="Only fetch debates on/before this ISO date (YYYY-MM-DD).")
 @click.option("--limit-debates", type=int, default=None,
@@ -2797,7 +3033,7 @@ def cmd_relink_bill_introduced_dates(
               help="Cap on TOTAL speeches ingested. Smoke-test friendly.")
 @click.pass_context
 def cmd_ingest_federal_hansard(
-    ctx: click.Context, parliament, session, since, until,
+    ctx: click.Context, parliament, session, since, since_days, until,
     limit_debates, limit_speeches,
 ) -> None:
     """Ingest federal House of Commons speeches from openparliament.ca.
@@ -2811,7 +3047,7 @@ def cmd_ingest_federal_hansard(
     from legislative_sessions (populated by the bills ingester). Schedule
     bills before Hansard in the daily-ingest chain.
     """
-    from datetime import date as _date
+    from datetime import date as _date, timedelta as _td
     from .legislative.federal_hansard import ingest as _ingest, federal_session_bounds
     from .legislative.current_session import current_session
 
@@ -2849,6 +3085,19 @@ def cmd_ingest_federal_hansard(
                 console.print(f"[red]{exc}[/red]")
                 raise click.Abort()
 
+        # Forward-incremental narrowing: clamp effective_since up to
+        # today - since_days. Daily schedules pass since_days=14 to skip
+        # already-ingested sittings; ad-hoc operators get the full
+        # session-range default.
+        if since_days is not None:
+            cutoff = _date.today() - _td(days=int(since_days))
+            if effective_since is None or cutoff > effective_since:
+                effective_since = cutoff
+                console.print(
+                    f"[dim]forward-incremental: narrowed --since to "
+                    f"{effective_since.isoformat()} (since_days={since_days})[/dim]"
+                )
+
         stats = await _ingest(
             db,
             parliament=parliament,
@@ -2875,6 +3124,9 @@ def cmd_ingest_federal_hansard(
               help="Session within the legislature (e.g. 2). Default: latest.")
 @click.option("--since", type=str, default=None,
               help="Only fetch sittings on/after this ISO date (YYYY-MM-DD).")
+@click.option("--since-days", type=int, default=None,
+              help="Forward-incremental: clamp --since to today - N days "
+                   "(use in daily schedules).")
 @click.option("--until", type=str, default=None,
               help="Only fetch sittings on/before this ISO date (YYYY-MM-DD).")
 @click.option("--limit-sittings", type=int, default=None,
@@ -2883,7 +3135,7 @@ def cmd_ingest_federal_hansard(
               help="Cap on TOTAL speeches ingested. Smoke-test friendly.")
 @click.pass_context
 def cmd_ingest_ab_hansard(
-    ctx: click.Context, legislature, session, since, until,
+    ctx: click.Context, legislature, session, since, since_days, until,
     limit_sittings, limit_speeches,
 ) -> None:
     """Ingest Alberta Hansard by parsing sitting PDFs from docs.assembly.ab.ca.
@@ -2891,12 +3143,11 @@ def cmd_ingest_ab_hansard(
     When --legislature/--session are omitted, resolves the current session
     from legislative_sessions (populated by ingest-ab-bills).
     """
-    from datetime import date as _date
     from .legislative.ab_hansard import ingest as _ingest
     from .legislative.current_session import current_session
+    from .legislative._forward import parse_iso_date, clamp_since_with_days
 
-    def _parse_d(s):
-        return _date.fromisoformat(s) if s else None
+    effective_since = clamp_since_with_days(parse_iso_date(since), since_days)
 
     async def _wrap(db: Database) -> None:
         nonlocal legislature, session
@@ -2908,12 +3159,17 @@ def cmd_ingest_ab_hansard(
                 f"[dim]auto-resolved current AB session: "
                 f"L{legislature}-S{session}[/dim]"
             )
+        if since_days is not None and effective_since is not None:
+            console.print(
+                f"[dim]forward-incremental: --since clamped to "
+                f"{effective_since.isoformat()} (since_days={since_days})[/dim]"
+            )
         stats = await _ingest(
             db,
             legislature=legislature,
             session=session,
-            since=_parse_d(since),
-            until=_parse_d(until),
+            since=effective_since,
+            until=parse_iso_date(until),
             limit_sittings=limit_sittings,
             limit_speeches=limit_speeches,
         )
@@ -2935,6 +3191,9 @@ def cmd_ingest_ab_hansard(
               help="Session within the parliament (e.g. 2). Default: latest.")
 @click.option("--since", type=str, default=None,
               help="Only fetch sittings on/after this ISO date (YYYY-MM-DD).")
+@click.option("--since-days", type=int, default=None,
+              help="Forward-incremental: clamp --since to today - N days "
+                   "(use in daily schedules).")
 @click.option("--until", type=str, default=None,
               help="Only fetch sittings on/before this ISO date (YYYY-MM-DD).")
 @click.option("--limit-sittings", type=int, default=None,
@@ -2946,7 +3205,7 @@ def cmd_ingest_ab_hansard(
                    "Useful for smoke-testing the parser on a known file.")
 @click.pass_context
 def cmd_ingest_bc_hansard(
-    ctx: click.Context, parliament, session, since, until,
+    ctx: click.Context, parliament, session, since, since_days, until,
     limit_sittings, limit_speeches, one_off_url,
 ) -> None:
     """Ingest BC Hansard from LIMS HDMS (Blues + Final HTML → speeches).
@@ -2954,12 +3213,11 @@ def cmd_ingest_bc_hansard(
     When --parliament/--session are omitted, resolves the current session
     from legislative_sessions (populated by ingest-bc-bills).
     """
-    from datetime import date as _date
     from .legislative.bc_hansard import ingest as _ingest
     from .legislative.current_session import current_session
+    from .legislative._forward import parse_iso_date, clamp_since_with_days
 
-    def _parse_d(s):
-        return _date.fromisoformat(s) if s else None
+    effective_since = clamp_since_with_days(parse_iso_date(since), since_days)
 
     async def _wrap(db: Database) -> None:
         nonlocal parliament, session
@@ -2971,12 +3229,17 @@ def cmd_ingest_bc_hansard(
                 f"[dim]auto-resolved current BC session: "
                 f"P{parliament}-S{session}[/dim]"
             )
+        if since_days is not None and effective_since is not None:
+            console.print(
+                f"[dim]forward-incremental: --since clamped to "
+                f"{effective_since.isoformat()} (since_days={since_days})[/dim]"
+            )
         stats = await _ingest(
             db,
             parliament=parliament,
             session=session,
-            since=_parse_d(since),
-            until=_parse_d(until),
+            since=effective_since,
+            until=parse_iso_date(until),
             limit_sittings=limit_sittings,
             limit_speeches=limit_speeches,
             one_off_url=one_off_url,
@@ -3055,6 +3318,9 @@ def cmd_resolve_bc_speakers_dated(
               help="Session within the parliament. Default: latest.")
 @click.option("--since", type=str, default=None,
               help="Only fetch sittings on/after this ISO date (YYYY-MM-DD).")
+@click.option("--since-days", type=int, default=None,
+              help="Forward-incremental: clamp --since to today - N days "
+                   "(use in daily schedules).")
 @click.option("--until", type=str, default=None,
               help="Only fetch sittings on/before this ISO date (YYYY-MM-DD).")
 @click.option("--limit-sittings", type=int, default=None,
@@ -3065,7 +3331,7 @@ def cmd_resolve_bc_speakers_dated(
               help="Bypass discovery and ingest a single transcript URL directly.")
 @click.pass_context
 def cmd_ingest_qc_hansard(
-    ctx: click.Context, parliament, session, since, until,
+    ctx: click.Context, parliament, session, since, since_days, until,
     limit_sittings, limit_speeches, one_off_url,
 ) -> None:
     """Ingest Quebec Journal des débats (HTML) → speeches table.
@@ -3073,12 +3339,11 @@ def cmd_ingest_qc_hansard(
     When --parliament/--session are omitted, resolves the current session
     from legislative_sessions (populated by ingest-qc-bills).
     """
-    from datetime import date as _date
     from .legislative.qc_hansard import ingest as _ingest
     from .legislative.current_session import current_session
+    from .legislative._forward import parse_iso_date, clamp_since_with_days
 
-    def _parse_d(s):
-        return _date.fromisoformat(s) if s else None
+    effective_since = clamp_since_with_days(parse_iso_date(since), since_days)
 
     async def _wrap(db: Database) -> None:
         nonlocal parliament, session
@@ -3090,12 +3355,17 @@ def cmd_ingest_qc_hansard(
                 f"[dim]auto-resolved current QC session: "
                 f"P{parliament}-S{session}[/dim]"
             )
+        if since_days is not None and effective_since is not None:
+            console.print(
+                f"[dim]forward-incremental: --since clamped to "
+                f"{effective_since.isoformat()} (since_days={since_days})[/dim]"
+            )
         stats = await _ingest(
             db,
             parliament=parliament,
             session=session,
-            since=_parse_d(since),
-            until=_parse_d(until),
+            since=effective_since,
+            until=parse_iso_date(until),
             limit_sittings=limit_sittings,
             limit_speeches=limit_speeches,
             one_off_url=one_off_url,
@@ -3118,6 +3388,9 @@ def cmd_ingest_qc_hansard(
               help="Session within the legislature. Default: latest.")
 @click.option("--since", type=str, default=None,
               help="Only ingest sittings on/after this ISO date (YYYY-MM-DD).")
+@click.option("--since-days", type=int, default=None,
+              help="Forward-incremental: clamp --since to today - N days "
+                   "(use in daily schedules).")
 @click.option("--until", type=str, default=None,
               help="Only ingest sittings on/before this ISO date (YYYY-MM-DD).")
 @click.option("--limit-sittings", type=int, default=None,
@@ -3128,7 +3401,7 @@ def cmd_ingest_qc_hansard(
               help="Bypass discovery and ingest a single transcript URL directly.")
 @click.pass_context
 def cmd_ingest_mb_hansard(
-    ctx: click.Context, parliament, session, since, until,
+    ctx: click.Context, parliament, session, since, since_days, until,
     limit_sittings, limit_speeches, one_off_url,
 ) -> None:
     """Ingest Manitoba Hansard (Word-exported HTML) → speeches table.
@@ -3136,11 +3409,10 @@ def cmd_ingest_mb_hansard(
     When --parliament/--session are omitted, resolves the current session
     from legislative_sessions (populated by ingest-mb-bills).
     """
-    from datetime import date as _date
     from .legislative.current_session import current_session
+    from .legislative._forward import parse_iso_date, clamp_since_with_days
 
-    def _parse_d(s):
-        return _date.fromisoformat(s) if s else None
+    effective_since = clamp_since_with_days(parse_iso_date(since), since_days)
 
     async def _wrap(db: Database) -> None:
         nonlocal parliament, session
@@ -3152,12 +3424,17 @@ def cmd_ingest_mb_hansard(
                 f"[dim]auto-resolved current MB session: "
                 f"P{parliament}-S{session}[/dim]"
             )
+        if since_days is not None and effective_since is not None:
+            console.print(
+                f"[dim]forward-incremental: --since clamped to "
+                f"{effective_since.isoformat()} (since_days={since_days})[/dim]"
+            )
         stats = await ingest_mb_hansard(
             db,
             parliament=parliament,
             session=session,
-            since=_parse_d(since),
-            until=_parse_d(until),
+            since=effective_since,
+            until=parse_iso_date(until),
             limit_sittings=limit_sittings,
             limit_speeches=limit_speeches,
             one_off_url=one_off_url,
@@ -3464,6 +3741,9 @@ def cmd_resolve_on_speakers_dated(ctx: click.Context, limit: Optional[int]) -> N
               help="Session within the GA. Default: latest.")
 @click.option("--since", type=str, default=None,
               help="Only ingest sittings on/after this ISO date (YYYY-MM-DD).")
+@click.option("--since-days", type=int, default=None,
+              help="Forward-incremental: clamp --since to today - N days "
+                   "(use in daily schedules).")
 @click.option("--until", type=str, default=None,
               help="Only ingest sittings on/before this ISO date (YYYY-MM-DD).")
 @click.option("--limit-sittings", type=int, default=None,
@@ -3474,7 +3754,7 @@ def cmd_resolve_on_speakers_dated(ctx: click.Context, limit: Optional[int]) -> N
               help="Bypass discovery and ingest a single transcript URL directly.")
 @click.pass_context
 def cmd_ingest_nl_hansard(
-    ctx: click.Context, ga, session, since, until,
+    ctx: click.Context, ga, session, since, since_days, until,
     limit_sittings, limit_speeches, one_off_url,
 ) -> None:
     """Ingest Newfoundland & Labrador Hansard (HTML) → speeches table.
@@ -3482,11 +3762,10 @@ def cmd_ingest_nl_hansard(
     When --ga/--session are omitted, resolves the current session from
     legislative_sessions (populated by ingest-nl-bills).
     """
-    from datetime import date as _date
     from .legislative.current_session import current_session
+    from .legislative._forward import parse_iso_date, clamp_since_with_days
 
-    def _parse_d(s):
-        return _date.fromisoformat(s) if s else None
+    effective_since = clamp_since_with_days(parse_iso_date(since), since_days)
 
     async def _wrap(db: Database) -> None:
         nonlocal ga, session
@@ -3498,12 +3777,17 @@ def cmd_ingest_nl_hansard(
                 f"[dim]auto-resolved current NL session: "
                 f"GA{ga}-S{session}[/dim]"
             )
+        if since_days is not None and effective_since is not None:
+            console.print(
+                f"[dim]forward-incremental: --since clamped to "
+                f"{effective_since.isoformat()} (since_days={since_days})[/dim]"
+            )
         stats = await ingest_nl_hansard(
             db,
             ga=ga,
             session=session,
-            since=_parse_d(since),
-            until=_parse_d(until),
+            since=effective_since,
+            until=parse_iso_date(until),
             limit_sittings=limit_sittings,
             limit_speeches=limit_speeches,
             one_off_url=one_off_url,
@@ -3553,6 +3837,9 @@ def cmd_resolve_nl_speakers(ctx: click.Context, limit: Optional[int]) -> None:
               help="Every session in legislature L with a non-empty Hansard listing.")
 @click.option("--since", type=str, default=None,
               help="Only ingest sittings on/after this ISO date (YYYY-MM-DD).")
+@click.option("--since-days", type=int, default=None,
+              help="Forward-incremental: clamp --since to today - N days "
+                   "(use in daily schedules).")
 @click.option("--until", type=str, default=None,
               help="Only ingest sittings on/before this ISO date (YYYY-MM-DD).")
 @click.option("--limit-sittings", type=int, default=None,
@@ -3562,7 +3849,7 @@ def cmd_resolve_nl_speakers(ctx: click.Context, limit: Optional[int]) -> None:
 @click.pass_context
 def cmd_ingest_nb_hansard(
     ctx: click.Context, legislature, session, all_sessions_in_legislature,
-    since, until, limit_sittings, limit_speeches,
+    since, since_days, until, limit_sittings, limit_speeches,
 ) -> None:
     """Ingest New Brunswick Hansard (bilingual PDF) → speeches table.
 
@@ -3581,21 +3868,25 @@ def cmd_ingest_nb_hansard(
 
     Idempotent via UNIQUE (source_system, source_url, sequence).
     """
-    from datetime import date as _date
-
-    def _parse_d(s):
-        return _date.fromisoformat(s) if s else None
-
     from .legislative.current_session import current_session
+    from .legislative._forward import parse_iso_date, clamp_since_with_days
+
+    effective_since = clamp_since_with_days(parse_iso_date(since), since_days)
+    effective_until = parse_iso_date(until)
 
     async def _wrap(db: Database) -> None:
         nonlocal legislature, session
+        if since_days is not None and effective_since is not None:
+            console.print(
+                f"[dim]forward-incremental: --since clamped to "
+                f"{effective_since.isoformat()} (since_days={since_days})[/dim]"
+            )
         if all_sessions_in_legislature is not None:
             stats = await ingest_nb_hansard_all_sessions(
                 db,
                 legislature=all_sessions_in_legislature,
-                since=_parse_d(since),
-                until=_parse_d(until),
+                since=effective_since,
+                until=effective_until,
                 limit_sittings=limit_sittings,
                 limit_speeches=limit_speeches,
             )
@@ -3612,8 +3903,8 @@ def cmd_ingest_nb_hansard(
                 db,
                 legislature=legislature,
                 session=session,
-                since=_parse_d(since),
-                until=_parse_d(until),
+                since=effective_since,
+                until=effective_until,
                 limit_sittings=limit_sittings,
                 limit_speeches=limit_speeches,
             )
@@ -3704,7 +3995,8 @@ def cmd_backfill_politicians_openparliament(
             console.print(
                 f"[green]resolve[/green]: "
                 f"speeches_resolved={res['speeches_resolved']} "
-                f"chunks_resolved={res['chunks_resolved']}"
+                f"chunks_resolved={res['chunks_resolved']} "
+                f"vote_positions_resolved={res.get('vote_positions_resolved', 0)}"
             )
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 
@@ -3858,11 +4150,24 @@ def cmd_chunk_and_embed_speeches(
     produced. Use this as the daily post-ingest schedule rather than two
     separate scanner_jobs rows — one process means no queue-ordering
     assumption and no parallel-worker race.
+
+    Step 0 is a denorm sync: speech_chunks copies filter columns from
+    its parent speech at insert time, but downstream speaker resolvers
+    / session retags / attribution corrections touch only speeches,
+    leaving chunks with stale values. Running the sync before
+    chunk_pending catches yesterday's drift before today's /search
+    queries land on it.
     """
-    from .legislative.speech_chunker import chunk_pending as _chunk
+    from .legislative.speech_chunker import (
+        chunk_pending as _chunk, sync_chunk_denorm as _sync_denorm,
+    )
     from .legislative.speech_embedder import embed_pending as _embed
 
     async def _wrap(db: Database) -> None:
+        sstats = await _sync_denorm(db)
+        console.print(
+            f"[green]sync-chunk-denorm[/green]: chunks_synced={sstats.chunks_synced}"
+        )
         cstats = await _chunk(db, limit_speeches=chunk_limit)
         console.print(
             f"[green]chunk-speeches[/green]: seen={cstats.speeches_seen} "

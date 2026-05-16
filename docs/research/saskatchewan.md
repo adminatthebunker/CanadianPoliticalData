@@ -53,11 +53,34 @@
 
 ## Voting Records / Divisions
 
-- **Source URL(s):** https://www.legassembly.sk.ca/legislative-business/minutes-votes/
-- **Format:** HTML Minutes (Votes and Proceedings); digitized March 2003 forward.
-- **Roll-call availability:** Yes.
-- **Difficulty (1–5):** 3.
-- **Notes:** Contact: journals@legassembly.sk.ca, 306-787-0421.
+- **Source URL(s):** Journals (PDF) at https://www.legassembly.sk.ca/legislative-business/journals/. 117 session-aggregated PDFs from 1st Legislature, 1st Session forward. Each session is one PDF (e.g. `/media/3f4gggeq/2023-journal-electronic.pdf` is 29L3S, 319 pages, 2 MB).
+- **Format:** Session-aggregated PDF, bilingual EN/FR (English left column, French right column). Recorded-division pages have a stable shape:
+  ```
+  YEAS / POUR — 32
+  [5-column surname grid; collisions disambiguated as `Surname (Constituency)` —
+   e.g. `McLeod (Moose Jaw North)` vs `McLeod (Lumsden-Morse)`]
+
+  NAYS / CONTRE — 11
+  [same shape]
+  ```
+- **Roll-call availability:** **Yes — per-MLA YEA/NAY positions + populated tallies.** This is dramatically richer than the consensus-shape Hansard extractors used for MB / NL / NT (which produce `vote_positions` empty rows). SK is the first non-federal jurisdiction where we can populate per-MLA roll-call.
+- **Discovery via HTML index:** The session-wide subject index at e.g. `docs.legassembly.sk.ca/legdocs/Assembly/Journals/Indexes/{N}/{N}L{S}Sjournal.html` is a TOC. Page references inside it (`#page=N`) link into the PDF — useful for spot-jumping to a specific division. The TOC mentions `Recorded division` per page but the *actual structured data* is only in the PDF.
+- **Per-clause votes:** Yes — bills in committee can have separate recorded divisions per clause (e.g. Clause 1 / 2 / 3 / 4 / 5 each get a YEAS/NAYS grid).
+- **Probe results (2026-05-16):** Sampled 2023 Journal (29L3S) and 2022 Journal (29L2S). Shape stable across years. 11 `YEAS / POUR` markers in the 2023 Journal alone; rough estimate ~10–30 recorded divisions per Journal × 117 Journals = O(1,000–3,500) historical SK votes total, with per-MLA roll-call shape for every one.
+- **Difficulty (1–5):** **2.** Single PDF per session, no WAF, structured layout. Comparable to AB Hansard PDF parsing.
+- **Notes:** Contact: journals@legassembly.sk.ca, 306-787-0421. The HTML Minutes page at `/legislative-business/minutes-votes/` is a thinner artifact than the Journals PDFs — recorded divisions are NOT listed in Minutes (per-sitting summary only). Journals PDFs are the canonical roll-call source.
+
+### Extractor design sketch (to be reviewed before code)
+
+Three-stage pipeline mirroring `ab_hansard.py`:
+
+1. **Discovery (`ingest-sk-votes` Stage 1)** — fetch `/legislative-business/journals/` HTML, extract the 117 PDF hrefs. For each, derive (parliament, session) from the filename (`1-1.pdf` = 1L1S; `2023-journal-electronic.pdf` = look up year → 29L3S). Persist as `votes.raw` URLs without fetching yet.
+2. **Fetch + parse (`ingest-sk-votes` Stage 2)** — `pdftotext -layout`, walk pages looking for `YEAS / POUR — N` markers. For each marker, capture: (a) the motion text from the preceding paragraph, (b) the YEAS tally, (c) the surname grid, (d) the NAYS marker + grid. Build `(vote, list_of_yeas_surnames, list_of_nays_surnames)`.
+3. **Resolution (`ingest-sk-votes` Stage 3)** — for each surname, FK match against `politicians` WHERE `sk_assembly_slug IS NOT NULL` joined to `politician_terms` whose date span covers the sitting date. Disambiguate via `(Constituency)` parens when present. Insert `votes` + per-MLA `vote_positions` rows.
+
+Bill linkage: existing SK bill IDs (e.g. `Bill 50`, `Clause 4 of The Saskatchewan Employment Amendment Act, 2023`) can be regex-matched against `bills` WHERE `province_territory='SK'`, similar to how `mb_votes._find_bill_id_for` works.
+
+Forward-incremental: only re-parse the *current* session's Journal (the rolling 2023-25-electronic-style document); historicals are immutable. Daily schedule passes `{"current_only": true}` once the backfill is done.
 
 ## Committee Activity
 
@@ -93,7 +116,7 @@
 ## Open follow-ups
 
 - **SK 28L MLA roster** — would lift bills sponsor FK rate from 70% → 90%+ (256 of 367 attributed today; the 30% miss is mostly older MLAs not in the roster).
-- **SK votes (Journals)** — session-aggregated PDFs at `/legislative-business/journals` with per-MLA roll-call tables. Different parser shape (per-MLA tabular voting). Largest remaining SK workstream; deferred.
+- **SK votes (Journals)** — ✅ **shipped 2026-05-16**. `services/scanner/src/legislative/sk_votes.py` + `extract-sk-votes` Click command + daily 22:50 UTC schedule. Discovers 127 historical Journals from the index, parses YEAS/POUR — N / NAYS/CONTRE — M grids with `(Constituency)` disambiguation, lands `votes` + per-MLA `vote_positions`. Smoke test on 29L3S (2023 Journal): 11/11 divisions parsed correctly, 410 positions, 372 resolved (90.7% on first run). Remaining unresolved ~9% split between ambiguous surnames-without-parens (Grewal, Wilson, McLeod, Harrison when constituency wraps oddly) and former-MLA surnames not in current roster (e.g. `Young (Regina University)`). Daily schedule processes the current session only; historical backfill via `--all-journals` deferred.
 - **Yearly-span 1998–2017 progress-of-bills PDFs** — different table shape than 28L+ era; needs separate parser variant. Closes the gap to `bills_status='live'` (>500 threshold).
 - **Pre-29L Hansard** — 23rd–28th legislatures don't appear in the archive walker surface. Likely PDF-only / paper-only / different URL pattern. Discovery problem; the 6 stub Speaker politicians (Hagel/Osika/Kowalsky/Toth/D'Autremont/Tochor) are seeded so the FK targets exist when a parser ships.
 - **Tier-2 Deputy Speaker — ✅ resolved 2026-05-14** (commit `bfeb5a3`). `ROLE_ONLY_PRESIDING_ROSTER["SK"]["Deputy Speaker"]` seeded with a 4-entry roster covering 28L3S → 30L (Wilson 2020-12-01 / Hargrave 2021-10-28 / Bradshaw 2023-10-10 / McLeod 2024-11-26) mined directly from in-Hansard election announcements (`it is my duty to inform you that … has been elected … as your Deputy Speaker and Chair of Committees`). `ROLE_ONLY_OFFICE_MAP["SK"]["deputy_speaker"] = "Deputy Speaker"` (lowercase snake since the SK parser emits `deputy_speaker`, not `The Deputy Speaker`). 2,174 rows resolved at confidence 0.85; SK overall attribution 81.91% → 86.10%. Daily 22:35 UTC `resolve-role-only-presiding-officers --province SK` schedule. **Rotating Chair / Deputy Chair (~5K residual)** remains deferred — same family as AB Acting Speaker / BC Chairman; chamber Hansard lacks in-corpus chair-handover signals.

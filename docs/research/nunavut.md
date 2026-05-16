@@ -6,6 +6,8 @@
 
 **Status snapshot (2026-04-19):** ✅ **Bills live** for 7th Assembly, 1st Session (4 bills / 24 events / **0 sponsors — by design, NU is consensus government**). All 4 are appropriation acts at Royal Assent. Drupal `?_format=json` is **disabled** here unlike Ontario, so HTML scrape is the only route.
 
+**Hansard probe (2026-05-14):** ✅ **Hansard is reachable, no WAF.** Apache + Drupal 9 (same CMS as bills), `X-Drupal-Dynamic-Cache: HIT`. Index at `/hansard` (English, primary) lists 59 PDF references on the page alone using the `/sites/default/files/YYYYMMDD_Hansard.pdf` pattern, with some files in dated subdirs like `/sites/default/files/2022-11/`. Direct PDF download returns `HTTP 200 OK`, no auth, no challenge. The page exposes **four language entry-points** as Drupal language paths — `/hansard` (English), `/fr/hansard`, `/iu/hansard-iu` (Inuktitut romanized), `/IU-CA/hansard-ius` (Inuktitut syllabics) — but only the **English** path lists per-sitting PDF attachments in the page body. The other three paths are language-switched chrome with no PDF index, which suggests Hansard is published as a single English PDF per sitting (the Inuktitut/French translations may exist but aren't indexed under the language paths). `?_format=json` returns 406 (as expected — Drupal serializer is off, matching the bills observation). **Hansard ingestion is ready to design** — open questions reduced to: (a) is there an older-Hansard archive beyond what `/hansard` page lists, and (b) does the `_Hansard_4.pdf`-style suffix represent multi-part sittings or revisions (`20210301_Hansard_4.pdf` is on the index).
+
 ---
 
 ## Why NU (and NT) are different
@@ -65,7 +67,9 @@ NU has **consensus government** — 22 non-partisan MLAs. No political parties, 
 - [x] Ingestion prototyped
 - [x] Production ingestion live (2026-04-16) — 7th Assembly, 1st Session, 4 bills
 - [ ] Assembly/session auto-detection (currently hard-coded default via CLI flag)
-- [ ] Hansard
+- [x] **Hansard ingestion shipped (2026-05-16)** — `services/scanner/src/legislative/nu_hansard.py`, `ingest-nu-hansard` Click command, daily 21:15 UTC schedule. ~59 PDFs back to 2021-02-24. Parser handles bilingual `(interpretation)` markers + Inuktitut/English interleaving.
+- [x] **6th Assembly roster shipped (2026-05-16)** — `services/scanner/src/legislative/nu_former_mlas.py`, `ingest-nu-former-mlas` Click command. 22 MLAs sourced from Wikipedia's `6th_Nunavut_Legislature` article; 8 matched existing 7th Assembly returners, 14 newly inserted with `wikipedia:nu-assembly:` source tag. Politician_terms rows seeded with assembly date span 2021-11-19 → 2025-09-22. Fuzzier name match (`Pitsiulaaq Brewster ⊇ Brewster`) avoids duplicating multi-word-surnamed people who returned.
+- [x] **Hansard resolution lift (2026-05-16)**: 40% → 79% → **98.9% (93/94)** on the 20240531 smoke-test sitting. Path: (a) 6th Assembly roster ingester closed the 12-MLA gap; (b) token-based surname index made `Brewster` resolve against `Pitsiulaaq Brewster`; (c) first-name disambiguator (normalized `P.J.` ↔ `P. J.`) split P.J. Akeeagok from David Akeeagok. The 1/94 remainder is a presiding-officer turn deferred to `resolve-presiding-speakers --province NU` (roster TBD).
 - [ ] Votes (consensus-government modeling question remains open)
 
 ## Research-handoff items (Hansard)

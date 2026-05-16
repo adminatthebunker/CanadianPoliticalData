@@ -543,6 +543,192 @@ const COMMAND_CATALOG = [
       { name: "post_hint", type: "int", required: false, help: "Lifetime post-count hint for archive pricing." },
     ],
   },
+
+  // ── Ontario Hansard chain ──
+  { key: "ingest-on-hansard", category: "hansard",
+    description: "Pull Ontario Hansard (HTML transcripts via ola.org JSON node) into `speeches`. Name-based speaker resolution; bare-role 'The Speaker' rows defer to resolve-presiding-speakers --province ON.",
+    args: [
+      { name: "parliament", type: "int", required: false, help: "Ontario Parliament number (e.g. 44). Default: latest in legislative_sessions." },
+      { name: "session", type: "int", required: false, help: "Session within the parliament (e.g. 1). Default: latest." },
+      { name: "since", type: "date", required: false, help: "Only fetch sittings on/after this date (ISO YYYY-MM-DD)." },
+      { name: "since_days", type: "int", required: false, help: "Forward-incremental: clamp --since to today - N days (e.g. 14 for daily schedules)." },
+      { name: "until", type: "date", required: false, help: "Only fetch sittings on/before this date." },
+      { name: "limit_sittings", type: "int", required: false, help: "Cap on sittings processed this run." },
+      { name: "limit_speeches", type: "int", required: false, help: "Cap on TOTAL speeches ingested this run." },
+    ],
+  },
+  { key: "fetch-on-bill-pages", category: "bills",
+    description: "Ontario phase 2 — fetch + cache per-bill HTML + /status sub-page from ola.org. Run after ingest-on-bills.",
+    args: [
+      { name: "limit", type: "int", required: false, help: "Cap bills fetched this run." },
+      { name: "force", type: "bool", required: false, help: "Re-fetch already-cached bills." },
+      { name: "delay", type: "int", required: false, default: 2, help: "Seconds between per-bill fetches (be polite)." },
+      { name: "jitter", type: "int", required: false, default: 1, help: "Additional random jitter (seconds) added to each delay." },
+    ],
+  },
+  { key: "parse-on-bill-pages", category: "bills",
+    description: "Ontario phase 3 — parse cached bill HTML into bill_sponsors + bill_events. Run after fetch-on-bill-pages.",
+    args: [
+      { name: "limit", type: "int", required: false, help: "Cap bills parsed this run (smoke-test aid)." },
+    ],
+  },
+  { key: "resolve-on-speakers", category: "hansard",
+    description: "Re-resolve politician_id on ON Hansard speeches with NULL politician_id. Run after expanding the ON MPP roster.",
+    args: [
+      { name: "limit", type: "int", required: false, help: "Cap speeches scanned (smoke-test aid)." },
+    ],
+  },
+
+  // ── Saskatchewan chain ──
+  { key: "ingest-sk-bills", category: "bills",
+    description: "Ingest SK bills from progress-of-bills.pdf. Discovery scrapes /legislative-business/bills/; per-PDF first-page header gives (parliament, session). Parses tabular text via pdftotext -layout; upserts bills + bill_events + bill_sponsors.",
+    args: [
+      { name: "all_sessions", type: "bool", required: false, default: false, help: "Walk every progress-of-bills PDF on the bills page (historical backfill)." },
+      { name: "url", type: "string", required: false, help: "Bypass discovery; ingest a single PDF URL." },
+      { name: "delay", type: "float", required: false, default: 1.0, help: "Seconds between per-PDF requests." },
+      { name: "dry_run", type: "bool", required: false, default: false, help: "Parse + report counts without writing to the DB." },
+      { name: "selftest", type: "bool", required: false, default: false, help: "Fetch current PDF and assert golden cases. No DB writes." },
+    ],
+  },
+  { key: "ingest-sk-hansard", category: "hansard",
+    description: "Ingest SK Hansard from docs.legassembly.sk.ca (Word HTML). Discovery via paginated /legislative-business/archive/. Speaker attribution via synthesised sk_assembly_slug (run ingest-sk-mlas first).",
+    args: [
+      { name: "limit_sittings", type: "int", required: false, help: "Cap to first N sittings (newest-first)." },
+      { name: "since", type: "string", required: false, help: "Only ingest sittings on or after YYYY-MM-DD." },
+      { name: "since_days", type: "int", required: false, help: "Forward-incremental: clamp --since to today - N days (e.g. 14 for daily schedules)." },
+      { name: "url", type: "string", required: false, help: "Bypass discovery; ingest one transcript URL." },
+      { name: "delay", type: "float", required: false, default: 1.0, help: "Seconds between per-sitting fetches." },
+      { name: "max_archive_pages", type: "int", required: false, help: "Cap discovery walker (defensive)." },
+    ],
+  },
+  { key: "ingest-sk-mlas", category: "hansard",
+    description: "Upsert SK MLA roster from the Hansard speaker index. Synthesises `sk_assembly_slug` (firstname-lastname) since SK exposes no stable per-MLA ID. Run before ingest-sk-hansard.",
+    args: [
+      { name: "parliaments", type: "string", required: false, default: "30", help: "Comma-separated SK parliament numbers (e.g. '29,30')." },
+    ],
+  },
+
+  // ── Federal bills (was missing) ──
+  { key: "ingest-federal-bills", category: "bills",
+    description: "Federal House of Commons bills via openparliament.ca JSON API. Default: current session; --all-sessions backfills history. Sponsor FK via politicians.openparliament_slug. Forward-incremental: with no flags defaults to MAX(bills.introduced_date) - 14d.",
+    args: [
+      { name: "parliament", type: "int", required: false, help: "Parliament number (default: current)." },
+      { name: "session", type: "int", required: false, help: "Session number within the parliament (default: current)." },
+      { name: "all_sessions", type: "bool", required: false, help: "Backfill every federal session openparliament.ca exposes (35+)." },
+      { name: "limit", type: "int", required: false, help: "Cap on bills processed this run (smoke-test friendly)." },
+      { name: "delay", type: "int", required: false, default: 1, help: "Seconds between per-bill detail fetches." },
+      { name: "since", type: "string", required: false, help: "Forward-incremental: skip detail fetch for bills introduced before this ISO date." },
+      { name: "since_days", type: "int", required: false, help: "Forward-incremental: --since = today - N days (use in daily schedules)." },
+    ],
+  },
+
+  // ── Cross-province Hansard resolvers ──
+  { key: "resolve-ab-speakers", category: "hansard",
+    description: "Re-resolve politician_id on AB Hansard speeches with NULL politician_id (keyed on surname + legislature against historical politician_terms).",
+    args: [
+      { name: "limit", type: "int", required: false, help: "Cap speeches scanned (smoke-test aid)." },
+    ],
+  },
+  { key: "resolve-bc-allcaps", category: "hansard",
+    description: "BC pre-1990 ALL-CAPS speaker resolver — parses `MR. G.S. WALLACE (Oak Bay)` / `HON. D. BARRETT (Premier)` shape. Date-windowed FK match against politician_terms with constituency / first-initial disambiguation. One-shot historical backfill.",
+    args: [
+      { name: "limit", type: "int", required: false, help: "Cap candidate speeches scanned (smoke-test aid)." },
+    ],
+  },
+  { key: "resolve-inline-presiding-officers", category: "hansard",
+    description: "Tier-2 attribution Pass 1 — extract names from parenthesised presiding-officer labels (e.g. `The Deputy Speaker (Mr. Bas Balkissoon)`) and FK-match against politicians within the same province. Cross-jurisdictional, idempotent.",
+    args: [
+      { name: "province", type: "string", required: false, help: "2-letter code (AB/BC/QC/...) to scope the run. Default: all provinces." },
+      { name: "limit", type: "int", required: false, help: "Cap candidate speeches scanned (smoke-test aid)." },
+    ],
+  },
+
+  // ── NU Hansard (PDF, English-primary with (interpretation) markers) ──
+  { key: "ingest-nu-hansard", category: "hansard",
+    description: "Ingest Nunavut Hansard PDFs from assembly.nu.ca/hansard (~59 PDFs back to 2021-02-24). Consensus government — no party affiliation. Speaker resolution name-based against politicians.last_name + constituency_name. Idempotent.",
+    args: [
+      { name: "since", type: "date", required: false, help: "Only ingest sittings on/after this ISO date." },
+      { name: "since_days", type: "int", required: false, help: "Forward-incremental: clamp --since to today - N days (e.g. 14 for daily schedules)." },
+      { name: "until", type: "date", required: false, help: "Only ingest sittings on/before this ISO date." },
+      { name: "limit_sittings", type: "int", required: false, help: "Cap sittings processed." },
+      { name: "url", type: "string", required: false, help: "Ingest a single PDF URL directly (smoke test)." },
+      { name: "delay", type: "float", required: false, default: 1.0, help: "Seconds between per-PDF fetches." },
+    ],
+  },
+
+  // ── SK votes (Journals PDF, per-MLA roll-call) ──
+  { key: "extract-sk-votes", category: "hansard",
+    description: "Derive SK votes + per-MLA vote_positions from session-aggregated Journal PDFs at /legislative-business/journals/. Structured YEAS/POUR — N / NAYS/CONTRE — M grids with surname disambiguation via (Constituency) parens. Default: current-session-only (forward-incremental, daily-friendly). --all-journals backfills ~127 PDFs back to 1L1S.",
+    args: [
+      { name: "journal_url", type: "string", required: false, help: "Process a single Journal PDF by URL (smoke test)." },
+      { name: "all_journals", type: "bool", required: false, default: false, help: "Process every Journal (historical backfill)." },
+      { name: "current_only", type: "bool", required: false, default: true, help: "Process only the highest (leg, sess) Journal." },
+      { name: "limit_journals", type: "int", required: false, help: "Cap journals processed (newest-first when capped)." },
+      { name: "delay", type: "float", required: false, default: 1.0, help: "Seconds between per-PDF fetches." },
+    ],
+  },
+
+  // ── Municipal eScribe chain (Calgary/Edmonton councils + committees) ──
+  { key: "ingest-escribe-meetings", category: "bills",
+    description: "Stage 1 — discover Calgary/Edmonton council + committee meetings from eScribe. One GET of MeetingsCalendarView.aspx per city. Idempotent on (source_system, source_meeting_id).",
+    args: [
+      { name: "city", type: "enum", required: false, default: "all",
+        choices: ["calgary", "edmonton", "all"],
+        help: "Which city (or all)." },
+      { name: "limit", type: "int", required: false, help: "Cap meetings ingested per city." },
+    ],
+  },
+  { key: "fetch-escribe-meeting-pages", category: "bills",
+    description: "Stage 2 — populate meetings.raw_html for unfetched rows. Pace at --delay seconds between GETs.",
+    args: [
+      { name: "city", type: "enum", required: false, default: "all",
+        choices: ["calgary", "edmonton", "all"] },
+      { name: "limit", type: "int", required: false },
+      { name: "force", type: "bool", required: false, default: false, help: "Re-fetch already-cached pages." },
+      { name: "delay", type: "float", required: false, default: 1.0, help: "Seconds between per-meeting GETs." },
+    ],
+  },
+  { key: "parse-escribe-meeting-pages", category: "bills",
+    description: "Stage 3 — parse cached eScribe meeting HTML into bills/votes rows. No HTTP; idempotent. Re-runnable after parser fixes.",
+    args: [
+      { name: "city", type: "enum", required: false, default: "all",
+        choices: ["calgary", "edmonton", "all"] },
+      { name: "limit", type: "int", required: false },
+    ],
+  },
+  { key: "resolve-escribe-motion-movers", category: "bills",
+    description: "Stage 4 — name-fuzz match bill_sponsors.politician_id for municipal motions (mover + seconder). Scoped to the city's Open North roster.",
+    args: [
+      { name: "city", type: "enum", required: false, default: "all",
+        choices: ["calgary", "edmonton", "all"] },
+    ],
+  },
+  { key: "match-meetings-to-youtube", category: "hansard",
+    description: "Stage 5 — list city's official YouTube channel via yt-dlp; match each meeting to a video by date proximity + body name. Sets meetings.video_url.",
+    args: [
+      { name: "city", type: "enum", required: false, default: "all",
+        choices: ["calgary", "edmonton", "all"] },
+      { name: "limit", type: "int", required: false },
+      { name: "max_channel_videos", type: "int", required: false, default: 200, help: "Newest N videos to consider per channel." },
+      { name: "max_date_drift_days", type: "int", required: false, default: 3, help: "Max delta between meeting date and video upload date for a match." },
+    ],
+  },
+  { key: "fetch-meeting-captions", category: "hansard",
+    description: "Stage 6 — yt-dlp auto-captions VTT → speeches rows (level=municipal). Slow + rate-limit-sensitive; default --limit 3 per run.",
+    args: [
+      { name: "city", type: "enum", required: false, default: "all",
+        choices: ["calgary", "edmonton", "all"] },
+      { name: "limit", type: "int", required: false, default: 3, help: "Cap meetings per city per run." },
+      { name: "delay", type: "float", required: false, default: 30.0, help: "Seconds between yt-dlp invocations to avoid throttling." },
+    ],
+  },
+  { key: "resolve-meeting-caption-speakers", category: "hansard",
+    description: "Stage 7 — best-effort speaker FK on caption-derived speeches. Mayor heuristic + surname match against Open North roster.",
+    args: [
+      { name: "city", type: "enum", required: false, default: "all",
+        choices: ["calgary", "edmonton", "all"] },
+    ],
+  },
 ];
 
 const COMMAND_KEYS = new Set(COMMAND_CATALOG.map(c => c.key));

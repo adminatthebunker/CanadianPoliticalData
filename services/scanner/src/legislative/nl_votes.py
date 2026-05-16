@@ -166,8 +166,8 @@ async def extract_nl_votes(db: Database, *, limit_sittings: Optional[int] = None
                s.source_url, s.sequence, s.spoken_at, s.speaker_role, s.text, s.raw
           FROM speeches s
          WHERE s.source_system='hansard-nl' AND s.text IS NOT NULL
-           AND ((s.text ~* 'motion (is\\s+)?(carried|defeated|adopted|agreed to|lost|negatived|withdrawn)'
-                 AND s.text ~* 'all (those|in) in favou?r|all (those )?opposed|on division')
+           AND ((s.text ~* '(motion|amendment|bill|question) (is\\s+)?(carried|defeated|adopted|agreed to|lost|negatived|withdrawn|passed)'
+                 AND s.text ~* 'all (those|in) in favou?r|all (those )?opposed|on division|is it the pleasure of the [Hh]ouse|recorded vote')
                 OR s.text ~* 'Yeas\\s*[:.]?\\s*\\d')
            {where_sittings}
          ORDER BY s.spoken_at, s.sequence

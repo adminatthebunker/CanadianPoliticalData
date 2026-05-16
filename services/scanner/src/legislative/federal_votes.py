@@ -47,7 +47,7 @@ import asyncio
 import logging
 import re
 from dataclasses import dataclass, field as dc_field
-from datetime import datetime, time, timezone
+from datetime import date, datetime, time, timezone
 from typing import Optional
 
 import httpx
@@ -379,17 +379,32 @@ async def _upsert_vote_positions(
 # ── Public entry point ──────────────────────────────────────────────
 
 
+def _parse_vote_date(raw: Optional[str]) -> Optional[date]:
+    """Parse openparliament's vote.date (`YYYY-MM-DD`) into a `date`."""
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw).date()
+    except ValueError:
+        return None
+
+
 async def extract_federal_votes(
     db: Database,
     *,
     session: Optional[str] = None,
     limit_votes: Optional[int] = None,
     delay: float = 0.5,
+    since: Optional[date] = None,
 ) -> IngestStats:
     """Extract federal votes + per-MP positions from openparliament.ca.
 
     `session` like "44-1"; default = current sitting session. `limit_votes`
     caps the number of votes processed (newest-first; smoke-test aid).
+    `since` (forward-incremental) drops votes from the per-vote ballots
+    pass when `vote['date'] < since`. The vote summary listing is still
+    walked (cheap, one paginated call); only the expensive per-vote
+    ballot fetches are skipped.
     """
     stats = IngestStats()
 
@@ -400,30 +415,34 @@ async def extract_federal_votes(
         len(bill_index), len(slug_lookup),
     )
 
-    # Resolve target session.
-    if not session:
-        # Default: current sitting from federal legislative_sessions.
-        cur = await db.fetchrow(
-            """
-            SELECT parliament_number, session_number
-              FROM legislative_sessions
-             WHERE level = 'federal'
-             ORDER BY parliament_number DESC, session_number DESC
-             LIMIT 1
-            """
-        )
-        if not cur:
-            stats.failures.append("no federal legislative_sessions row found")
-            return stats
-        session = f"{cur['parliament_number']}-{cur['session_number']}"
-
-    session_id = await _ensure_federal_session(db, session)
-    if not session_id:
-        stats.failures.append(f"could not resolve session {session!r}")
-        return stats
-    stats.sessions_seen = 1
-
     async with httpx.AsyncClient(headers=HEADERS, follow_redirects=True) as client:
+        # Resolve target session. Default = openparliament's current session.
+        # Using our DB's latest session would silently lag a parliament
+        # cycle: after dissolution the local index keeps pointing at the
+        # closed session, and every daily run no-ops over the same
+        # already-ingested votes while live sittings accumulate upstream.
+        if not session:
+            latest = await _get_json(client, "/votes/?format=json&limit=1")
+            stats.api_calls += 1
+            if not latest or not latest.get("objects"):
+                stats.failures.append(
+                    "could not probe latest session from openparliament"
+                )
+                return stats
+            session = latest["objects"][0].get("session")
+            if not session:
+                stats.failures.append(
+                    "latest openparliament vote has no session field"
+                )
+                return stats
+            log.info("federal_votes: defaulted to upstream session %s", session)
+
+        session_id = await _ensure_federal_session(db, session)
+        if not session_id:
+            stats.failures.append(f"could not resolve session {session!r}")
+            return stats
+        stats.sessions_seen = 1
+
         # Pass A — paginate the vote list for this session.
         votes_path = f"/votes/?session={session}"
         all_votes = await _paginate(
@@ -432,6 +451,22 @@ async def extract_federal_votes(
         log.info("federal_votes: discovered %d votes for session %s",
                  len(all_votes), session)
         stats.votes_seen = len(all_votes)
+
+        if since is not None:
+            kept: list[dict] = []
+            skipped = 0
+            for v in all_votes:
+                v_date = _parse_vote_date(v.get("date"))
+                if v_date is not None and v_date < since:
+                    skipped += 1
+                    continue
+                kept.append(v)
+            log.info(
+                "federal_votes: forward-incremental since=%s — kept %d, "
+                "skipped %d older votes (ballot fetches saved)",
+                since.isoformat(), len(kept), skipped,
+            )
+            all_votes = kept
 
         if limit_votes is not None:
             all_votes = all_votes[: int(limit_votes)]

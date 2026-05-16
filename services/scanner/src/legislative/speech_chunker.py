@@ -170,6 +170,85 @@ class ChunkStats:
     chunks_inserted: int = 0
 
 
+@dataclass
+class DenormSyncStats:
+    chunks_synced: int = 0
+
+
+async def sync_chunk_denorm(
+    db: Database,
+    *,
+    since_days: int = 30,
+) -> DenormSyncStats:
+    """Re-derive denormalized columns on speech_chunks from their parent speech.
+
+    speech_chunks copies politician_id / party_at_time / level /
+    province_territory / spoken_at / session_id from the parent speech
+    at insert time (see chunk_pending below), so /search filters can
+    prune before the HNSW scan. But every downstream code path that
+    UPDATEs a speech — speaker resolvers, session retags, late
+    attribution fixes — touches only the speeches row, leaving the
+    chunks behind with stale values. This is the sync step the
+    migration's "Keep in sync with parent speech on updates; treat as
+    derived state" comment implies should run.
+
+    Scope: `since_days` (default 30) limits the join to speeches with
+    `spoken_at >= NOW() - INTERVAL '<since_days> days'`, which uses
+    idx_speeches_spoken_at and bounds the working set to the rolling
+    recent corpus. Without this scope the join scans every speech in
+    the corpus on every nightly run and times out — the historical
+    backfill (1.4M chunks across 37 years) was a one-time event done
+    via a per-session bash loop, not via this function. Operators
+    re-running a historical retag should bump since_days to the
+    relevant horizon for that retag.
+
+    Plan note: forces enable_seqscan=off for the transaction so the
+    planner uses idx_speeches_spoken_at + speech_chunks_speech_id_chunk_index_key
+    (nested loop) instead of seq-scanning the 5M-row chunks table.
+    """
+    stats = DenormSyncStats()
+    # Generous per-statement timeout: the pool default is 60s (db.py),
+    # which is fine for daily steady-state drift (1k-10k rows in seconds)
+    # but too tight if a session retag or roster backfill just landed
+    # tens of thousands of newly-resolvable chunks within the since
+    # window. 10 minutes used to cover everything short of a corpus-wide
+    # retag, but the 2026-05-15 daily run hit 603s (just past the cap)
+    # after a Tier-2 attribution roster burst — bumped to 30 min.
+    async with db.pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute("SET LOCAL enable_seqscan = off")
+            tag = await conn.execute(
+                f"""
+                UPDATE speech_chunks sc
+                   SET session_id = sp.session_id,
+                       spoken_at = sp.spoken_at,
+                       politician_id = sp.politician_id,
+                       party_at_time = sp.party_at_time,
+                       level = sp.level,
+                       province_territory = sp.province_territory
+                  FROM speeches sp
+                 WHERE sp.id = sc.speech_id
+                   AND sp.spoken_at >= NOW() - INTERVAL '{int(since_days)} days'
+                   AND (sc.session_id IS DISTINCT FROM sp.session_id
+                        OR sc.spoken_at IS DISTINCT FROM sp.spoken_at
+                        OR sc.politician_id IS DISTINCT FROM sp.politician_id
+                        OR sc.party_at_time IS DISTINCT FROM sp.party_at_time
+                        OR sc.level IS DISTINCT FROM sp.level
+                        OR sc.province_territory IS DISTINCT FROM sp.province_territory)
+                """,
+                timeout=1800,
+            )
+            try:
+                stats.chunks_synced = int(tag.rsplit(" ", 1)[-1])
+            except (ValueError, AttributeError):
+                stats.chunks_synced = 0
+    log.info(
+        "sync_chunk_denorm: chunks_synced=%d (since_days=%d)",
+        stats.chunks_synced, since_days,
+    )
+    return stats
+
+
 async def chunk_pending(
     db: Database,
     *,

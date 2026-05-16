@@ -202,6 +202,7 @@ async def ingest_federal_bills(
     all_sessions: bool = False,
     limit: Optional[int] = None,
     delay_seconds: float = 0.5,
+    since: Optional[date] = None,
 ) -> dict[str, int]:
     """Fetch federal bills from openparliament.ca and upsert into `bills`.
 
@@ -213,8 +214,12 @@ async def ingest_federal_bills(
           federal Hansard ingest already populated those rows.)
         limit: cap on bills processed this run (smoke-test friendly).
         delay_seconds: between detail fetches; openparliament asks for politeness.
+        since: forward-incremental filter. Bills whose `introduced` date is
+          strictly before `since` skip the per-bill detail fetch (the cost
+          driver). The listing call is still made (cheap) so the count of
+          bills-in-session stays accurate; only detail fetches are avoided.
     """
-    stats = {"sessions_touched": 0, "bills": 0, "sponsors": 0, "sponsors_linked": 0}
+    stats = {"sessions_touched": 0, "bills": 0, "sponsors": 0, "sponsors_linked": 0, "skipped_older": 0}
 
     # Resolve target sessions.
     if parliament is not None and session is not None:
@@ -262,6 +267,11 @@ async def ingest_federal_bills(
                     if limit is not None and processed >= limit:
                         url = None
                         break
+                    if since is not None:
+                        intro = _parse_date(obj.get("introduced"))
+                        if intro is not None and intro < since:
+                            stats["skipped_older"] += 1
+                            continue
                     # List response is sparse — fetch detail for sponsor + status.
                     detail = await _fetch_bill_detail(
                         client, parl, sess, obj["number"]

@@ -40,7 +40,7 @@ INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) V
  'ingest-federal-bills', '{}'::jsonb,
  '0 11 * * *', true, 'daily-ingest-rollout'),
 ('Federal Hansard daily ingest',
- 'ingest-federal-hansard', '{}'::jsonb,
+ 'ingest-federal-hansard', '{"since_days": 14}'::jsonb,
  '15 11 * * *', true, 'daily-ingest-rollout'),
 ('Federal votes extraction',
  'extract-federal-votes', '{}'::jsonb,
@@ -66,7 +66,7 @@ INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) V
  'ingest-bc-bills', '{}'::jsonb,
  '0 14 * * *', true, 'daily-ingest-rollout'),
 ('BC Hansard daily ingest',
- 'ingest-bc-hansard', '{}'::jsonb,
+ 'ingest-bc-hansard', '{"since_days": 14}'::jsonb,
  '15 14 * * *', true, 'daily-ingest-rollout'),
 ('BC speaker resolver',
  'resolve-bc-speakers', '{}'::jsonb,
@@ -84,7 +84,7 @@ INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) V
  'ingest-ab-bills', '{}'::jsonb,
  '0 15 * * *', true, 'daily-ingest-rollout'),
 ('AB Hansard daily ingest',
- 'ingest-ab-hansard', '{}'::jsonb,
+ 'ingest-ab-hansard', '{"since_days": 14}'::jsonb,
  '15 15 * * *', true, 'daily-ingest-rollout'),
 ('AB speaker resolver',
  'resolve-ab-speakers', '{}'::jsonb,
@@ -105,7 +105,7 @@ INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) V
  'ingest-qc-bills-rss', '{}'::jsonb,
  '5 16 * * *', true, 'daily-ingest-rollout'),
 ('QC Hansard daily ingest',
- 'ingest-qc-hansard', '{}'::jsonb,
+ 'ingest-qc-hansard', '{"since_days": 14}'::jsonb,
  '15 16 * * *', true, 'daily-ingest-rollout'),
 ('QC speaker resolver',
  'resolve-qc-speakers', '{}'::jsonb,
@@ -137,7 +137,7 @@ INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) V
  'parse-mb-bill-events', '{}'::jsonb,
  '10 17 * * *', true, 'daily-ingest-rollout'),
 ('MB Hansard daily ingest',
- 'ingest-mb-hansard', '{}'::jsonb,
+ 'ingest-mb-hansard', '{"since_days": 14}'::jsonb,
  '15 17 * * *', true, 'daily-ingest-rollout'),
 ('MB bill sponsor resolver',
  'resolve-mb-bill-sponsors', '{}'::jsonb,
@@ -170,7 +170,7 @@ INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) V
  'parse-on-bill-pages', '{}'::jsonb,
  '10 18 * * *', true, 'daily-ingest-rollout'),
 ('ON Hansard daily ingest',
- 'ingest-on-hansard', '{}'::jsonb,
+ 'ingest-on-hansard', '{"since_days": 14}'::jsonb,
  '20 18 * * *', true, 'daily-ingest-rollout'),
 ('ON speaker resolver',
  'resolve-on-speakers', '{}'::jsonb,
@@ -189,7 +189,7 @@ INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) V
  'ingest-nb-bills', '{}'::jsonb,
  '0 19 * * *', true, 'daily-ingest-rollout'),
 ('NB Hansard daily ingest',
- 'ingest-nb-hansard', '{}'::jsonb,
+ 'ingest-nb-hansard', '{"since_days": 14}'::jsonb,
  '15 19 * * *', true, 'daily-ingest-rollout'),
 ('NB speaker resolver',
  'resolve-nb-speakers', '{}'::jsonb,
@@ -207,7 +207,7 @@ INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) V
  'ingest-nl-bills', '{}'::jsonb,
  '0 20 * * *', true, 'daily-ingest-rollout'),
 ('NL Hansard daily ingest',
- 'ingest-nl-hansard', '{}'::jsonb,
+ 'ingest-nl-hansard', '{"since_days": 14}'::jsonb,
  '15 20 * * *', true, 'daily-ingest-rollout'),
 ('NL speaker resolver',
  'resolve-nl-speakers', '{}'::jsonb,
@@ -229,7 +229,7 @@ INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) V
  'ingest-nt-bills', '{}'::jsonb,
  '0 21 * * *', true, 'daily-ingest-rollout'),
 ('NT Hansard daily ingest',
- 'ingest-nt-hansard', '{"limit_sittings": 5}'::jsonb,
+ 'ingest-nt-hansard', '{"since_days": 14, "limit_sittings": 5}'::jsonb,
  '30 21 * * *', true, 'daily-ingest-rollout'),
 ('NT presiding speaker resolver',
  'resolve-presiding-speakers', '{"province": "NT"}'::jsonb,
@@ -257,7 +257,7 @@ INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) V
  'ingest-sk-mlas', '{"parliaments": "30"}'::jsonb,
  '0 22 * * *', true, 'daily-ingest-rollout'),
 ('SK Hansard daily ingest',
- 'ingest-sk-hansard', '{"limit_sittings": 5}'::jsonb,
+ 'ingest-sk-hansard', '{"since_days": 14, "limit_sittings": 5}'::jsonb,
  '15 22 * * *', true, 'daily-ingest-rollout'),
 ('SK presiding speaker resolver',
  'resolve-presiding-speakers', '{"province": "SK"}'::jsonb,
@@ -295,7 +295,25 @@ INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) V
 -- bills chains have all completed.
 ('Backfill bill introduced_date from events (daily)',
  'relink-bill-introduced-dates', '{}'::jsonb,
- '55 7 * * *', true, 'daily-ingest-rollout');
+ '55 7 * * *', true, 'daily-ingest-rollout'),
+
+-- ─── NU Hansard (21:15 UTC) ─────────────────────────────────────────
+-- Drupal-9 PDF source at assembly.nu.ca/hansard. ~59 PDFs back to
+-- 2021-02-24. since_days=14 narrows to recent sittings only; NU
+-- publishes infrequently (long inter-sitting gaps are normal).
+('NU Hansard daily ingest',
+ 'ingest-nu-hansard', '{"since_days": 14}'::jsonb,
+ '15 21 * * *', true, 'daily-ingest-rollout'),
+
+-- ─── SK votes (22:50 UTC) ───────────────────────────────────────────
+-- Session-aggregated Journal PDFs at legassembly.sk.ca with structured
+-- YEAS/POUR + NAYS/CONTRE grids. Default current_only=true processes
+-- just the highest (legislature, session) Journal each day. Slot is
+-- after ingest-sk-mlas (22:00) + ingest-sk-hansard (22:15) so the
+-- speaker roster is fresh before votes attempt FK resolution.
+('SK votes daily extract',
+ 'extract-sk-votes', '{"current_only": true}'::jsonb,
+ '50 22 * * *', true, 'daily-ingest-rollout');
 
 -- next_run_at is computed by the worker the first time it polls; leave
 -- it NULL here so croniter advances it correctly on the worker tick.
