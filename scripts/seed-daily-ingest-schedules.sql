@@ -35,6 +35,7 @@ BEGIN;
 DELETE FROM scanner_schedules WHERE created_by = 'daily-ingest-rollout';
 
 -- ─── Federal (11:00 UTC) ────────────────────────────────────────────
+-- Sub-slots: :00 bills | :15 Hansard | :20 committees | :30 votes | :45 bill events
 INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) VALUES
 ('Federal bills daily ingest',
  'ingest-federal-bills', '{}'::jsonb,
@@ -42,6 +43,9 @@ INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) V
 ('Federal Hansard daily ingest',
  'ingest-federal-hansard', '{"since_days": 14}'::jsonb,
  '15 11 * * *', true, 'daily-ingest-rollout'),
+('Federal committee evidence daily ingest',
+ 'ingest-federal-committees', '{"since_days": 14}'::jsonb,
+ '20 11 * * *', true, 'daily-ingest-rollout'),
 ('Federal votes extraction',
  'extract-federal-votes', '{}'::jsonb,
  '30 11 * * *', true, 'daily-ingest-rollout'),
@@ -97,7 +101,15 @@ INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) V
  '50 15 * * *', true, 'daily-ingest-rollout');
 
 -- ─── QC (16:00 UTC) ─────────────────────────────────────────────────
+-- Roster refresh runs at :50 of the prior hour (15:50 UTC) so
+-- detect_retirements() lands before the daily bills/Hansard chain and
+-- before v_websites_missing / v_socials_missing are next read by the
+-- weekly agent enrichers. opennorth.ingest_quebec_mnas wraps
+-- _ingest_set() which gates retirement detection on len(reps) < limit.
 INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) VALUES
+('QC MNA roster refresh',
+ 'ingest-quebec-mnas', '{}'::jsonb,
+ '50 15 * * *', true, 'daily-ingest-rollout'),
 ('QC bills CSV daily ingest',
  'ingest-qc-bills', '{}'::jsonb,
  '0 16 * * *', true, 'daily-ingest-rollout'),
@@ -126,7 +138,12 @@ INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) V
 -- ─── MB (17:00 UTC) ─────────────────────────────────────────────────
 -- MB has the longest chain — bills (HTML index), then PDF download,
 -- then PDF parse, then Hansard, then 3 resolvers (sponsor + 2 speaker).
+-- Roster refresh runs at :50 of the prior hour (16:50 UTC) so
+-- detect_retirements() lands before the chain.
 INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) VALUES
+('MB MLA roster refresh',
+ 'ingest-manitoba-mlas', '{}'::jsonb,
+ '50 16 * * *', true, 'daily-ingest-rollout'),
 ('MB bills daily ingest',
  'ingest-mb-bills', '{}'::jsonb,
  '0 17 * * *', true, 'daily-ingest-rollout'),
@@ -262,6 +279,23 @@ INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) V
 ('SK presiding speaker resolver',
  'resolve-presiding-speakers', '{"province": "SK"}'::jsonb,
  '30 22 * * *', true, 'daily-ingest-rollout');
+
+-- ─── Weekly agent enrichment (Monday early-UTC) ────────────────────
+-- Sonnet 4.6 with capped web_search budgets fills missing websites /
+-- socials on the active-politician candidate pool. Per-run cost
+-- ~$0.30–$0.50; weekly cadence to avoid Sonnet spend on rosters that
+-- only change at elections. Mondays 06:00 / 07:00 UTC sit between
+-- the previous Sunday's daily ingests and the Monday-morning provincial
+-- chains, so v_websites_missing / v_socials_missing are fresh.
+INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) VALUES
+('Agent — missing websites (weekly)',
+ 'agent-missing-websites',
+ '{"batch_size": 10, "max_batches": 20, "model": "claude-sonnet-4-6"}'::jsonb,
+ '0 6 * * 1', true, 'daily-ingest-rollout'),
+('Agent — missing socials (weekly)',
+ 'agent-missing-socials',
+ '{"batch_size": 8, "max_batches": 15, "model": "claude-sonnet-4-6"}'::jsonb,
+ '0 7 * * 1', true, 'daily-ingest-rollout');
 
 -- ─── Post-ingest cross-jurisdictional resolvers (23:30 UTC) ────────
 -- Runs after every provincial chain; idempotent UPDATE-only resolver

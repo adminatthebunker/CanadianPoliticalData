@@ -1696,7 +1696,8 @@ def cmd_ingest_mb_former_mlas(
             f"updated={stats.politicians_updated} "
             f"slug_collisions={stats.slug_collisions} "
             f"terms_inserted={stats.terms_inserted} "
-            f"terms_skipped_existing={stats.terms_skipped_existing}"
+            f"terms_skipped_existing={stats.terms_skipped_existing} "
+            f"terms_skipped_active={stats.terms_skipped_active}"
         )
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 

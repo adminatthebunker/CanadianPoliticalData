@@ -192,6 +192,7 @@ class Stats:
     slug_collisions: int = 0
     terms_inserted: int = 0
     terms_skipped_existing: int = 0
+    terms_skipped_active: int = 0
 
 
 # ── Helpers ─────────────────────────────────────────────────────────
@@ -526,6 +527,15 @@ async def ingest_mb_former_mlas(
         if not p.last_name or not p.first_name:
             continue
 
+        # is_active = "MLA appears as sitting on the living bio page" —
+        # this is a property of the parsed entry, not of which DB code
+        # path we take. Lifted out so the term-loop below can reference
+        # it whether or not the politician already exists in DB.
+        is_active = False
+        if p.source_page == "living" and p.terms:
+            latest = max(p.terms, key=lambda t: t.started_at)
+            is_active = latest.ended_at is None
+
         norm_first = _strip_accents(p.first_name.split()[0]).lower()
         norm_last = _strip_accents(p.last_name).lower()
         existing = await db.fetchrow(
@@ -553,12 +563,6 @@ async def ingest_mb_former_mlas(
                 slug = f"{base_slug}-{dupe_n}"
                 stats.slug_collisions += 1
             seen_slugs.add(slug)
-
-            # On living page: is_active = True iff most recent term is open-ended.
-            is_active = False
-            if p.source_page == "living" and p.terms:
-                latest = max(p.terms, key=lambda t: t.started_at)
-                is_active = latest.ended_at is None
 
             full_name = f"{p.first_name} {p.last_name}".strip()
             source_id = f"manitoba-assembly:former-mlas:{slug}"
@@ -594,6 +598,17 @@ async def ingest_mb_former_mlas(
         # propagate to existing data. Source-tag matched too so we don't
         # overwrite hand-curated entries from other sources.
         for term in p.terms:
+            # Currently-sitting MLAs already have their open term owned by
+            # the opennorth roster ingester (source='opennorth:manitoba-
+            # legislature'). Writing another open-ended term here creates
+            # duplicates that survive even when the parser's started_at
+            # varies across runs (see 2026-05-06 banner regex change which
+            # bumped some living-page terms from Oct-18 to Oct-3, creating
+            # second rows alongside the pre-fix ones). Historical closed
+            # terms are still written.
+            if term.ended_at is None and is_active:
+                stats.terms_skipped_active += 1
+                continue
             existing = await db.fetchrow(
                 """
                 SELECT id, ended_at FROM politician_terms
@@ -631,10 +646,11 @@ async def ingest_mb_former_mlas(
     log.info(
         "mb_former_mlas: pages=%d names=%d terms_parsed=%d "
         "inserted=%d updated=%d slug_collisions=%d "
-        "terms_inserted=%d terms_skipped=%d",
+        "terms_inserted=%d terms_skipped_existing=%d terms_skipped_active=%d",
         stats.pages_fetched, stats.names_seen, stats.terms_parsed,
         stats.politicians_inserted, stats.politicians_updated,
         stats.slug_collisions,
         stats.terms_inserted, stats.terms_skipped_existing,
+        stats.terms_skipped_active,
     )
     return stats

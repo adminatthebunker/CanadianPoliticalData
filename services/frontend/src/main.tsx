@@ -14,6 +14,7 @@ import CoveragePage from "./pages/CoveragePage";
 import HansardSearchPage from "./pages/HansardSearchPage";
 import SemanticMapPage from "./pages/SemanticMapPage";
 import SpeechDetailPage from "./pages/SpeechDetailPage";
+import ChunkRedirect from "./pages/ChunkRedirect";
 import LoginPage from "./pages/LoginPage";
 import VerifyPage from "./pages/VerifyPage";
 import AccountPage from "./pages/AccountPage";
@@ -67,6 +68,7 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
           <Route path="search" element={<HansardSearchPage />} />
           <Route path="semantic-map" element={<SemanticMapPage />} />
           <Route path="speeches/:id" element={<SpeechDetailPage />} />
+          <Route path="chunks/:id" element={<ChunkRedirect />} />
           <Route path="explore" element={<SemanticMapPage />} />
           <Route path="coverage" element={<CoveragePage />} />
           <Route path="login" element={<LoginPage />} />
