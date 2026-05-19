@@ -4,7 +4,7 @@
 
 **Legislature:** Legislative Assembly of Alberta | **Website:** https://www.assembly.ab.ca | **Seats:** 87 | **Next election:** 2027-10-18
 
-**Status snapshot (2026-04-20):** ✅ **Bills live** for Legislature 31, sessions 1+2 (114 bills / 551 events / 114 sponsors / **100% FK-linked**). ✅ **Hansard live** via PDF pipeline — 439,125 speeches (2000-02-17 → 2026-04-16), 487,221 chunks, 100% Qwen3-embedded. ✅ **Speaker (presiding officer) resolution live** — 114,450 'The Speaker' rows tied to the correct sitting Speaker by date (Kowalski/Zwozdesky/Wanner/Cooper/McIver). Committees pre-existing (`ingest_ab_committees`). Overall speaker resolution still gated by the roster gap — only 91 AB politicians are in `politicians` against a 26-year corpus (~57% of speeches remain `politician_id IS NULL`); historical MLA enrichment is the outstanding work, not a resolver bug.
+**Status snapshot (2026-05-19):** ✅ **Bills live** for Legislature 31, sessions 1+2 (114 bills / 551 events / 114 sponsors / **100% FK-linked**). ✅ **Hansard live** via PDF pipeline — 439,125+ speeches (2000-02-17 → 2026-05-14), 487,221+ chunks, 100% Qwen3-embedded. ✅ **Speaker (presiding officer) resolution live** — 114,450 'The Speaker' rows + 19,363 'The Deputy Speaker' + 11,631 'The Deputy Chair' tied to historically-correct officeholders by date. ✅ **Committee transcripts live (2026-05-19)** — first provincial-committee pipeline; 9,988 speeches across 60 L31-S2 meetings via `ingest-ab-committees`; substitute-MLA detection via PDF cover-page roster. Committee memberships pre-existing via `committees.py:ingest_ab_committees`. Chamber speaker resolution still gated by the roster gap — only 91 AB politicians are in `politicians` against a 26-year corpus (~57% of speeches remain `politician_id IS NULL`); historical MLA enrichment is the outstanding work, not a resolver bug.
 
 ---
 
@@ -97,12 +97,22 @@ Sources: Wikipedia "Speaker of the Legislative Assembly of Alberta" + assembly.a
 
 ## Committee Activity
 
-- **Source URL(s):** https://www.assembly.ab.ca/assembly-business/committees ; https://www.assembly.ab.ca/assembly-business/committees/committee-reports
-- **Format:** HTML committee pages with reports; minutes via Legislature Library (librarysearch.assembly.ab.ca).
-- **Data available:** Memberships, standing committee list, committee reports.
-- **Overlap with existing scanner:** **`ingest_ab_committees` already implemented** — this is our one existing provincial asset in the legislative-activity layer pre-2026. Any AB work here extends that.
-- **Difficulty (1–5):** 2 (already scraped).
-- **Notes:** Contact: library.requests@assembly.ab.ca, 780-427-2473.
+- **Status (2026-05-19):** ✅ **Committee transcripts live** — first provincial-committee pipeline. **9,988 speeches across 60 L31-S2 meetings** ingested via `ingest-ab-committees` (5 active committees this session: HS/LO/PA/MS/RS — others didn't meet). AB `committees_status: editorial 'live' → count-derived 'partial'` (flips back to 'live' once historical backfill crosses 5K rows). Memberships pre-existing via `committees.py:ingest_ab_committees`.
+- **Source URL(s):**
+  - Memberships: https://www.assembly.ab.ca/assembly-business/committees ; https://www.assembly.ab.ca/assembly-business/committees/committee-reports
+  - Transcripts (listing): https://www.assembly.ab.ca/assembly-business/transcripts/transcripts-by-type?comm={ACRONYM}&legl={L}&session={S}
+  - Transcripts (PDFs): `docs.assembly.ab.ca/LADDAR_files\docs\committees\{acronym}\legislature_{L}\session_{S}\{YYYYMMDD}_{HHMM}_01_{acronym}.pdf`
+- **Format:** HTML listing → PDF transcripts (same shape as chamber Hansard, just under `committees/<acronym>/` instead of `hansards/han/`).
+- **Standing committees** (11, all hardcoded in `STANDING_COMMITTEES`): HS (Heritage Savings Trust Fund), EF (Alberta's Economic Future), CI (Citizen Initiative Proposal Review), CEB (Electoral Boundaries), FC (Families and Communities), LO (Legislative Offices), MS (Members' Services), PB (Private Bills), PE (Privileges and Elections), PA (Public Accounts), RS (Resource Stewardship).
+- **Ingester:** `services/scanner/src/legislative/ab_committees.py` — mirrors `ab_hansard.py`'s PDF chassis; lands rows with `speech_type='committee'` and `ab_committee` raw payload shape (includes committee_acronym + committee_name).
+- **Speaker resolution — two layers:**
+  - (a) Committee-restricted lookup joins `politician_committees` on `committee_name + ended_at` gate (restricts the candidate pool to ~10-12 regular members vs the 87-MLA chamber). Correctly rejects witnesses with surname collisions (no over-match risk by construction — witnesses can't FK-match against `politicians`).
+  - (b) Per-meeting PDF cover-page roster parser (`parse_meeting_roster` + `_ROSTER_LINE_RE`) picks up substitutes the membership table doesn't know about. 94% FK-resolution rate; first-cycle outcome: 78 net-new substitute MLAs across 60 meetings.
+- **Cadence:** Daily 15:25 UTC schedule with `since_days=14` (forward-incremental harness from cycle 2026-05-16).
+- **Overlap with existing scanner:** Membership scraping via `committees.py:ingest_ab_committees` was the pre-existing provincial asset; the new transcript pipeline reuses its `committee_name` values for the committee-restricted lookup join.
+- **Difficulty (1–5):** 2 (PDF transcripts + structured listing-page HTML, same primitives as chamber Hansard).
+- **Notes:** Library Reference (legacy minutes/transcripts not on web): library.requests@assembly.ab.ca, 780-427-2473. AB committee meetings have ~40% witness speakers by nature (deputy ministers, agency execs, industry reps) — `politician_id=NULL` on those rows is correct, not a resolver miss.
+- **Pending follow-ups:** Historical `--all-sessions` backfill (P29-P30 + earlier sessions) gated on `nvidia-open` → `nvidia-driver-580` GPU swap; select-special + completed-mandate committees not yet enumerated (only the 11 standing committees are hardcoded in v1).
 
 ## Existing third-party scrapers
 
@@ -115,7 +125,8 @@ Sources: Wikipedia "Speaker of the Legislative Assembly of Alberta" + assembly.a
 - [x] Schema drafted (migration `0013_politician_ab_assembly_mid.sql`)
 - [x] Ingestion prototyped
 - [x] Production ingestion live (2026-04-16) — Legislature 31 sessions 1+2, 114 bills
-- [x] Committees (pre-existing `ingest_ab_committees`)
+- [x] Committee memberships (pre-existing `committees.py:ingest_ab_committees`)
+- [x] **Committee transcripts** (live 2026-05-19 — first provincial-committee pipeline; 9,988 speeches across 60 L31-S2 meetings via `ab_committees.py` + `ingest-ab-committees`)
 - [x] Hansard PDF parsing (live 2026-04 — 439,125 speeches, 2000-2026)
 - [x] Speaker (Tier 1 presiding-officer) resolution (live 2026-04-20 — 114,450 rows linked)
 - [ ] Historical AB MLA roster enrichment (91 politicians vs 26 years of corpus; ~57% of speeches remain role-only or unmatched due to absent retired MLAs — separate workstream from the resolver)
