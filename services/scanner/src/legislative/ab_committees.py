@@ -112,6 +112,214 @@ class CommitteeMeetingRef:
         return "evening"
 
 
+# ── Cover-page roster parser ─────────────────────────────────────────
+# Each committee PDF opens with a cover page that lists the meeting's
+# attending roster. Format probed 2026-05-19 across HS/PA/LO/MS:
+#
+#   Yao, Tany, Fort McMurray-Wood Buffalo (UC), Chair
+#   Johnson, Jennifer, Lacombe-Ponoka (UC), Deputy Chair
+#   Cyr, Scott J., Bonnyville-Cold Lake-St. Paul (UC)*
+#   McIver, Hon. Ric, Calgary-Hays (UC), Chair
+#   Petrovic, Chelsae, Livingstone-Macleod (UC)**
+#   * substitution for Scott Cyr
+#
+# Substitute MLAs (marked with one-or-more asterisks) aren't in
+# `politician_committees` for this committee but ARE real AB MLAs who
+# should be attributed when they speak. The committee-restricted speaker
+# lookup misses them by design; this roster parser closes that gap on a
+# per-meeting basis.
+@dataclass
+class AttendeeRef:
+    last_name: str
+    first_name: str       # may carry leading "Hon." or trailing initial like "Scott J."
+    constituency: str
+    party: str            # e.g. "UC", "NDP"
+    is_substitute: bool
+    role: Optional[str]   # "Chair" / "Deputy Chair" / None
+
+
+_ROSTER_LINE_RE = re.compile(
+    # Last name: handles plain ("Yao"), compound capitalized ("Calahoo Stonehouse"),
+    # lowercase-prefix ("van Dijken", "de Jonge"), hyphenated ("Arcand-Paul"),
+    # and apostrophes ("D'Arcy").
+    r"^(?P<last>(?:[a-z]+\s+)?[A-Z][A-Za-zÀ-ÿ'\-]+(?:\s+[A-Z][A-Za-zÀ-ÿ'\-]+)?),\s+"
+    r"(?P<first>(?:Hon\.\s+)?[A-Z][\w.\s'\-À-ÿ]*?),\s+"
+    r"(?P<constituency>[A-Z][A-Za-zÀ-ÿ'.\s\-]+?)"
+    r"\s+\((?P<party>[A-Z]+)\)"
+    # Everything after the party-paren is captured as a single tail and
+    # parsed in Python — the substitute marker (*+) can appear directly
+    # after the paren OR after a comma-role-separator, and roles include
+    # plain Chair / Deputy Chair / Acting variants.
+    r"(?P<tail>[^A-Za-z]*?(?:Chair|Deputy Chair|Acting Chair|Acting Deputy Chair)?)\s*$"
+)
+_ROLE_RE = re.compile(r"\b(Acting Deputy Chair|Acting Chair|Deputy Chair|Chair)\b")
+
+
+def parse_meeting_roster(text: str, *, max_lines_to_scan: int = 120) -> list[AttendeeRef]:
+    """Walk the first portion of a committee transcript and extract the
+    attending-MLA roster (members + substitutes) from the cover page.
+
+    Stops at the first non-matching line *after* at least one roster
+    line has been seen — natural terminator handles the various
+    "Officials" / "Support Staff" / "Legislative Officers" headers
+    that close out the roster section without us having to enumerate
+    them.
+
+    Returns an empty list if no roster lines match (e.g. a PDF with
+    unusual cover-page formatting); caller should treat as a normal
+    soft-miss, not an error.
+    """
+    out: list[AttendeeRef] = []
+    saw_match = False
+    for i, raw_line in enumerate(text.splitlines()):
+        if i >= max_lines_to_scan:
+            break
+        line = raw_line.strip()
+        if not line:
+            continue
+        m = _ROSTER_LINE_RE.match(line)
+        if m:
+            saw_match = True
+            tail = m.group("tail") or ""
+            role_m = _ROLE_RE.search(tail)
+            out.append(
+                AttendeeRef(
+                    last_name=m.group("last").strip(),
+                    first_name=m.group("first").strip(),
+                    constituency=m.group("constituency").strip(),
+                    party=m.group("party"),
+                    is_substitute="*" in tail,
+                    role=role_m.group(1) if role_m else None,
+                )
+            )
+            continue
+        if saw_match:
+            # First non-matching line after the roster started: done.
+            # The roster is contiguous; anything past it is staff /
+            # officials / footnotes — not voting MLAs.
+            break
+    return out
+
+
+async def resolve_attendees_to_politicians(
+    db: Database, attendees: list[AttendeeRef],
+) -> list[dict]:
+    """For each attendee, FK-match against `politicians` and return
+    resolved rows (politician dict). Drops attendees that can't be
+    uniquely resolved — better than guessing.
+
+    Match strategy:
+      1. Exact last_name + first-token-of-first-name match (handles
+         "Scott J." → "Scott Cyr" via first-token "Scott").
+      2. If multiple, narrow by constituency (case-insensitive substring).
+      3. If still multiple, drop (ambiguous).
+    """
+    if not attendees:
+        return []
+
+    resolved: list[dict] = []
+    for att in attendees:
+        # Strip "Hon. " prefix if present; we never store it in first_name.
+        first_clean = re.sub(r"^Hon\.\s+", "", att.first_name).strip()
+        first_token = first_clean.split()[0] if first_clean else ""
+        if not first_token or not att.last_name:
+            continue
+
+        rows = await db.fetch(
+            """
+            SELECT id::text AS id, name, first_name, last_name, ab_assembly_mid
+              FROM politicians
+             WHERE level = 'provincial'
+               AND province_territory = 'AB'
+               AND ab_assembly_mid IS NOT NULL
+               AND lower(last_name) = lower($1)
+               AND (
+                     lower(first_name) = lower($2)
+                  OR lower(first_name) LIKE lower($2) || ' %'
+                  OR lower(first_name) LIKE lower($2) || '.%'
+               )
+            """,
+            att.last_name, first_token,
+        )
+
+        if len(rows) > 1 and att.constituency:
+            # Disambiguate by constituency. The MLA's constituency lives
+            # on politician_terms; we accept either column's match.
+            narrowed = await db.fetch(
+                """
+                SELECT DISTINCT p.id::text AS id, p.name, p.first_name,
+                       p.last_name, p.ab_assembly_mid
+                  FROM politicians p
+                  LEFT JOIN politician_terms pt ON pt.politician_id = p.id
+                 WHERE p.level = 'provincial'
+                   AND p.province_territory = 'AB'
+                   AND p.ab_assembly_mid IS NOT NULL
+                   AND lower(p.last_name) = lower($1)
+                   AND (
+                         lower(p.first_name) = lower($2)
+                      OR lower(p.first_name) LIKE lower($2) || ' %'
+                      OR lower(p.first_name) LIKE lower($2) || '.%'
+                   )
+                   AND lower(pt.constituency) = lower($3)
+                """,
+                att.last_name, first_token, att.constituency,
+            )
+            if narrowed:
+                rows = narrowed
+
+        if len(rows) == 1:
+            resolved.append(dict(rows[0]))
+        # else: 0 hits (new MLA not in DB) or still-ambiguous → drop.
+
+    return resolved
+
+
+def augment_lookup_with_attendees(
+    lookup: SpeakerLookup, attendees: list[dict],
+) -> int:
+    """Merge resolved attendees into an existing SpeakerLookup's three
+    indexes, skipping IDs already present. Returns the count of net-new
+    attendees added.
+
+    Mirrors the index-building logic in `ab_hansard.load_speaker_lookup`
+    so attendees match speaker lines via the same surname / first+last /
+    full-name keys the chamber lookup uses.
+    """
+    existing_ids: set[str] = set()
+    for idx in (lookup.by_full_name, lookup.by_first_last, lookup.by_surname):
+        for lst in idx.values():
+            for p in lst:
+                existing_ids.add(p["id"])
+
+    added = 0
+    for p in attendees:
+        if p["id"] in existing_ids:
+            continue
+        existing_ids.add(p["id"])
+        added += 1
+
+        full_name = _norm(_strip_honorifics(p["name"] or ""))
+        if full_name:
+            lookup.by_full_name.setdefault(full_name, []).append(p)
+
+        first = _norm(p["first_name"] or "")
+        last = _norm(p["last_name"] or "")
+        if first and last:
+            first_tok = first.split()[0]
+            last_tok = last.split()[-1]
+            lookup.by_first_last.setdefault(
+                f"{first_tok} {last_tok}", []
+            ).append(p)
+
+        if last:
+            last_tok = last.split()[-1]
+            lookup.by_surname.setdefault(last_tok, []).append(p)
+            if " " in last:
+                lookup.by_surname.setdefault(last, []).append(p)
+
+    return added
+
+
 # ── Listing page ─────────────────────────────────────────────────────
 
 
@@ -306,6 +514,9 @@ class IngestCommitteeStats:
     speeches_unresolved: int = 0
     skipped_empty: int = 0
     fetch_failures: int = 0
+    attendees_parsed: int = 0      # roster lines extracted from cover pages
+    attendees_resolved: int = 0    # successfully FK-matched against politicians
+    attendees_augmented: int = 0   # net-new entries added to committee lookup (substitutes)
 
 
 async def ingest_committees(
@@ -401,6 +612,26 @@ async def ingest_committees(
                 lookup_cache[cache_key] = cached
             lookup, is_restricted = cached
 
+            # Per-meeting roster augmentation: parse the PDF cover page for
+            # attending MLAs (regular members + substitutes marked *), FK-
+            # match against politicians, merge any non-already-present
+            # entries into the lookup. This is what catches substitute
+            # MLAs that `politician_committees` doesn't know about — e.g.
+            # Cyr / Petrovic / Schulz subbing in at HS 2026-04-13.
+            if is_restricted:
+                attendees = parse_meeting_roster(text)
+                stats.attendees_parsed += len(attendees)
+                if attendees:
+                    resolved = await resolve_attendees_to_politicians(db, attendees)
+                    stats.attendees_resolved += len(resolved)
+                    added = augment_lookup_with_attendees(lookup, resolved)
+                    stats.attendees_augmented += added
+                    if added:
+                        log.info(
+                            "  roster augment: parsed=%d resolved=%d added=%d (substitutes)",
+                            len(attendees), len(resolved), added,
+                        )
+
             for ps in parsed:
                 if (limit_speeches
                         and stats.speeches_inserted + stats.speeches_updated >= limit_speeches):
@@ -450,7 +681,8 @@ async def ingest_committees(
     log.info(
         "ab_committees done: %d meetings, %d speeches "
         "(inserted=%d updated=%d skipped_empty=%d fetch_failures=%d) "
-        "resolved=%d role_only=%d ambiguous=%d unresolved=%d",
+        "resolved=%d role_only=%d ambiguous=%d unresolved=%d "
+        "roster_attendees=%d roster_resolved=%d roster_augmented=%d",
         stats.meetings_scanned,
         stats.speeches_seen,
         stats.speeches_inserted,
@@ -461,5 +693,8 @@ async def ingest_committees(
         stats.speeches_role_only,
         stats.speeches_ambiguous,
         stats.speeches_unresolved,
+        stats.attendees_parsed,
+        stats.attendees_resolved,
+        stats.attendees_augmented,
     )
     return stats

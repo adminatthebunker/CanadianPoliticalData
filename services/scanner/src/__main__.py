@@ -3374,7 +3374,10 @@ def cmd_ingest_ab_committees(
             f"inserted={stats.speeches_inserted} updated={stats.speeches_updated} "
             f"skipped_empty={stats.skipped_empty} fetch_failures={stats.fetch_failures} "
             f"resolved={stats.speeches_resolved} role_only={stats.speeches_role_only} "
-            f"ambiguous={stats.speeches_ambiguous} unresolved={stats.speeches_unresolved}"
+            f"ambiguous={stats.speeches_ambiguous} unresolved={stats.speeches_unresolved} "
+            f"roster_parsed={stats.attendees_parsed} "
+            f"roster_resolved={stats.attendees_resolved} "
+            f"roster_augmented={stats.attendees_augmented}"
         )
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 
