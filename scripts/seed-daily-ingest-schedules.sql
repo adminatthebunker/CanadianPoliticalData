@@ -90,6 +90,9 @@ INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) V
 ('AB Hansard daily ingest',
  'ingest-ab-hansard', '{"since_days": 14}'::jsonb,
  '15 15 * * *', true, 'daily-ingest-rollout'),
+('AB committee transcripts daily ingest',
+ 'ingest-ab-committees', '{"since_days": 14}'::jsonb,
+ '25 15 * * *', true, 'daily-ingest-rollout'),
 ('AB speaker resolver',
  'resolve-ab-speakers', '{}'::jsonb,
  '30 15 * * *', true, 'daily-ingest-rollout'),
@@ -280,22 +283,23 @@ INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) V
  'resolve-presiding-speakers', '{"province": "SK"}'::jsonb,
  '30 22 * * *', true, 'daily-ingest-rollout');
 
--- ─── Weekly agent enrichment (Monday early-UTC) ────────────────────
--- Sonnet 4.6 with capped web_search budgets fills missing websites /
--- socials on the active-politician candidate pool. Per-run cost
--- ~$0.30–$0.50; weekly cadence to avoid Sonnet spend on rosters that
--- only change at elections. Mondays 06:00 / 07:00 UTC sit between
--- the previous Sunday's daily ingests and the Monday-morning provincial
--- chains, so v_websites_missing / v_socials_missing are fresh.
-INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) VALUES
-('Agent — missing websites (weekly)',
- 'agent-missing-websites',
- '{"batch_size": 10, "max_batches": 20, "model": "claude-sonnet-4-6"}'::jsonb,
- '0 6 * * 1', true, 'daily-ingest-rollout'),
-('Agent — missing socials (weekly)',
- 'agent-missing-socials',
- '{"batch_size": 8, "max_batches": 15, "model": "claude-sonnet-4-6"}'::jsonb,
- '0 7 * * 1', true, 'daily-ingest-rollout');
+-- ─── Weekly agent enrichment ──────────────────────────────────────
+-- The previously-scheduled Anthropic-API-backed agents
+-- (agent-missing-socials / agent-missing-websites) were removed from
+-- this seed when their scheduled runs were retired:
+--
+--   * socials enrichment is now handled by the headless Claude Code
+--     cron at scripts/scheduled-tasks/run-socials-weekly.sh
+--     (daily 09:07 local, subscription-billed, source='claude-code-agent').
+--   * websites enrichment is now handled by the headless Claude Code
+--     cron at scripts/scheduled-tasks/run-websites-weekly.sh
+--     (weekly Monday 09:17 local, subscription-billed,
+--     source='claude-code-agent-websites').
+--
+-- The Click commands (agent-missing-socials / agent-missing-websites)
+-- and admin-panel whitelist entries are intentionally retained so an
+-- operator can still trigger the API-backed agents manually from
+-- /admin when a one-off API-billed run is wanted.
 
 -- ─── Post-ingest cross-jurisdictional resolvers (23:30 UTC) ────────
 -- Runs after every provincial chain; idempotent UPDATE-only resolver

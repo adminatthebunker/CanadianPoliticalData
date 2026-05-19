@@ -272,6 +272,68 @@ docker exec sw-db psql -U sw -d sovereignwatch -c \
 
 **The `agent-missing-socials` (API-billed) variant remains the right tool when**: you want one-off targeted enrichment, you want results within minutes instead of waiting for tomorrow's run, or you have ANTHROPIC_API_KEY but no active Claude Code subscription.
 
+### Weekly websites enrichment (Claude Code subscription, headless cron)
+
+The **subscription-billed counterpart** to `agent-missing-websites`. Same structure as the socials task above, weekly cadence (websites turn over slower than handles), targets `v_websites_missing` for active politicians with no row in `public.websites`.
+
+| | API-billed (`agent-missing-websites`) | Subscription-billed (this) |
+|---|---|---|
+| Where it runs | Inside the scanner Python process via Anthropic SDK | A fresh headless `claude -p` session per fire |
+| Billing | Per-token, ANTHROPIC_API_KEY required | Claude Code subscription quota |
+| Schedule home | `scanner_schedules` (admin panel cron) | OS cron (`crontab -l`) |
+| Default cadence | None (admin-runnable) | Weekly Monday 09:17 local |
+| Source tag on inserts | `source='agent_sonnet'` | `source='claude-code-agent-websites'` |
+| Insert helper | `websites.upsert_website()` (canonicalizes URL, sets `flagged_low_confidence`) | Raw `INSERT … ON CONFLICT DO NOTHING` (the agent computes `flagged_low_confidence` from confidence itself) |
+
+**File map**:
+- `scripts/scheduled-tasks/websites-weekly-enrichment.md` — version-controlled prompt body + wiring docs.
+- `scripts/scheduled-tasks/run-websites-weekly.sh` — bash wrapper that strips frontmatter, sets cron-safe `PATH`, invokes `claude -p --model sonnet --permission-mode acceptEdits`, logs to a timestamped file, captures `claude`'s exit code, then calls the email helper (with `"websites enrichment"` as the task-name arg so the subject + signal-line search line up).
+- `scripts/scheduled-tasks/send-run-summary.py` — reused unchanged from the socials task; takes an optional 3rd arg `<task_name>` that drives subject + signal-line grep.
+- `docs/runbooks/websites-agent-logs/<timestamp>.log` — per-run captured stdout/stderr + email-helper output. Auto-pruned >84 days.
+- `docs/runbooks/websites-agent-<YYYY>-W<week>.md` — per-run markdown summary written by the agent itself.
+- Cron line: `17 9 * * 1 /home/bunker-admin/sovpro/scripts/scheduled-tasks/run-websites-weekly.sh`
+
+**What each run does**: ranks the top-25 active politicians missing a website by `has_active_term × recent_speech_count`, web-searches each (preference order: personal site → campaign domain → party_lander fallback), evidence-weights candidates (0.60 floor, 0.85 promotion threshold), inserts via `INSERT INTO public.websites (... source='claude-code-agent-websites', flagged_low_confidence=<confidence<0.85>) ON CONFLICT (owner_type, owner_id, url) DO NOTHING`, writes a runbook. Search budget is hard-capped at 75 calls per run (3 × 25); typical usage is 50–75.
+
+**Operator runbook**:
+```bash
+# Manual run (mirrors what Monday 09:17 cron will do)
+/home/bunker-admin/sovpro/scripts/scheduled-tasks/run-websites-weekly.sh
+
+# Watch live (in a second terminal)
+tail -f /home/bunker-admin/sovpro/docs/runbooks/websites-agent-logs/$(ls -t /home/bunker-admin/sovpro/docs/runbooks/websites-agent-logs/ | head -1)
+
+# See what landed
+docker exec sw-db psql -U sw -d sovereignwatch -c \
+  "SELECT p.name, w.label, w.url, w.confidence, w.flagged_low_confidence, w.evidence_url
+     FROM public.websites w
+     JOIN politicians p ON p.id = w.owner_id AND w.owner_type='politician'
+    WHERE w.source = 'claude-code-agent-websites'
+    ORDER BY w.discovered_at DESC LIMIT 25"
+
+# Pause (comment out the cron line)
+crontab -e
+
+# Revert a bad run (date-scoped — adjust window to the run you want gone)
+docker exec sw-db psql -U sw -d sovereignwatch -c \
+  "DELETE FROM public.websites
+    WHERE source = 'claude-code-agent-websites'
+      AND discovered_at > now() - interval '24 hours'"
+
+# Re-send the email for an existing log (e.g., if SMTP was down during the run)
+/home/bunker-admin/sovpro/scripts/scheduled-tasks/send-run-summary.py \
+  /home/bunker-admin/sovpro/docs/runbooks/websites-agent-logs/<TIMESTAMP>.log 0 \
+  "websites enrichment"
+```
+
+**Email summary**: same helper as socials. Subject pattern: `[CPD websites enrichment] ✓ run <timestamp> (exit=0)`. The signal line the agent must emit is `websites enrichment complete — inserted N rows, report at docs/runbooks/websites-agent-<YYYY>-W<week>.md`.
+
+**Edit the prompt**: change `scripts/scheduled-tasks/websites-weekly-enrichment.md` in-repo. The wrapper extracts the body via `awk` on every fire, so no sync step needed.
+
+**Failure modes**: same set as the socials variant (PATH, docker, subscription quota, search budget, SMTP).
+
+**The `agent-missing-websites` (API-billed) variant remains the right tool when**: you want a one-off sweep through every uncovered politician at once (not just the top 25), you want sub-15-minute results, or you have ANTHROPIC_API_KEY but no active Claude Code subscription.
+
 ## Billing rail (premium reports phase 1a)
 
 Full design + deploy sequence in `docs/plans/premium-reports.md`. Operational quick-ref below.
@@ -553,6 +615,7 @@ OS-level cron entries (the operator's user crontab, `crontab -l`):
 - `0 0 * * *` — daily Postgres backup (`scripts/backup-database.sh`).
 - `0 2 * * 0` — Sunday weekly public dataset dump (`scripts/make-public-dump.sh`).
 - `7 9 * * *` — daily socials enrichment via headless Claude Code (`scripts/scheduled-tasks/run-socials-weekly.sh`). See § *Daily socials enrichment* above for the runbook.
+- `17 9 * * 1` — weekly websites enrichment via headless Claude Code (`scripts/scheduled-tasks/run-websites-weekly.sh`). See § *Weekly websites enrichment* above for the runbook.
 
 ## Backups
 

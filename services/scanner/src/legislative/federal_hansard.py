@@ -1,19 +1,37 @@
-"""Federal Hansard ingester — openparliament.ca → `speeches` table.
+"""Federal Hansard + committee transcripts ingester — openparliament.ca → `speeches`.
 
 Pulls speeches from openparliament.ca's public JSON API and lands them
 as normalized rows in the `speeches` schema shipped in migration 0015.
 First bar-raising step for the semantic-search layer: before we can
 embed, we need rows.
 
+Covers two `speech_type` slices off the same openparliament fabric:
+
+- `speech_type='floor'` — chamber Hansard (debates), via the
+  `ingest()` entry point + `fetch_debates()` discovery.
+- `speech_type='committee'` — House of Commons committee evidence
+  (transcripts), via the `ingest_committees()` entry point +
+  `fetch_committee_meetings()` discovery. Committee meeting docs
+  share the exact same `/speeches/?document__url=...` payload shape
+  as debates, so chunking, embedding, attribution, and upserts are
+  identical. `_pick_speech_type()` discriminates by URL prefix.
+
 ## Source shape
 
-Two endpoints drive the fetch:
+Three list endpoints drive the fetch:
 
 - `GET /debates/?format=json` — paginated list of sitting days for
   the House of Commons. Use it to enumerate which `document_url`s to
   pull speeches from, newest-first.
+- `GET /committees/meetings/?format=json` — paginated list of
+  committee meetings. Each row carries a `url` like
+  `/committees/foreign-affairs/45-1/16/`, plus an `in_camera` flag
+  and a `has_evidence` flag (we skip meetings with no evidence —
+  transcripts aren't published for in-camera sessions or meetings
+  pending transcription).
 - `GET /speeches/?format=json&document__url=...&limit=200` — paged
-  list of speaker turns for one debate. Each object carries:
+  list of speaker turns for one document (debate or meeting). Each
+  object carries:
     * `time` — ISO timestamp (the /speeches/ endpoint occasionally
       returns a date in year 4043 — an upstream artifact we mask by
       re-deriving date from the debate's own `date` field instead of
@@ -349,6 +367,48 @@ async def fetch_debates(
     return out
 
 
+async def fetch_committee_meetings(
+    client: httpx.AsyncClient,
+    *,
+    since: Optional[date] = None,
+    until: Optional[date] = None,
+    limit: Optional[int] = None,
+    include_in_camera: bool = False,
+) -> list[dict[str, Any]]:
+    """Fetch House of Commons committee meetings, newest first.
+
+    Returns objects with at least:
+        - `url`           : `/committees/<acronym>/<parl>-<sess>/<n>/`
+        - `committee_url` : `/committees/<acronym>/`
+        - `date`          : `YYYY-MM-DD`
+        - `number`        : int (meeting number)
+        - `in_camera`     : bool
+        - `has_evidence`  : bool (transcript published?)
+
+    `has_evidence=False` rows are skipped — meetings without evidence
+    either haven't been transcribed yet (newer meetings) or are
+    in-camera sessions where transcripts are never published. We let
+    `--since-days=14` daily ingests re-visit recent meetings until
+    their evidence lands.
+    """
+    params = ["format=json", "limit=100"]
+    if since:
+        params.append(f"date__gte={since.isoformat()}")
+    if until:
+        params.append(f"date__lte={until.isoformat()}")
+    qs = "&".join(params)
+    out: list[dict[str, Any]] = []
+    async for obj in _iter_json(client, f"/committees/meetings/?{qs}"):
+        if not obj.get("has_evidence"):
+            continue
+        if obj.get("in_camera") and not include_in_camera:
+            continue
+        out.append(obj)
+        if limit and len(out) >= limit:
+            break
+    return out
+
+
 async def fetch_speeches_for_document(
     client: httpx.AsyncClient, document_url: str
 ) -> list[dict[str, Any]]:
@@ -508,6 +568,115 @@ async def ingest(
         "ingest done: %d debates, %d speeches seen, %d inserted, %d updated, "
         "%d skipped_empty, %d with unresolved politician slug",
         stats.debates_scanned,
+        stats.speeches_seen,
+        stats.speeches_inserted,
+        stats.speeches_updated,
+        stats.skipped_empty,
+        stats.speeches_unresolved,
+    )
+    return stats
+
+
+@dataclass
+class IngestCommitteeStats:
+    meetings_scanned: int = 0
+    meetings_skipped_no_evidence: int = 0
+    speeches_seen: int = 0
+    speeches_inserted: int = 0
+    speeches_updated: int = 0
+    speeches_unresolved: int = 0
+    skipped_empty: int = 0
+
+
+async def ingest_committees(
+    db: Database,
+    *,
+    parliament: int,
+    session: int,
+    since: Optional[date] = None,
+    until: Optional[date] = None,
+    limit_meetings: Optional[int] = None,
+    limit_speeches: Optional[int] = None,
+    include_in_camera: bool = False,
+) -> IngestCommitteeStats:
+    """Fetch + upsert federal committee evidence speeches.
+
+    Mirrors `ingest()` but discovers via `fetch_committee_meetings()`
+    rather than `fetch_debates()`. Reuses `ensure_session`,
+    `load_slug_to_politician`, `fetch_speeches_for_document`, and
+    `_upsert_speech` verbatim — committee speeches share the
+    openparliament `/speeches/` payload shape, and `_pick_speech_type`
+    routes `/committees/*` document URLs to `speech_type='committee'`.
+
+    Witnesses (non-MP departmental officials, civil-society reps) land
+    as rows with `politician_id=NULL` — same shape as unresolved floor
+    speeches. No schema decision encoded here.
+    """
+    stats = IngestCommitteeStats()
+    session_id = await ensure_session(db, parliament, session)
+    slug_to_pol = await load_slug_to_politician(db)
+
+    async with httpx.AsyncClient(
+        timeout=REQUEST_TIMEOUT, headers=HEADERS, follow_redirects=True
+    ) as client:
+        meetings = await fetch_committee_meetings(
+            client,
+            since=since,
+            until=until,
+            limit=limit_meetings,
+            include_in_camera=include_in_camera,
+        )
+        log.info(
+            "fetched %d committee meetings (parl %d sess %d, since=%s)",
+            len(meetings), parliament, session, since,
+        )
+        for meeting in meetings:
+            if limit_speeches and stats.speeches_inserted + stats.speeches_updated >= limit_speeches:
+                break
+            stats.meetings_scanned += 1
+            doc_url = meeting.get("url")  # e.g. /committees/foreign-affairs/45-1/16/
+            if not doc_url:
+                continue
+            meeting_date_raw = meeting.get("date")
+            try:
+                meeting_date = (
+                    datetime.strptime(meeting_date_raw, "%Y-%m-%d").date()
+                    if meeting_date_raw
+                    else None
+                )
+            except (TypeError, ValueError):
+                meeting_date = None
+
+            speeches = await fetch_speeches_for_document(client, doc_url)
+            log.info("committee meeting %s: %d speeches", doc_url, len(speeches))
+            for seq, sp in enumerate(speeches):
+                if limit_speeches and stats.speeches_inserted + stats.speeches_updated >= limit_speeches:
+                    break
+                stats.speeches_seen += 1
+                inserted = await _upsert_speech(
+                    db,
+                    session_id=session_id,
+                    speech=sp,
+                    sequence=seq,
+                    debate_date=meeting_date,
+                    slug_to_pol=slug_to_pol,
+                )
+                if inserted == "inserted":
+                    stats.speeches_inserted += 1
+                elif inserted == "updated":
+                    stats.speeches_updated += 1
+                elif inserted == "skipped":
+                    stats.skipped_empty += 1
+                if sp.get("politician_url") and not slug_to_pol.get(
+                    _extract_slug(sp["politician_url"]) or ""
+                ):
+                    stats.speeches_unresolved += 1
+
+    log.info(
+        "committee ingest done: %d meetings, %d speeches seen, "
+        "%d inserted, %d updated, %d skipped_empty, "
+        "%d with unresolved politician slug (witnesses + uncached MPs)",
+        stats.meetings_scanned,
         stats.speeches_seen,
         stats.speeches_inserted,
         stats.speeches_updated,

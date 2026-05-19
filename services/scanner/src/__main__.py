@@ -3118,6 +3118,114 @@ def cmd_ingest_federal_hansard(
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 
 
+@cli.command("ingest-federal-committees")
+@click.option("--parliament", type=int, default=None,
+              help="Parliament number (e.g. 45). Default: latest in legislative_sessions.")
+@click.option("--session", type=int, default=None,
+              help="Session number within the parliament. Default: latest.")
+@click.option("--since", type=str, default=None,
+              help="Only fetch meetings on/after this ISO date (YYYY-MM-DD).")
+@click.option("--since-days", type=int, default=None,
+              help="Forward-incremental: narrow --since to today - N days "
+                   "(use in daily schedules to skip already-ingested meetings).")
+@click.option("--until", type=str, default=None,
+              help="Only fetch meetings on/before this ISO date (YYYY-MM-DD).")
+@click.option("--limit-meetings", type=int, default=None,
+              help="Cap on meeting documents fetched.")
+@click.option("--limit-speeches", type=int, default=None,
+              help="Cap on TOTAL speeches ingested. Smoke-test friendly.")
+@click.option("--include-in-camera", is_flag=True, default=False,
+              help="Also enumerate in_camera=true meetings (rare — they almost "
+                   "never have evidence published, so usually no rows land).")
+@click.pass_context
+def cmd_ingest_federal_committees(
+    ctx: click.Context, parliament, session, since, since_days, until,
+    limit_meetings, limit_speeches, include_in_camera,
+) -> None:
+    """Ingest federal House of Commons committee evidence (transcripts).
+
+    Lands rows in `speeches` with `speech_type='committee'` using the
+    same openparliament fabric as `ingest-federal-hansard`. Witnesses
+    (non-MP departmental officials, civil-society reps) land as rows
+    with `politician_id=NULL` — same shape as unresolved floor speeches.
+
+    Skips meetings with `has_evidence=false` (in-camera sessions or
+    meetings pending transcription); daily `--since-days=14` runs
+    re-visit recent meetings until their evidence lands upstream.
+
+    Idempotent via UNIQUE (source_system, source_url, sequence); re-runs
+    over the same date range are safe.
+    """
+    from datetime import date as _date, timedelta as _td
+    from .legislative.federal_hansard import (
+        ingest_committees as _ingest_committees,
+        federal_session_bounds,
+    )
+    from .legislative.current_session import current_session
+
+    def _parse_d(s):
+        return _date.fromisoformat(s) if s else None
+
+    effective_since = _parse_d(since)
+    effective_until = _parse_d(until)
+
+    async def _wrap(db: Database) -> None:
+        nonlocal parliament, session, effective_since, effective_until
+        if parliament is None or session is None:
+            parliament, session = await current_session(db, level="federal")
+            console.print(
+                f"[dim]auto-resolved current federal session: "
+                f"P{parliament}-S{session}[/dim]"
+            )
+
+        # Auto-derive date bounds from the parliament/session unless the
+        # caller provided explicit --since / --until. Mirrors federal-hansard's
+        # 896k-mis-tagging guardrail — without this the /committees/meetings/
+        # walk would enumerate every meeting since openparliament's coverage
+        # floor regardless of which session we named.
+        if effective_since is None and effective_until is None:
+            try:
+                auto_since, auto_until = federal_session_bounds(parliament, session)
+                effective_since = auto_since
+                effective_until = auto_until
+                console.print(
+                    f"[dim]auto-deriving date range for P{parliament}-S{session}: "
+                    f"{effective_since} → {effective_until}[/dim]"
+                )
+            except ValueError as exc:
+                console.print(f"[red]{exc}[/red]")
+                raise click.Abort()
+
+        # Forward-incremental narrowing.
+        if since_days is not None:
+            cutoff = _date.today() - _td(days=int(since_days))
+            if effective_since is None or cutoff > effective_since:
+                effective_since = cutoff
+                console.print(
+                    f"[dim]forward-incremental: narrowed --since to "
+                    f"{effective_since.isoformat()} (since_days={since_days})[/dim]"
+                )
+
+        stats = await _ingest_committees(
+            db,
+            parliament=parliament,
+            session=session,
+            since=effective_since,
+            until=effective_until,
+            limit_meetings=limit_meetings,
+            limit_speeches=limit_speeches,
+            include_in_camera=include_in_camera,
+        )
+        console.print(
+            f"[green]ingest-federal-committees[/green]: "
+            f"meetings={stats.meetings_scanned} seen={stats.speeches_seen} "
+            f"inserted={stats.speeches_inserted} updated={stats.speeches_updated} "
+            f"skipped_empty={stats.skipped_empty} "
+            f"unresolved_slug={stats.speeches_unresolved}"
+        )
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
 @cli.command("ingest-ab-hansard")
 @click.option("--legislature", type=int, default=None,
               help="Alberta Legislature number (e.g. 31). Default: latest in legislative_sessions.")
@@ -3179,6 +3287,92 @@ def cmd_ingest_ab_hansard(
             f"sittings={stats.sittings_scanned} seen={stats.speeches_seen} "
             f"inserted={stats.speeches_inserted} updated={stats.speeches_updated} "
             f"skipped_empty={stats.skipped_empty} "
+            f"resolved={stats.speeches_resolved} role_only={stats.speeches_role_only} "
+            f"ambiguous={stats.speeches_ambiguous} unresolved={stats.speeches_unresolved}"
+        )
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
+@cli.command("ingest-ab-committees")
+@click.option("--legislature", type=int, default=None,
+              help="Alberta Legislature number (e.g. 31). Default: latest in legislative_sessions.")
+@click.option("--session", type=int, default=None,
+              help="Session within the legislature (e.g. 2). Default: latest.")
+@click.option("--since", type=str, default=None,
+              help="Only fetch meetings on/after this ISO date (YYYY-MM-DD).")
+@click.option("--since-days", type=int, default=None,
+              help="Forward-incremental: clamp --since to today - N days "
+                   "(use in daily schedules).")
+@click.option("--until", type=str, default=None,
+              help="Only fetch meetings on/before this ISO date (YYYY-MM-DD).")
+@click.option("--limit-meetings", type=int, default=None,
+              help="Cap on meeting PDFs fetched (newest-first across all committees).")
+@click.option("--limit-speeches", type=int, default=None,
+              help="Cap on TOTAL speeches ingested. Smoke-test friendly.")
+@click.option("--committees", "committees", type=str, default=None,
+              help="Optional comma-separated committee acronyms (e.g. 'HS,EF'). "
+                   "Default: all 11 standing committees.")
+@click.pass_context
+def cmd_ingest_ab_committees(
+    ctx: click.Context, legislature, session, since, since_days, until,
+    limit_meetings, limit_speeches, committees,
+) -> None:
+    """Ingest Alberta standing-committee transcripts (PDFs from docs.assembly.ab.ca).
+
+    Lands rows in `speeches` with `speech_type='committee'`. Speaker
+    resolution prefers a committee-restricted lookup (MLAs who were
+    members of the meeting's committee on the meeting date, sourced from
+    `politician_committees`) and falls back to the chamber-wide lookup
+    when the committee has no membership rows.
+
+    Witnesses (non-MLA committee speakers — deputy ministers, industry
+    reps, ATCO execs, etc.) land as `politician_id=NULL` rows with their
+    raw honorific+surname preserved.
+
+    When --legislature/--session are omitted, resolves the current AB
+    session from legislative_sessions.
+    """
+    from .legislative.ab_committees import ingest_committees as _ingest_committees
+    from .legislative.current_session import current_session
+    from .legislative._forward import parse_iso_date, clamp_since_with_days
+
+    effective_since = clamp_since_with_days(parse_iso_date(since), since_days)
+    committees_list = (
+        [c.strip() for c in committees.split(",") if c.strip()]
+        if committees
+        else None
+    )
+
+    async def _wrap(db: Database) -> None:
+        nonlocal legislature, session
+        if legislature is None or session is None:
+            legislature, session = await current_session(
+                db, level="provincial", province_territory="AB",
+            )
+            console.print(
+                f"[dim]auto-resolved current AB session: "
+                f"L{legislature}-S{session}[/dim]"
+            )
+        if since_days is not None and effective_since is not None:
+            console.print(
+                f"[dim]forward-incremental: --since clamped to "
+                f"{effective_since.isoformat()} (since_days={since_days})[/dim]"
+            )
+        stats = await _ingest_committees(
+            db,
+            legislature=legislature,
+            session=session,
+            since=effective_since,
+            until=parse_iso_date(until),
+            limit_meetings=limit_meetings,
+            limit_speeches=limit_speeches,
+            committees=committees_list,
+        )
+        console.print(
+            f"[green]ingest-ab-committees[/green]: "
+            f"meetings={stats.meetings_scanned} seen={stats.speeches_seen} "
+            f"inserted={stats.speeches_inserted} updated={stats.speeches_updated} "
+            f"skipped_empty={stats.skipped_empty} fetch_failures={stats.fetch_failures} "
             f"resolved={stats.speeches_resolved} role_only={stats.speeches_role_only} "
             f"ambiguous={stats.speeches_ambiguous} unresolved={stats.speeches_unresolved}"
         )
@@ -4083,8 +4277,15 @@ def cmd_reports_worker(ctx: click.Context) -> None:
 @cli.command("chunk-speeches")
 @click.option("--limit", type=int, default=None,
               help="Max speeches to chunk this run (default: all pending).")
+@click.option("--source-system", type=str, default=None,
+              help="Restrict to one source_system (e.g. 'assembly.ab.ca'). "
+                   "Bypasses the global spoken_at-DESC queue — useful for "
+                   "getting a freshly-ingested pipeline searchable without "
+                   "waiting for the daily cron to drain the global backlog.")
+@click.option("--speech-type", type=str, default=None,
+              help="Restrict to one speech_type (e.g. 'committee' or 'floor').")
 @click.pass_context
-def cmd_chunk_speeches(ctx: click.Context, limit) -> None:
+def cmd_chunk_speeches(ctx: click.Context, limit, source_system, speech_type) -> None:
     """Split speeches.text into retrievable speech_chunks rows.
 
     Speaker-turn = one chunk by default. Long turns (> ~480 tokens)
@@ -4095,7 +4296,17 @@ def cmd_chunk_speeches(ctx: click.Context, limit) -> None:
     from .legislative.speech_chunker import chunk_pending as _chunk
 
     async def _wrap(db: Database) -> None:
-        stats = await _chunk(db, limit_speeches=limit)
+        if source_system or speech_type:
+            console.print(
+                f"[dim]chunk-speeches: filtering "
+                f"source_system={source_system!r} speech_type={speech_type!r}[/dim]"
+            )
+        stats = await _chunk(
+            db,
+            limit_speeches=limit,
+            source_system=source_system,
+            speech_type=speech_type,
+        )
         console.print(
             f"[green]chunk-speeches[/green]: seen={stats.speeches_seen} "
             f"chunked={stats.speeches_chunked} skipped={stats.speeches_skipped} "

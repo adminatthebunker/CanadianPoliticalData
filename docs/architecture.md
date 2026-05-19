@@ -25,8 +25,8 @@ Canadian Political Data is a small fleet of cooperating services orchestrated by
                 │                                   │
        ┌────────▼──────────┐              ┌─────────▼──────────┐
        │  Scanner (Python) │              │  Change detection  │
-       │  asyncio + dns +  │              │  ghcr.io/.../change│
-       │  geoip2 + httpx   │              │  → POST /webhooks  │
+       │  asyncio + dns +  │              │  dgtlmoon/change*  │
+       │  geoip2 + httpx   │              │  DISABLED (future) │
        └────┬──────────────┘              └────────────────────┘
             │ HTTP POST /embed (or /v1/embeddings)
             │
@@ -56,7 +56,7 @@ Canadian Political Data is a small fleet of cooperating services orchestrated by
 - Admin surface: `/admin/*` (jobs, schedules, socials review, corrections, users + credit grants + tier adjustments)
 - Billing: `/me/credits/*` (balance, packs, checkout), `/webhooks/stripe` (plugin-scoped raw-body parser, two-layer idempotency via `stripe_webhook_events` PK + `credit_ledger` partial unique index)
 - pg.Pool with 10 connections
-- HMAC-verifies incoming `change` webhooks
+- HMAC-verifies incoming `change` webhooks (receiver-side built; sender — the `change-detection` sidecar — is currently disabled, see § change-detection below)
 - Stripe SDK wrapper in `src/lib/stripe.ts` is the sole importer of the `stripe` npm package — other consumers (dev-API plan, future premium features) reuse the same wrapper
 - Zod validation on every query / body
 - Health: `GET /health`
@@ -109,9 +109,12 @@ Canadian Political Data is a small fleet of cooperating services orchestrated by
 - Stale-claim re-queue: a row stuck in `running` past `REPORTS_STALE_CLAIM_MINUTES` (default 15) is reset to `queued` so a fresh worker picks it up. The hold persists across re-queues — no double-debit risk thanks to the `(kind='report_hold', reference_id=jobId)` partial unique index.
 - Sends "your report is ready" / "report failed, credits refunded" emails via the same Proton SMTP relay as `alerts-worker`, gated by `users.email_bounced_at`.
 
-### `change-detection` (external `ghcr.io/thedurancode/change`)
-- Watches website content for changes
-- POSTs to `/api/v1/webhooks/change` with HMAC sig
+### `change-detection` (external `ghcr.io/dgtlmoon/changedetection.io`) — DISABLED, future-dev
+
+- **Currently commented out** in `docker-compose.yml`. The original entry had a fabricated image name (`ghcr.io/thedurancode/change`) that never pulled; the stub has been corrected (proper image, `/datastore` volume mount, localhost-bound port 5000) and parked behind a multi-line comment so it's uncomment-and-go when ready.
+- **Receiver side (api) is production-ready** and stays enabled: `services/api/src/routes/webhooks.ts` HMAC-verifies POSTs at `/api/v1/webhooks/change`, resolves URL → `website_id`, inserts into `scan_changes` with `change_type='content_changed'`. No code on the api side blocks on the sender being absent.
+- **Why disabled:** content-change monitoring is only useful with a canonical content baseline to diff against. Today we track *hosting infrastructure* changes only (IP, TLS issuer, CDN, sovereignty tier — derived from `infrastructure_scans` via `compare.py`). Page-content ingestion (planned `website_snapshots` table) is the *Stage 1* prerequisite; enabling changedetection.io is *Stage 2*. See [`timeline.md`](./timeline.md) § Later — Politician website content ingestion.
+- **When re-enabled:** the UI has no built-in auth, so the comment block enforces `127.0.0.1:5000` binding (SSH-tunnel for remote access) and notes the integration wrinkle — the API verifier expects HMAC-SHA256 in `X-Signature`, but changedetection.io's Apprise notifications can't compute HMAC natively; likely relax the verifier to also accept bearer-token in `X-Auth` at that point.
 
 ### `uptime-kuma`
 - Independent uptime monitoring UI under `/status/`

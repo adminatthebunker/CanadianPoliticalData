@@ -751,11 +751,16 @@ def _content_hash(text: str) -> str:
     return hashlib.sha256(t.encode("utf-8")).hexdigest()
 
 
-def _pick_speech_type(section: Optional[str]) -> str:
-    """Map section names to speech_type. All AB Hansard is 'floor' — even
-    Committee of the Whole is the Assembly sitting as a committee, not a
-    standing committee. Keep consistent with federal's convention (only
-    `/committees/*` documents get speech_type='committee')."""
+def _pick_speech_type(source_url: str) -> str:
+    """URL-aware speech_type routing. Chamber Hansard PDFs (LADDAR_files/docs/
+    hansards/han/) are 'floor'; standing-committee transcripts (LADDAR_files/
+    docs/committees/<acronym>/) are 'committee'. Mirrors federal's URL-based
+    routing — only standing-committee documents get speech_type='committee';
+    Committee of the Whole stays 'floor' because it's the Assembly itself
+    sitting as a committee."""
+    u = source_url.lower()
+    if "\\docs\\committees\\" in u or "/docs/committees/" in u:
+        return "committee"
     return "floor"
 
 
@@ -780,8 +785,15 @@ async def _upsert_speech(
     parsed: ParsedSpeech,
     politician: Optional[dict],
     raw_text: str,  # Full PDF text — for traceability in speeches.raw
+    committee_acronym: Optional[str] = None,
+    committee_name: Optional[str] = None,
 ) -> str:
-    """Insert/update one speech. Returns 'inserted' | 'updated' | 'skipped'."""
+    """Insert/update one speech. Returns 'inserted' | 'updated' | 'skipped'.
+
+    When `committee_acronym` is set, the raw payload uses the `ab_committee`
+    key shape (with acronym + name) instead of `ab_hansard`. `speech_type`
+    is derived from the source URL in either case.
+    """
     if not parsed.body.strip():
         return "skipped"
 
@@ -798,21 +810,37 @@ async def _upsert_speech(
     # to leave NULL than to mis-attribute; chunking/retrieval won't break.
     politician_id = politician["id"] if politician else None
 
-    raw_payload = {
-        "ab_hansard": {
-            "sitting_date": sitting.sitting_date.isoformat(),
-            "sitting_time": sitting.sitting_time.strftime("%H:%M"),
-            "time_of_day": sitting.time_of_day,
-            "legislature": sitting.legislature,
-            "session": sitting.session,
-            "section": parsed.section,
-            "honorific": parsed.honorific,
-            "surname": parsed.surname,
+    if committee_acronym:
+        raw_payload = {
+            "ab_committee": {
+                "committee_acronym": committee_acronym,
+                "committee_name": committee_name,
+                "meeting_date": sitting.sitting_date.isoformat(),
+                "meeting_time": sitting.sitting_time.strftime("%H:%M"),
+                "time_of_day": sitting.time_of_day,
+                "legislature": sitting.legislature,
+                "session": sitting.session,
+                "section": parsed.section,
+                "honorific": parsed.honorific,
+                "surname": parsed.surname,
+            }
         }
-    }
+    else:
+        raw_payload = {
+            "ab_hansard": {
+                "sitting_date": sitting.sitting_date.isoformat(),
+                "sitting_time": sitting.sitting_time.strftime("%H:%M"),
+                "time_of_day": sitting.time_of_day,
+                "legislature": sitting.legislature,
+                "session": sitting.session,
+                "section": parsed.section,
+                "honorific": parsed.honorific,
+                "surname": parsed.surname,
+            }
+        }
     raw_json = orjson.dumps(raw_payload).decode("utf-8")
 
-    speech_type = _pick_speech_type(parsed.section)
+    speech_type = _pick_speech_type(sitting.url)
     ch = _content_hash(parsed.body)
 
     result = await db.fetchrow(

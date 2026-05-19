@@ -20,11 +20,13 @@ The refresh is purely derivative:
     else 'none' (added 2026-04-30 alongside the federal historical
     backfill from 35-1 to 43-2). The 'blocked' editorial flag is
     preserved (PE, YT) so a re-derive doesn't downgrade a known-blocker.
+  - `committees_status` flips to 'live' if ≥ 5000 committee speeches,
+    'partial' if 1-4999. Below 1, the existing value is preserved —
+    AB's existing 'live' is roster-membership-based (not transcript)
+    and stays untouched until/unless committee transcripts land there.
+    'blocked' is preserved as editorial. Added 2026-05-18 alongside
+    federal committee transcripts ingest.
   - `last_verified_at` = now().
-
-Status flags for committees are NOT touched — those remain editorial
-judgements (e.g. "PE is blocked by a WAF") that don't flow from row
-counts. Edit them directly in SQL or via a future migration.
 """
 from __future__ import annotations
 
@@ -79,6 +81,25 @@ def _votes_status(votes_count: int) -> str:
     return "none"
 
 
+def _committees_status(committee_speech_count: int) -> Optional[str]:
+    """Derive committees_status from speech_type='committee' row count.
+
+    Returns None when there's no transcript signal (count=0), so callers
+    preserve the existing editorial value — AB's pre-existing 'live' is
+    membership-roster-based (not transcripts) and shouldn't be downgraded
+    by this function until/unless AB committee transcripts ship.
+
+    Thresholds reflect committee data density (denser than votes, much
+    less dense than chamber Hansard): ~50 speeches per meeting × ~100
+    meetings per session = ~5K speeches as the 'real archive' floor.
+    """
+    if committee_speech_count >= 5_000:
+        return "live"
+    if committee_speech_count >= 1:
+        return "partial"
+    return None
+
+
 def _bills_status(bills_count: int) -> str:
     """Derive bills_status from bills count.
 
@@ -115,6 +136,11 @@ async def refresh_coverage_stats(db: Database) -> dict[str, dict[str, int]]:
             speeches = await db.fetchval(
                 "SELECT count(*) FROM speeches WHERE level = $1", level,
             )
+            committee_speeches = await db.fetchval(
+                "SELECT count(*) FROM speeches "
+                "WHERE level = $1 AND speech_type = 'committee'",
+                level,
+            )
             pols = await db.fetchval(
                 "SELECT count(*) FROM politicians WHERE level = $1", level,
             )
@@ -127,6 +153,12 @@ async def refresh_coverage_stats(db: Database) -> dict[str, dict[str, int]]:
         else:
             speeches = await db.fetchval(
                 "SELECT count(*) FROM speeches WHERE level = $1 AND province_territory = $2",
+                level, prov,
+            )
+            committee_speeches = await db.fetchval(
+                "SELECT count(*) FROM speeches "
+                "WHERE level = $1 AND province_territory = $2 "
+                "  AND speech_type = 'committee'",
                 level, prov,
             )
             pols = await db.fetchval(
@@ -145,7 +177,8 @@ async def refresh_coverage_stats(db: Database) -> dict[str, dict[str, int]]:
         current = await db.fetchrow(
             """
             SELECT speeches_count, politicians_count, bills_count,
-                   votes_count, hansard_status, votes_status, bills_status
+                   votes_count, hansard_status, votes_status, bills_status,
+                   committees_status
               FROM jurisdiction_sources
              WHERE jurisdiction = $1
             """,
@@ -173,50 +206,66 @@ async def refresh_coverage_stats(db: Database) -> dict[str, dict[str, int]]:
         if current["bills_status"] == "blocked":
             new_bills_status = "blocked"
 
+        new_committees_status = _committees_status(committee_speeches)
+        # Preserve editorial values when there's no transcript signal (AB
+        # roster-based 'live' stays untouched until AB transcripts ship);
+        # 'blocked' is editorial regardless of count.
+        if current["committees_status"] == "blocked":
+            new_committees_status = "blocked"
+        elif new_committees_status is None:
+            new_committees_status = current["committees_status"]
+
         await db.execute(
             """
             UPDATE jurisdiction_sources
-               SET speeches_count    = $2,
-                   politicians_count = $3,
-                   bills_count       = $4,
-                   votes_count       = $5,
-                   hansard_status    = $6,
-                   votes_status      = $7,
-                   bills_status      = $8,
-                   last_verified_at  = now(),
-                   updated_at        = now()
+               SET speeches_count     = $2,
+                   politicians_count  = $3,
+                   bills_count        = $4,
+                   votes_count        = $5,
+                   hansard_status     = $6,
+                   votes_status       = $7,
+                   bills_status       = $8,
+                   committees_status  = $9,
+                   last_verified_at   = now(),
+                   updated_at         = now()
              WHERE jurisdiction = $1
             """,
             code, speeches, pols, bills_ct, votes_ct,
             new_hansard, new_votes_status, new_bills_status,
+            new_committees_status,
         )
 
         report[code] = {
             "speeches": speeches,
+            "committee_speeches": committee_speeches,
             "politicians": pols,
             "bills": bills_ct,
             "votes": votes_ct,
             "hansard_status": new_hansard,
             "votes_status": new_votes_status,
             "bills_status": new_bills_status,
+            "committees_status": new_committees_status,
             "prev_speeches": current["speeches_count"] or 0,
             "prev_bills": current["bills_count"] or 0,
             "prev_votes": current["votes_count"] or 0,
             "prev_hansard_status": current["hansard_status"],
             "prev_votes_status": current["votes_status"],
             "prev_bills_status": current["bills_status"],
+            "prev_committees_status": current["committees_status"],
         }
         log.info(
-            "coverage %s: speeches %d→%d politicians→%d bills %d→%d votes %d→%d "
-            "hansard %s→%s votes %s→%s bills %s→%s",
+            "coverage %s: speeches %d→%d (committee %d) politicians→%d "
+            "bills %d→%d votes %d→%d "
+            "hansard %s→%s votes %s→%s bills %s→%s committees %s→%s",
             code,
-            current["speeches_count"] or 0, speeches,
+            current["speeches_count"] or 0, speeches, committee_speeches,
             pols,
             current["bills_count"] or 0, bills_ct,
             current["votes_count"] or 0, votes_ct,
             current["hansard_status"], new_hansard,
             current["votes_status"], new_votes_status,
             current["bills_status"], new_bills_status,
+            current["committees_status"], new_committees_status,
         )
 
     return report

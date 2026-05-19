@@ -253,27 +253,42 @@ async def chunk_pending(
     db: Database,
     *,
     limit_speeches: Optional[int] = None,
+    source_system: Optional[str] = None,
+    speech_type: Optional[str] = None,
 ) -> ChunkStats:
     """Find speeches without chunks and produce them.
 
     Idempotent via (speech_id, chunk_index) unique; callers can re-run
     safely. Existing speech_chunks rows are never deleted here —
     re-chunking after a code change is a separate admin task.
+
+    Optional `source_system` / `speech_type` filters bypass the
+    spoken_at-DESC global queue — useful for getting a freshly-ingested
+    provincial pipeline searchable end-of-day without waiting for the
+    daily cron to drain the corpus-wide unchunked backlog.
     """
     stats = ChunkStats()
-    query = """
+    where_clauses = ["c.id IS NULL"]
+    params: list = []
+    if source_system is not None:
+        params.append(source_system)
+        where_clauses.append(f"s.source_system = ${len(params)}")
+    if speech_type is not None:
+        params.append(speech_type)
+        where_clauses.append(f"s.speech_type = ${len(params)}")
+    query = f"""
         SELECT s.id, s.text, s.language, s.politician_id, s.level,
                s.province_territory, s.spoken_at, s.session_id,
                s.party_at_time
         FROM speeches s
         LEFT JOIN speech_chunks c ON c.speech_id = s.id
-        WHERE c.id IS NULL
+        WHERE {' AND '.join(where_clauses)}
         ORDER BY s.spoken_at DESC NULLS LAST, s.id
     """
     if limit_speeches:
         query += f" LIMIT {int(limit_speeches)}"
 
-    rows = await db.fetch(query)
+    rows = await db.fetch(query, *params)
     for row in rows:
         stats.speeches_seen += 1
         chunks = split_into_chunks(row["text"] or "")

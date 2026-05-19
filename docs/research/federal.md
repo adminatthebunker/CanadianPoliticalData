@@ -67,12 +67,12 @@ docker compose run --rm scanner python -m src ingest-federal-hansard \
 
 ## Committee Activity
 
-- **Source URL(s):** openparliament.ca `/committees/` walk; canonical upstream https://www.ourcommons.ca/Committees/en/Home.
-- **Format:** JSON per committee meeting (memberships, transcripts, reports).
-- **Data available:** All standing committees + standing joint committees + special committees with member rosters and meeting minutes.
-- **Overlap with existing scanner:** `ingest-committees-federal` CLI already exists.
+- **Source URL(s):** openparliament.ca `/committees/meetings/?format=json` for discovery, `/speeches/?document__url=/committees/<acronym>/<parl>-<sess>/<n>/` for transcripts; canonical upstream https://www.ourcommons.ca/Committees/en/Home.
+- **Format:** JSON, identical payload shape to chamber Hansard speeches.
+- **Data available:** All standing committees + standing joint committees + special committees. Two orthogonal slices: **memberships** (rosters) and **evidence** (transcripts).
+- **Status:** ✅ **TRANSCRIPTS LIVE (2026-05-18).** `ingest-federal-committees` Click command (extends `federal_hansard.py` with `fetch_committee_meetings` + `ingest_committees` — same openparliament fabric, same `_pick_speech_type` discriminator, same `_upsert_speech` path). Lands rows with `speech_type='committee'`. Daily 11:20 UTC schedule slot with `since_days=14`. P45-S1 first run: 5,471 speeches across 30 meetings, 100% politician-FK on MP turns; witnesses (non-MP departmental officials, civil-society reps) land as `politician_id=NULL` rows by design (no schema decision encoded — same shape as unresolved floor speakers). **`committees_status`: federal `'none'` → `'live'`** (auto-derived by `coverage_stats.py` at ≥5,000 committee speeches; preserves AB's editorial 'live' and YT's editorial 'blocked'). Memberships are a separate (orthogonal) workstream — `ingest-committees-federal` CLI already exists but is not on a schedule.
 - **Difficulty (1–5):** **2**.
-- **Notes:** Committee Hansard ("Evidence") is a separate document type from chamber Hansard — same pipeline-able shape, but currently de-prioritized while we get chamber speeches end-to-end.
+- **Notes:** Discovery filters on `has_evidence=true` to skip meetings pending transcription (transcripts publish on irregular delays after meetings; the 14-day forward-incremental overlap re-visits recent meetings until evidence lands). `--include-in-camera` flag exists but rarely useful (in-camera meetings almost never have evidence published). Historical backfill (P39-P44 openparliament committee floor) deferred as a separate cycle. → `~/.claude/plans/hay-dude-i-know-bubbly-sun.md`
 
 ## Existing third-party scrapers / data sources
 
@@ -121,7 +121,8 @@ docker compose run --rm scanner python -m src ingest-federal-hansard \
 - [x] **Votes ingestion live (2026-04-30)** — 4,481 votes / 1.45M positions / 2006-2024 / 99.98% pol-FK via openparliament_slug. Daily 11:30 UTC schedule.
 - [ ] Federal historical bills ingestion — would lift vote-to-bill linkage from 10.2% (44-1 only) to ~50% corpus-wide via trivial UPDATE pass. Separate workstream.
 - [ ] Pre-2004 archival votes (parl.canadiana.ca scans) — would require OCR + heavy parsing; deferred indefinitely.
-- [ ] Committees full pipeline (`ingest-committees-federal` exists; not on a schedule)
+- [x] **Committee transcripts (evidence) — live 2026-05-18.** `ingest-federal-committees` daily 11:20 UTC; 5,471 P45-S1 speeches on first ingest; `committees_status='live'`. Historical backfill (P39-P44) deferred.
+- [ ] Committee memberships full pipeline (`ingest-committees-federal` exists; not on a schedule — orthogonal to transcripts)
 
 ## Open issues
 
