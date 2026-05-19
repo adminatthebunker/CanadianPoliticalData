@@ -15,6 +15,9 @@ import { resolvePhotoUrl } from "../../lib/photos.js";
 import { config } from "../../config.js";
 import publicV1SearchRoutes from "./search.js";
 import publicV1ExportsRoutes from "./exports.js";
+import publicV1BillsRoutes from "./bills.js";
+import publicV1VotesRoutes from "./votes.js";
+import publicV1CommitteesRoutes from "./committees.js";
 
 /**
  * Public developer API surface (/api/public/v1/*).
@@ -194,6 +197,14 @@ export default async function publicV1Routes(app: FastifyInstance) {
   // requireApiKey + requireScope('read:bulk') gate; same auth seam
   // as the search routes but orthogonal axis (scope vs tier).
   await app.register(publicV1ExportsRoutes);
+
+  // Bills / votes / committee-meetings — free-tier, requireApiKey
+  // only. Proxies to /api/v1/bills, /api/v1/votes, and
+  // /api/v1/committees/meetings via app.inject(). No TEI semaphore
+  // (none of these endpoints touch the embed service).
+  await app.register(publicV1BillsRoutes);
+  await app.register(publicV1VotesRoutes);
+  await app.register(publicV1CommitteesRoutes);
 
   // ── GET /api/public/v1/coverage ───────────────────────────────
   a.get(

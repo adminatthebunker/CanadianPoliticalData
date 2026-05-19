@@ -38,6 +38,9 @@ import creditsRoutes from "./routes/credits.js";
 import stripeWebhookRoutes from "./routes/stripe-webhook.js";
 import rateLimitRequestRoutes from "./routes/rate-limit-requests.js";
 import reportsRoutes, { meReportsRoutes } from "./routes/reports.js";
+import billRoutes from "./routes/bills.js";
+import voteRoutes from "./routes/votes.js";
+import committeeMeetingRoutes from "./routes/committee-meetings.js";
 
 const app = Fastify({
   logger: {
@@ -109,6 +112,9 @@ await app.register(webhookRoutes, { prefix: "/api/v1/webhooks" });
 await app.register(ogRoutes, { prefix: "/api/v1/og" });
 await app.register(socialsRoutes, { prefix: "/api/v1/socials" });
 await app.register(committeesRoutes, { prefix: "/api/v1/committees" });
+await app.register(committeeMeetingRoutes, { prefix: "/api/v1/committees" });
+await app.register(billRoutes, { prefix: "/api/v1/bills" });
+await app.register(voteRoutes, { prefix: "/api/v1/votes" });
 await app.register(coverageRoutes, { prefix: "/api/v1/coverage" });
 await app.register(searchRoutes, { prefix: "/api/v1/search" });
 await app.register(projectionRoutes, { prefix: "/api/v1/projections" });

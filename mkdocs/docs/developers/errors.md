@@ -174,7 +174,7 @@ Content-Type: application/json
 
 Respect `Retry-After`. The semaphore drains as in-flight requests
 complete (typically <1s each); 5 seconds is usually enough for the
-queue to clear. See [Rate limiting](./rate-limiting.md#tei-semaphore-on-paid-search)
+queue to clear. See [Rate limiting](./rate-limiting.md#tei-semaphore-on-semantic-search)
 for the full semaphore design.
 
 **`code: "embedding_service_unavailable"`** — the underlying TEI

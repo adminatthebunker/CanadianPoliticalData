@@ -42,9 +42,22 @@ issue from your account.
    }
    ```
 
+4. **Or try semantic search** — every authenticated tier (free / dev /
+   pro) can query the full Hansard corpus:
+
+   ```bash
+   curl -H 'Authorization: Bearer cpd_live_…' \
+        'https://canadianpoliticaldata.org/api/public/v1/search/speeches?q=carbon%20tax&limit=3' \
+     | jq '.items[] | {politician_name, party, spoken_at, similarity, text: (.text[:140])}'
+   ```
+
+   Free-tier keys get 5 semantic queries per hour (separate from the
+   general 60/hr API budget) — enough to prototype, not enough to
+   stress the GPU.
+
 That's it. No SDK to install, no credentials to negotiate. **Anonymous
-calls also work** at a lower rate limit — useful for prototyping
-before you commit to creating a key.
+calls also work** for non-search endpoints at a lower rate limit —
+useful for prototyping before you commit to creating a key.
 
 ## Interactive reference
 
@@ -55,21 +68,31 @@ at **[`/api/public/v1/docs/json`](https://canadianpoliticaldata.org/api/public/v
 
 ## Tiers and pricing
 
-| Tier | Rate limit | Cost | How to get it |
-|---|---|---|---|
-| Anonymous | 30 / hr per IP | Free | No setup needed |
-| Free | 60 / hr per key | Free | Create an API key at `/account/api-keys` |
-| Developer | 1,000 / hr per key | $20 / mo | Subscribe at [`/account/billing`](https://canadianpoliticaldata.org/account/billing) |
-| Pro | 10,000 / hr per key | $200 / mo | Subscribe at `/account/billing` |
+Every authenticated key has **two independent rate-limit buckets** —
+one for general API calls and one for the GPU-backed semantic-search
+endpoints:
+
+| Tier | General bucket | Semantic-search bucket | Cost | How to get it |
+|---|---|---|---|---|
+| Anonymous | 30 / hr per IP | not available | Free | No setup needed |
+| Free | 60 / hr per key | **5 / hr per key** | Free | Create an API key at `/account/api-keys` |
+| Developer | 1,000 / hr per key | **100 / hr per key** | $20 / mo | Subscribe at [`/account/billing`](https://canadianpoliticaldata.org/account/billing) |
+| Pro | 10,000 / hr per key | **10,000 / hr per key** | $200 / mo | Subscribe at `/account/billing` |
+
+The two buckets are independent — blowing through your hourly
+semantic-search budget doesn't stop you from calling `/bills` or
+`/coverage`. See [Rate limiting](./rate-limiting.md) for the full
+mechanics including the GPU concurrency semaphore.
 
 When you subscribe, **all of your existing API keys auto-promote** to
-the new tier — no need to mint new keys or update your integrations.
-On cancellation, your tier stays at the higher limit until the period
-end (you keep what you paid for), then drops to the free tier.
+the new tier in both buckets — no need to mint new keys or update
+your integrations. On cancellation, your tier stays at the higher
+limit until the period end (you keep what you paid for), then drops
+to the free tier.
 
 ## What's in v1.0
 
-Nine endpoints across four tags:
+19 endpoints across eight tags:
 
 **Reference data** (any tier including anonymous):
 
@@ -82,6 +105,17 @@ Nine endpoints across four tags:
   websites (hosting provider, country, CDN/CMS, sovereignty tier 1-6)
   and constituency boundary GeoJSON.
 
+**Legislative data** (free tier; authenticated):
+
+- **`GET /bills`**, **`GET /bills/{id}`**, **`GET /bills/{id}/events`**,
+  **`GET /bills/{id}/sponsors`** — federal + provincial legislation
+  with stage-transition events and FK-joined sponsors. See [Bills](./bills.md).
+- **`GET /votes`**, **`GET /votes/{id}`**, **`GET /votes/{id}/positions`** —
+  recorded chamber votes (divisions, voice, acclamation, consensus) with
+  per-politician position breakdowns. See [Votes](./votes.md).
+- **`GET /committees/meetings`** — distinct committee meetings derived
+  from the speeches table. See [Committees](./committees.md).
+
 **Search auxiliaries** (any tier including anonymous; no embeddings, fast lookups):
 
 - **`GET /search/sessions`** — parliament + session catalog for the
@@ -90,23 +124,25 @@ Nine endpoints across four tags:
 - **`GET /search/meta`** — backfill-progress meta (`total_chunks`,
   `embedded_chunks`, `coverage`).
 
-**Semantic search** (PRO tier only — TEI-embedded; subject to a shared
-concurrency semaphore):
+**Semantic search** (any authenticated tier; uses the separate
+semantic-search rate-limit bucket — free=5/hr, dev=100/hr,
+pro=10000/hr — and the shared TEI concurrency semaphore):
 
 - **`GET /search/speeches`** — hybrid HNSW + BM25 search over the full
   Hansard corpus. Two modes: `timeline` (default; flat chunk list with
   per-result `similarity` score) and `politician` (grouped by
-  speaker, with their top-N matching chunks).
+  speaker, with their top-N matching chunks). Supports
+  `speech_type=committee` to scope to committee transcripts.
 - **`GET /search/speeches/count`** — count-only sibling for off-path
   count staging when paginating large result sets.
 - **`GET /search/facets`** — aggregations (party, politician, year,
   language) over the top-N candidate pool. Powers analytics tabs.
 
-The pro-tier search routes share a TEI semaphore (max 2 concurrent +
-6 queued = 8 slots total) — past that they 503 with `Retry-After: 5`
-to prevent any single client from starving the GPU. See
-[Rate limiting](./rate-limiting.md#tei-semaphore-on-paid-search) for
-details.
+All three semantic-search routes share a TEI semaphore (max 2
+concurrent + 6 queued = 8 slots total) — past that they 503 with
+`Retry-After: 5` to prevent any single client from starving the GPU.
+See [Rate limiting](./rate-limiting.md#tei-semaphore-on-semantic-search)
+for details on both the per-tier bucket and the GPU semaphore.
 
 **Bulk export** (`read:bulk` scope required — orthogonal to tier):
 
@@ -128,6 +164,9 @@ API surface adds auth + per-key metering. See
   creation, rotation, revocation, scopes.
 - **[Rate limiting](./rate-limiting.md)** — per-tier limits, headers,
   429 handling, TEI semaphore.
+- **[Bills](./bills.md)** — legislation, events, sponsors.
+- **[Votes](./votes.md)** — chamber votes + per-politician positions.
+- **[Committees](./committees.md)** — committee meetings and transcript search.
 - **[Bulk export](./bulk-export.md)** — `read:bulk` scope,
   `pg_dump` artifacts, restore guide.
 - **[Errors](./errors.md)** — 400 / 401 / 403 / 404 / 429 / 503

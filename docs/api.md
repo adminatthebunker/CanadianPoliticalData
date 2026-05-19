@@ -208,6 +208,44 @@ Backfill-progress surface for the UI banner above results.
 { "total_chunks": 1480000, "embedded_chunks": 1480000, "coverage": 1.0 }
 ```
 
+## Bills
+
+Federal + provincial legislation. The public-API pair under `/api/public/v1/bills/*` proxies these via `app.inject()`.
+
+### `GET /bills`
+Filters: `level`, `province_territory`, `session_id`, `status`, `sponsor_politician_id`, `q` (substring of `title`/`short_title`/`bill_number`), `introduced_from`, `introduced_to`. Pagination: `page` (default 1), `limit` (default 50, max 100). Returns `{ items, page, limit, total, pages }`. Each item joins `legislative_sessions` for parliament/session labels and denormalizes `events_count` + `sponsors_count`.
+
+### `GET /bills/:id`
+Single bill + session labels + denormalized `events_count`, `sponsors_count`, `votes_count`. 404 on unknown UUID. Returns `{ bill }`.
+
+### `GET /bills/:id/events`
+Append-only stage-transition log (`first_reading`, `second_reading`, `committee`, `third_reading`, `royal_assent`, …). Ordered by `event_date ASC`. Returns `{ bill_id, events }`.
+
+### `GET /bills/:id/sponsors`
+Sponsor list joined to `politicians`. Returns `{ bill_id, sponsors }` with `sponsor_name_raw`, `role`, `ordering`, plus FK-joined `politician_name`/`politician_party`/`openparliament_slug` when resolved.
+
+## Votes
+
+Recorded chamber votes — divisions, voice votes, acclamations, consensus events. Public-API pair under `/api/public/v1/votes/*`.
+
+### `GET /votes`
+Filters: `level`, `province_territory`, `session_id`, `bill_id`, `result` (`passed`/`defeated`/`tied`/`withdrawn`/`deferred`), `vote_type` (`division`/`voice`/`acclamation`/`consensus`), `occurred_from`, `occurred_to`. Pagination: `page`, `limit` (max 100). Returns `{ items, page, limit, total, pages }`. Each item carries denormalized session + bill labels and a `positions_count`.
+
+### `GET /votes/:id`
+Single vote with full `motion_text`, `ayes`/`nays`/`abstentions`, bill linkage. Returns `{ vote }`.
+
+### `GET /votes/:id/positions`
+Per-politician position breakdown — not paginated (bounded ~350 rows per vote). Returns `{ vote_id, positions }`. May be empty for `vote_type='voice'`/`'acclamation'`/`'consensus'` (upstream doesn't report individual positions).
+
+## Committee meetings
+
+Derived view over `speeches` WHERE `speech_type='committee'`. There is no `committee_meetings` table — meetings are inferred per-row from `source_url`.
+
+### `GET /committees/meetings`
+Filters: `level`, `province_territory`, `source_system`, `from`, `to`. Pagination: `page`, `limit` (max 100). Returns `{ items, page, limit, total, pages }` with `{ meeting_url, level, province_territory, source_system, date, first_spoken_at, last_spoken_at, speech_count }`.
+
+For federal openparliament source URLs the `meeting_url` is the URL with the trailing per-speaker slug stripped (`https://openparliament.ca/committees/justice/45-1/29/`); for AB/BC it's the full `source_url`. For full-text search inside transcripts use `/search/speeches?speech_type=committee`.
+
 ## Organizations
 
 ### `GET /organizations`
@@ -582,7 +620,7 @@ Body: `{ "status": "<status>", "admin_notes"?: "<= 2000 chars or null>" }`. `res
 
 ## Public API (`/api/public/v1/*`)
 
-A separate, third-party-friendly tree under `/api/public/v1/*`, derived from the v1.0 internal contract. **Eleven endpoints across five tags** as of 2026-05-12 (phases 1a + 1b + 1c + 1d + 1e). Plan: [`docs/plans/public-developer-api.md`](./plans/public-developer-api.md).
+A separate, third-party-friendly tree under `/api/public/v1/*`, derived from the v1.0 internal contract. **19 endpoints across eight tags** as of 2026-05-19 (phases 1a + 1b + 1c + 1d + 1e shipped 2026-05-12; bills + votes + committee-meetings added 2026-05-19). Plan: [`docs/plans/public-developer-api.md`](./plans/public-developer-api.md).
 
 **The canonical reference is auto-generated:**
 - **Swagger UI** (interactive, "Try it out"): [`/api/public/v1/docs/`](https://canadianpoliticaldata.org/api/public/v1/docs/)
@@ -597,18 +635,18 @@ This section is the operator-side overview only; the auto-generated specs above 
 - **Tier** (billing level): `free` / `dev` ($20/mo) / `pro` ($200/mo). Governs rate limits + access to expensive-by-default endpoints. Subscribe at `/account/billing`. Subscribing auto-promotes ALL of a user's existing keys to the new tier; cancellation keeps the higher tier until period end.
 - **Scope** (capability flags): `read:public` (implicit baseline on every key) / `read:bulk` (opt-in at create time). Governs access to opt-in surfaces like bulk export.
 
-**Rate limits (per hour, per key or per IP for anonymous):**
+**Rate limits (per hour, per key or per IP for anonymous).** Every authenticated key has TWO independent buckets — a general one and a semantic-search-only one. Bucket names are `apikey:<id>` and `apikey:<id>:search` in `@fastify/rate-limit`'s in-memory store; anonymous buckets are `ip:<x>` (no semantic bucket — semantic routes `requireApiKey`).
 
-| Tier | Limit | Bucket |
+| Tier | General bucket | Semantic-search bucket |
 |---|---|---|
-| Anonymous | 30 / hr | Source IP |
-| Free | 60 / hr | API key id |
-| Developer | 1,000 / hr | API key id |
-| Pro | 10,000 / hr | API key id |
+| Anonymous | 30 / hr (per source IP) | n/a — requireApiKey blocks |
+| Free | 60 / hr | 5 / hr |
+| Developer | 1,000 / hr | 100 / hr |
+| Pro | 10,000 / hr | 10,000 / hr |
 
-429 responses include `Retry-After`; rate-limited authed callers get a `private.api_key_events` row with `event_type='rate_limited'`.
+429 responses include `Retry-After`; rate-limited authed callers get a `private.api_key_events` row with `event_type='rate_limited'` and the URL in `metadata.endpoint` (so general vs semantic 429s are distinguishable post-hoc).
 
-**TEI semaphore on paid search.** The pro-tier search endpoints (`/search/speeches`, `/search/speeches/count`, `/search/facets`) share a separate concurrency budget — max 2 active embed requests + 6 queued = 8 slots total. Past that, 503 with `code='search_overloaded'` + `Retry-After: 5`. Independent of the per-tier hourly rate limit.
+**TEI semaphore on semantic search.** Orthogonal to the per-tier rate limit. The three semantic endpoints (`/search/speeches`, `/search/speeches/count`, `/search/facets`) share a concurrency budget — max 2 active embed requests + 6 queued = 8 slots total. Past that, 503 with `code='search_overloaded'` + `Retry-After: 5`. Applies regardless of tier — protects the GPU from collective load.
 
 **CORS.** `Access-Control-Allow-Origin: *` for the entire `/api/public/v1/*` tree (vs the credentialed restricted CORS on `/api/v1/*`). Public tokens are bearer-auth, not cookie-auth — wildcard origin is intentional and browser-accepted.
 
@@ -622,13 +660,21 @@ This section is the operator-side overview only; the auto-generated specs above 
 | `GET /search/sessions` | any | read:public | Parliament + session catalog (no TEI) |
 | `GET /search/chunks/:id` | any | read:public | Anchor-chunk lookup by UUID (no TEI) |
 | `GET /search/meta` | any | read:public | Backfill-progress meta (no TEI) |
-| `GET /search/speeches` | **pro** | read:public | Hybrid HNSW + BM25; TEI semaphore |
-| `GET /search/speeches/count` | **pro** | read:public | Count-only sibling; TEI semaphore |
-| `GET /search/facets` | **pro** | read:public | Aggregations over top-N; TEI semaphore |
+| `GET /search/speeches` | free/dev/pro (**semantic bucket**: 5/100/10K per hr) | read:public | Hybrid HNSW + BM25; TEI semaphore |
+| `GET /search/speeches/count` | free/dev/pro (**semantic bucket**) | read:public | Count-only sibling; TEI semaphore |
+| `GET /search/facets` | free/dev/pro (**semantic bucket**) | read:public | Aggregations over top-N; TEI semaphore |
 | `GET /exports/dumps` | any | **read:bulk** | List current `pg_dump --schema=public` artifacts |
 | `GET /exports/dumps/:filename` | any | **read:bulk** | Stream a specific dump file |
+| `GET /bills` | free | read:public | Federal + provincial legislation with filters; proxies `/api/v1/bills` |
+| `GET /bills/:id` | free | read:public | Single bill + denorm counts |
+| `GET /bills/:id/events` | free | read:public | Stage-transition history |
+| `GET /bills/:id/sponsors` | free | read:public | Sponsor list FK-joined to politicians |
+| `GET /votes` | free | read:public | Chamber votes with filters; proxies `/api/v1/votes` |
+| `GET /votes/:id` | free | read:public | Single vote with motion + tallies |
+| `GET /votes/:id/positions` | free | read:public | Per-politician position breakdown |
+| `GET /committees/meetings` | free | read:public | Distinct meetings derived from `speeches` WHERE `speech_type='committee'` |
 
-**Implementation pattern (search routes only):** the public search handlers proxy to the corresponding internal `/api/v1/search/*` route via Fastify's `app.inject()` in-process pipeline. The internal handlers in `services/api/src/routes/search.ts` remain the single source of truth for search semantics; the public surface is a thin tier-gate + scope-gate + semaphore wrapper. Behavior changes there propagate to the public surface for free.
+**Implementation pattern.** All search, bills, votes, and committee-meetings public handlers proxy to the corresponding internal `/api/v1/*` route via Fastify's `app.inject()` in-process pipeline. The shared helper lives at `services/api/src/routes/public/proxy.ts`. Internal handlers remain the single source of truth for route semantics; the public surface is a thin auth-gate + (where relevant) tier/scope/semaphore wrapper. Behavior changes there propagate to the public surface for free.
 
 **Bulk-export files.** The same `pg_dump --schema=public` archives nginx serves anonymously at [`/datasets/`](https://canadianpoliticaldata.org/datasets/). The api container mounts the same directory read-only at `/srv/datasets` (configured via `PUBLIC_DUMPS_DIR`); the `/exports/dumps` endpoints adds auth + per-key metering on top of the existing artifact pipeline. See [`docs/operations.md`](./operations.md) § Public developer API for env-var details.
 

@@ -1,26 +1,27 @@
-import type { FastifyInstance, FastifyRequest } from "fastify";
+import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import {
   requireApiKey,
 } from "../../middleware/api-key-auth.js";
-import { requireTier } from "../../middleware/api-tier-gate.js";
-import { publicRateLimitConfig } from "../../middleware/api-rate-limit.js";
 import {
-  withPublicTeiSlot,
-  PublicSearchOverloadedError,
-} from "../../lib/tei-semaphore.js";
+  publicRateLimitConfig,
+  publicSearchRateLimitConfig,
+} from "../../middleware/api-rate-limit.js";
+import { proxyToInternal } from "./proxy.js";
 
 /**
  * Public search endpoints (/api/public/v1/search/*).
  *
- * Six routes, two tiers of access:
+ * Six routes, two rate-limit buckets:
  *
- *   PRO-tier (requires subscription, hits TEI for query embedding):
+ *   SEMANTIC (TEI-dependent — separate :search-suffixed bucket so
+ *   semantic queries don't drain the general API bucket; per-tier
+ *   limits free=5/hr, dev=100/hr, pro=10000/hr):
  *   - GET /search/speeches         — full search; mirror of internal /api/v1/search/speeches
  *   - GET /search/speeches/count   — count-only sibling
  *   - GET /search/facets           — aggregations over top-N
  *
- *   FREE-tier (no TEI, just lookup tables; rate-limited but accessible):
+ *   AUXILIARIES (no TEI, lookup tables; general per-tier bucket):
  *   - GET /search/sessions         — parliament/session catalog
  *   - GET /search/chunks/:id       — anchor-chunk lookup
  *   - GET /search/meta             — backfill-progress
@@ -38,84 +39,15 @@ import {
  * internal handler calls encodeQuery + executes the SQL. If the
  * queue exceeds capacity (active + pending > maxConcurrent +
  * maxQueue), we 503 immediately with Retry-After rather than
- * making the caller wait minutes.
+ * making the caller wait minutes. This GPU-protection layer is
+ * orthogonal to the per-tier rate-limit bucket.
  *
- * Auth: requireApiKey + requireTier('pro') on the three TEI routes;
- * inherited optionalApiKey from the parent plugin on the three
- * free-tier routes (so callers without a key get the anonymous
- * IP-bucket rate limit).
+ * Auth: requireApiKey on the three semantic routes (anonymous is
+ * blocked at the preHandler stage — anon = IP bucket, trivially
+ * rotated → GPU abuse vector). Auxiliary routes inherit
+ * optionalApiKey from the parent plugin so anon callers get the
+ * IP-bucket rate limit.
  */
-
-// Forward whatever the caller sent as query/params straight through
-// to the internal route. The internal route's zod schema does the
-// actual validation; we don't re-validate here.
-
-function buildQuery(req: FastifyRequest): string {
-  const q = req.query as Record<string, unknown> | undefined;
-  if (!q) return "";
-  const params = new URLSearchParams();
-  for (const [key, value] of Object.entries(q)) {
-    if (value === undefined || value === null) continue;
-    if (Array.isArray(value)) {
-      for (const v of value) {
-        if (v !== undefined && v !== null) params.append(key, String(v));
-      }
-    } else {
-      params.append(key, String(value));
-    }
-  }
-  const s = params.toString();
-  return s ? `?${s}` : "";
-}
-
-interface ProxyOptions {
-  app: FastifyInstance;
-  internalUrl: string;
-  /** When true, wrap the inject in the TEI semaphore. */
-  needsTei: boolean;
-}
-
-async function proxyToInternal(
-  req: FastifyRequest,
-  reply: import("fastify").FastifyReply,
-  opts: ProxyOptions,
-) {
-  const { app, internalUrl, needsTei } = opts;
-  const url = `${internalUrl}${buildQuery(req)}`;
-
-  const doInject = async () => {
-    return app.inject({
-      method: "GET",
-      url,
-      // Don't forward Authorization — internal routes are public-already
-      // for the read-only endpoints we proxy, and the user's API key
-      // would be meaningless to them.
-    });
-  };
-
-  try {
-    const res = needsTei ? await withPublicTeiSlot(doInject) : await doInject();
-    // Pass through the body + status. Forward Cache-Control so
-    // intermediate caches (CDN, browser) can still hit. Don't
-    // forward Set-Cookie or auth-related headers.
-    if (res.headers["cache-control"]) {
-      reply.header("Cache-Control", res.headers["cache-control"]);
-    }
-    reply.code(res.statusCode);
-    return res.json();
-  } catch (err) {
-    if (err instanceof PublicSearchOverloadedError) {
-      reply.header("Retry-After", String(err.retryAfterSeconds));
-      reply.code(err.statusCode);
-      return {
-        code: err.code,
-        error: "Service Unavailable",
-        message: err.message,
-      };
-    }
-    throw err;
-  }
-}
 
 // ── Schemas (input only — response shapes documented in mkdocs) ─────
 
@@ -168,23 +100,29 @@ export default async function publicV1SearchRoutes(app: FastifyInstance) {
   // declaring instance and resolves URLs against the full route table).
   const root = app;
 
-  // ── PRO-tier (TEI-dependent) ──────────────────────────────────
+  // ── Semantic (TEI-dependent; :search-namespaced bucket) ───────
 
   app.get(
     "/search/speeches",
     {
-      preHandler: [requireApiKey, requireTier("pro")],
-      config: { rateLimit: publicRateLimitConfig },
+      preHandler: [requireApiKey],
+      config: { rateLimit: publicSearchRateLimitConfig },
       schema: {
-        tags: ["Search (paid)"],
-        summary: "Hybrid HNSW + BM25 semantic search over Hansard (PRO)",
+        tags: ["Search (semantic)"],
+        summary: "Hybrid HNSW + BM25 semantic search over Hansard",
         description:
           "Mirror of the internal /api/v1/search/speeches endpoint. " +
-          "Pro-tier only — the embed step routes through a shared TEI " +
+          "Available to every authenticated tier — free=5/hr, dev=100/hr, " +
+          "pro=10000/hr — counted against a SEPARATE bucket from the " +
+          "general API rate limit (so semantic queries don't drain the " +
+          "60/hr free or 1000/hr dev budget for /coverage etc., and " +
+          "vice versa). The embed step also routes through a shared TEI " +
           "semaphore (max 2 concurrent + 6 queued; 503 with Retry-After " +
-          "if the queue saturates). Same response shape as the internal " +
-          "route (timeline mode by default; group_by=politician for " +
-          "grouped). See /developers/rate-limiting for the semaphore.",
+          "if the queue saturates) — that GPU-protection layer is " +
+          "orthogonal to the per-tier rate limit. Same response shape " +
+          "as the internal route (timeline mode by default; " +
+          "group_by=politician for grouped). See /developers/rate-limiting " +
+          "for both layers.",
         querystring: speechesQuery,
       },
     },
@@ -200,16 +138,17 @@ export default async function publicV1SearchRoutes(app: FastifyInstance) {
   app.get(
     "/search/speeches/count",
     {
-      preHandler: [requireApiKey, requireTier("pro")],
-      config: { rateLimit: publicRateLimitConfig },
+      preHandler: [requireApiKey],
+      config: { rateLimit: publicSearchRateLimitConfig },
       schema: {
-        tags: ["Search (paid)"],
-        summary: "Count-only sibling for /search/speeches (PRO)",
+        tags: ["Search (semantic)"],
+        summary: "Count-only sibling for /search/speeches",
         description:
           "Returns { total, capped }. Capping kicks in at 10,000 + 1 " +
           "(HNSW LIMIT trick). Use alongside ?include_count=false on " +
-          "/search/speeches to stage count off the hot path. Same " +
-          "TEI semaphore as /search/speeches.",
+          "/search/speeches to stage count off the hot path. Shares the " +
+          "semantic-search rate-limit bucket (free=5/hr, dev=100/hr, " +
+          "pro=10000/hr) and the TEI semaphore with /search/speeches.",
         querystring: speechesQuery,
       },
     },
@@ -225,16 +164,17 @@ export default async function publicV1SearchRoutes(app: FastifyInstance) {
   app.get(
     "/search/facets",
     {
-      preHandler: [requireApiKey, requireTier("pro")],
-      config: { rateLimit: publicRateLimitConfig },
+      preHandler: [requireApiKey],
+      config: { rateLimit: publicSearchRateLimitConfig },
       schema: {
-        tags: ["Search (paid)"],
-        summary: "Aggregations over the top-N candidate pool (PRO)",
+        tags: ["Search (semantic)"],
+        summary: "Aggregations over the top-N candidate pool",
         description:
           "Returns { analyzed_count, analysis_limit, chunk_ids, by_party, " +
           "by_politician, by_year, by_language, keyword_overlap, mode }. " +
           "Optional ?limit query (clamped [10, 500], default 200) sets " +
-          "the candidate-pool size. Same TEI semaphore as /search/speeches.",
+          "the candidate-pool size. Shares the semantic-search rate-limit " +
+          "bucket and the TEI semaphore with /search/speeches.",
         querystring: facetsQuery,
       },
     },

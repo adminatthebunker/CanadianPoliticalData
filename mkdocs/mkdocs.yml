@@ -170,6 +170,9 @@ nav:
       - developers/index.md
       - Authentication: developers/authentication.md
       - Rate limiting: developers/rate-limiting.md
+      - Bills: developers/bills.md
+      - Votes: developers/votes.md
+      - Committees: developers/committees.md
       - Bulk export: developers/bulk-export.md
       - Errors: developers/errors.md
   - Contributors:

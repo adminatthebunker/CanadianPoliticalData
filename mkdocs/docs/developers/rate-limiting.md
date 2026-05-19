@@ -10,17 +10,39 @@ authenticated) or per **source IP** (when anonymous). Limits are
 hourly buckets — the bucket resets one hour after the first request
 in it.
 
+## Two buckets per key
+
+Every authenticated key has **two independent rate-limit buckets**:
+
+- **General bucket** — for navigation endpoints (`/coverage`,
+  `/politicians/:id`, `/bills`, `/votes`, `/committees/meetings`, the
+  free search auxiliaries, exports, …). Higher per-tier limits.
+- **Semantic-search bucket** — for the TEI-embedded endpoints
+  (`/search/speeches`, `/search/speeches/count`, `/search/facets`).
+  Lower per-tier limits because each call hits the GPU.
+
+The two buckets are independent: blowing through your hourly semantic
+budget doesn't stop you from calling `/bills` or `/coverage`, and
+vice-versa.
+
 ## Limits by tier
 
-| Tier | Hourly limit | Bucket key | How to get it |
+| Tier | General bucket | Semantic-search bucket | How to get it |
 |---|---|---|---|
-| Anonymous | 30 | Source IP | No setup — call without an `Authorization` header |
-| Free | 60 | API key id | [Create a key](./authentication.md#creating-a-key) |
-| Developer ($20/mo) | 1,000 | API key id | [Subscribe](https://canadianpoliticaldata.org/account/billing) |
-| Pro ($200/mo) | 10,000 | API key id | [Subscribe](https://canadianpoliticaldata.org/account/billing) |
+| Anonymous | 30 / hr (per source IP) | not available (sign in for free key) | No setup — call without an `Authorization` header |
+| Free | 60 / hr | **5 / hr** | [Create a key](./authentication.md#creating-a-key) |
+| Developer ($20/mo) | 1,000 / hr | **100 / hr** | [Subscribe](https://canadianpoliticaldata.org/account/billing) |
+| Pro ($200/mo) | 10,000 / hr | **10,000 / hr** | [Subscribe](https://canadianpoliticaldata.org/account/billing) |
 
-When you subscribe to dev or pro, **all of your existing keys
-auto-promote** — you don't need to mint new keys.
+All buckets are per-API-key, sliding-hourly. When you subscribe to dev
+or pro, **all of your existing keys auto-promote** in both buckets —
+you don't need to mint new keys.
+
+> **Anonymous semantic search is not available** — the three
+> `/search/speeches*` and `/search/facets` endpoints require an API
+> key. The navigation auxiliaries (`/search/sessions`,
+> `/search/chunks/:id`, `/search/meta`) accept anonymous callers
+> against the general IP bucket.
 
 ## Response headers
 
@@ -119,14 +141,14 @@ Rate-limited authenticated calls are also recorded in an audit log
 (`private.api_key_events.event_type = 'rate_limited'`) so you can
 look back at usage patterns when deciding whether to upgrade.
 
-## TEI semaphore on paid search
+## TEI semaphore on semantic search
 
 The semantic-search endpoints (`/search/speeches`,
 `/search/speeches/count`, `/search/facets`) share a **GPU concurrency
 budget** independent of your tier's rate limit. The embedding step
 runs on a single GPU and serves both interactive search and
 background ingest, so we cap simultaneous embed requests across all
-public-API callers.
+public-API callers regardless of tier.
 
 - **Max concurrent**: 2 embed requests in flight at a time.
 - **Max queued**: 6 requests waiting for a slot.
@@ -148,10 +170,14 @@ Content-Type: application/json
 }
 ```
 
-This is independent of and in addition to the per-tier hourly rate
-limit. A pro-tier caller hitting the 10,000/hr ceiling sees a 429;
-a pro-tier caller hammering 12 search requests in a single second
-sees one 503 for each request past the 8-slot budget.
+This is **independent of** both the general and semantic per-tier
+hourly rate limits — it's a third, orthogonal protection layer:
+
+- Blow through your semantic-search hourly bucket: **429**.
+- Hit the GPU concurrency ceiling because eight callers (regardless of
+  tier) are all firing at once: **503 + `Retry-After: 5`**.
+- Hit your general bucket on `/bills` / `/coverage` etc.: **429** —
+  separate from the semantic bucket.
 
 ## Quotas vs. rate limits
 
