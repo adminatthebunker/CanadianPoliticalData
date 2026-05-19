@@ -286,6 +286,14 @@ def _extract_speaker(body_html: str) -> tuple[str, str]:
 # Applied from the most recent BusinessHeading (or ProceedingsHeading
 # fallback). Unknown sections default to 'floor' with the raw heading
 # preserved in raw.procedural_section for future remapping.
+#
+# Committee-of-the-Whole-family sections (whole / whole house / supply)
+# map to 'floor', not 'committee'. The chamber resolves into committee
+# to debate bill clauses, but it's the same MLAs in the same room and
+# is structurally chamber business. `speech_type='committee'` is reserved
+# for standing-committee transcripts (federal + AB and future provincial
+# pipelines). The section heading is preserved in raw.bc_hansard.section
+# so C-of-W can be re-derived without re-parsing.
 SECTION_TO_TYPE = {
     "oral questions": "question_period",
     "members' statements": "statement",
@@ -298,9 +306,9 @@ SECTION_TO_TYPE = {
     "introduction and first reading of bills": "floor",
     "second reading of bills": "floor",
     "third reading of bills": "floor",
-    "committee of the whole": "committee",
-    "committee of the whole house": "committee",
-    "committee of supply": "committee",
+    "committee of the whole": "floor",
+    "committee of the whole house": "floor",
+    "committee of supply": "floor",
     "report and third reading of bills": "floor",
     "royal assent": "floor",
     "orders of the day": "floor",

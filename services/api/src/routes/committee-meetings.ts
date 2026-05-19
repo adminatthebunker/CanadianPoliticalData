@@ -17,10 +17,12 @@ import { query, queryOne } from "../db.js";
  *   - assembly.ab.ca (AB): one URL per meeting (the PDF transcript)
  *       e.g. https://docs.assembly.ab.ca/.../20260413_1030_01_hs.pdf
  *
- *   - hansard-bc (BC): one URL per document; in practice these are
- *     mostly Committee-of-the-Whole sittings flagged as 'committee' by
- *     the chamber parser, not standing-committee transcripts. See
- *     timeline.md § BC Committee-of-the-Whole misclassification.
+ * Note: the BC chamber-Hansard parser previously emitted Committee-of-the-Whole
+ * sittings as speech_type='committee', leaking 34,386 rows / 235 documents into
+ * this listing. Reclassified to 'floor' on 2026-05-19 (see bc_hansard_parse.py
+ * SECTION_TO_TYPE) — C-of-W is chamber business, not standing-committee work.
+ * The section heading stays in raw.bc_hansard.section if anyone needs to
+ * re-derive it.
  *
  * SQL groups on:
  *   CASE WHEN source_url LIKE '%openparliament.ca/committees/%'
