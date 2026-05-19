@@ -317,6 +317,10 @@ services:
     volumes:
       - ./data:/data:ro
       - ./db:/app/db:ro
+      # Read-only mount of the host scripts/ dir so daily-cron jobs that
+      # consume operator-curated seed files (e.g. ingest-bc-committees
+      # reading scripts/seeds/bc-committee-meetings.json) can find them.
+      - ./scripts:/app/scripts:ro
       - ./services/scanner/src:/app/src
       - assets:/assets
     entrypoint: ["python", "-m", "src", "jobs-worker"]

@@ -618,6 +618,16 @@ async def _upsert_speech(
     page_html: str,
     real_url: str,
     sitting_speaker_name: Optional[str] = None,
+    # Optional committee context. When set, the raw payload key flips from
+    # `bc_hansard` to `bc_committee` and the URL fields point at the
+    # /hdms/file/Committees/ tree rather than /hdms/file/Debates/. Used by
+    # bc_committees.py; floor-Hansard callers leave these None and get the
+    # original behaviour unchanged.
+    committee_acronym: Optional[str] = None,
+    committee_name: Optional[str] = None,
+    meeting_location: Optional[str] = None,
+    committee_blues_url: Optional[str] = None,
+    committee_final_url: Optional[str] = None,
 ) -> str:
     """Insert/update one speech. Returns 'inserted' | 'updated' | 'skipped'."""
     if not parsed.text.strip():
@@ -625,33 +635,54 @@ async def _upsert_speech(
 
     politician_id = politician["id"] if politician else None
 
-    raw_payload = {
-        "bc_hansard": {
-            "sitting_date": ref.sitting_date.isoformat(),
-            "half": ref.half,
-            "parliament": ref.parliament,
-            "session": ref.session,
-            "issue_number": ref.issue_number,
-            "debate_type": ref.debate_type,
-            "variant": parsed.raw.get("variant"),
-            "section": parsed.raw.get("section"),
-            "subject": parsed.raw.get("subject"),
-            "blues_url": HDMS_FILE_URL.format(
-                parl=_parl_slug(ref.parliament),
-                sess=_sess_slug(ref.session),
-                filename=ref.blues_filename,
-            ),
-            "final_url": (
-                HDMS_FILE_URL.format(
+    if committee_acronym:
+        raw_payload = {
+            "bc_committee": {
+                "committee_acronym": committee_acronym,
+                "committee_name": committee_name,
+                "meeting_location": meeting_location,
+                "meeting_date": ref.sitting_date.isoformat(),
+                "half": ref.half,
+                "parliament": ref.parliament,
+                "session": ref.session,
+                "issue_number": ref.issue_number,
+                "variant": parsed.raw.get("variant"),
+                "section": parsed.raw.get("section"),
+                "subject": parsed.raw.get("subject"),
+                "blues_url": committee_blues_url,
+                "final_url": committee_final_url,
+                "fetched_url": real_url,
+                "sitting_speaker": sitting_speaker_name,
+            }
+        }
+    else:
+        raw_payload = {
+            "bc_hansard": {
+                "sitting_date": ref.sitting_date.isoformat(),
+                "half": ref.half,
+                "parliament": ref.parliament,
+                "session": ref.session,
+                "issue_number": ref.issue_number,
+                "debate_type": ref.debate_type,
+                "variant": parsed.raw.get("variant"),
+                "section": parsed.raw.get("section"),
+                "subject": parsed.raw.get("subject"),
+                "blues_url": HDMS_FILE_URL.format(
                     parl=_parl_slug(ref.parliament),
                     sess=_sess_slug(ref.session),
-                    filename=ref.final_filename,
-                ) if ref.final_filename else None
-            ),
-            "fetched_url": real_url,
-            "sitting_speaker": sitting_speaker_name,
+                    filename=ref.blues_filename,
+                ),
+                "final_url": (
+                    HDMS_FILE_URL.format(
+                        parl=_parl_slug(ref.parliament),
+                        sess=_sess_slug(ref.session),
+                        filename=ref.final_filename,
+                    ) if ref.final_filename else None
+                ),
+                "fetched_url": real_url,
+                "sitting_speaker": sitting_speaker_name,
+            }
         }
-    }
     raw_json = orjson.dumps(raw_payload).decode("utf-8")
 
     result = await db.fetchrow(

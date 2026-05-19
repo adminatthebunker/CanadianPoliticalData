@@ -96,7 +96,176 @@ class UrlMeta:
         return time(10, 0) if self.half == "am" else time(13, 30)
 
 
+# Committee transcript filename pattern. Three shapes seen 2026-05-19:
+#   {YYYYMMDD}{am|pm}-{ShortName}-{Location}-Blues.htm   (Blues, modern)
+#   {YYYYMMDD}{am|pm}-{ShortName}-{Location}-n{NNN}.html (Final, modern)
+#   {YYYYMMDD}{am|pm}-{ShortName}-Virtual-n{NNN}.html    (LAMC virtual sittings)
+# ShortName is the committee's filename token (e.g. "Finance", "ChildrenYouth",
+# "DemElecReform"). Location is the meeting city or "Virtual" for remote
+# sittings. Both are captured for raw payload provenance.
+_COMMITTEE_FILENAME_RE = re.compile(
+    r"/(?P<date>\d{8})(?P<half>am|pm)-"
+    r"(?P<short>[A-Za-z]+)-"
+    r"(?P<location>[A-Za-z][A-Za-z0-9_-]*)"
+    r"-(?P<kind>Blues|n(?P<issue>\d+))"
+    r"\.html?$",
+    re.IGNORECASE,
+)
+
+
+def parse_committee_url_meta(url: str) -> "CommitteeUrlMeta":
+    """Parse a BC standing-committee transcript URL.
+
+    Returns CommitteeUrlMeta with sitting_date / half / variant / short_name /
+    location / issue. Raises ValueError if the filename doesn't match — caller
+    should treat as "not a committee transcript" (probably a misuse).
+    """
+    m = _COMMITTEE_FILENAME_RE.search(url)
+    if not m:
+        raise ValueError(f"not a recognized BC committee filename: {url}")
+    d = datetime.strptime(m.group("date"), "%Y%m%d").date()
+    kind_lower = m.group("kind").lower()
+    variant = "blues" if kind_lower == "blues" else "final"
+    issue = m.group("issue")
+    return CommitteeUrlMeta(
+        sitting_date=d,
+        half=m.group("half").lower(),
+        variant=variant,
+        short_name=m.group("short"),
+        location=m.group("location"),
+        issue=int(issue) if issue else None,
+    )
+
+
+@dataclass
+class CommitteeUrlMeta:
+    sitting_date: date
+    half: str  # 'am' | 'pm'
+    variant: str  # 'blues' | 'final'
+    short_name: str  # filename token: "Finance", "ChildrenYouth"
+    location: str    # "Nelson", "Victoria", "Virtual"
+    issue: Optional[int] = None
+
+    @property
+    def default_hhmm(self) -> time:
+        return time(10, 0) if self.half == "am" else time(13, 30)
+
+
+# Committee-transcript header metadata extracted from the title-page HTML.
+# All fields are best-effort; missing values fall through to URL-derived
+# defaults (caller passes those in).
+@dataclass
+class CommitteeMeta:
+    committee_name: Optional[str]   # e.g. "Finance and Government Services" (from <title>)
+    location: Optional[str]         # e.g. "Nelson"; "Virtual" for remote LAMC sittings
+    meeting_date: Optional[date]    # from <meta name="han.startDate">
+    start_time: Optional[time]      # from <meta name="han.startTime">
+    issue_number: Optional[int]     # from <title> "Issue No. N"
+    parliament: Optional[str]       # "43rd"
+    session: Optional[str]          # "First" / "Second"
+
+
+_HAN_META_RE = re.compile(
+    r'<meta[^>]+name="han\.(?P<key>[a-zA-Z]+)"[^>]+content="(?P<val>[^"]*)"',
+    re.IGNORECASE,
+)
+_COMMITTEE_TITLE_RE = re.compile(
+    r"<title>\s*Hansard\s*[—\-]\s*(?P<name>[^—\-<]+?)\s*[—\-]\s*"
+    r"(?P<datestr>[A-Z][a-z]+,\s+[A-Z][a-z]+\s+\d{1,2},\s+\d{4})\s*,?\s*"
+    r"(?:Issue\s+No\.\s+(?P<issue>\d+))?",
+    re.IGNORECASE,
+)
+_LOCATION_TAG_RE = re.compile(
+    r'<(?:p|span)[^>]+class="Location[^"]*"[^>]*>\s*([^<]+?)\s*<',
+    re.IGNORECASE,
+)
+
+
+def extract_committee_meta(html_text: str) -> CommitteeMeta:
+    """Pull committee_name / location / date / time from a committee
+    transcript's title-page HTML. Each field is independent; whatever
+    we can recover comes back, rest is None.
+
+    Field sources (verified 2026-05-19 across FGS / CAY / DEM transcripts):
+      committee_name → <title>Hansard — {COMMITTEE} — {DATE} , Issue No. N
+      location       → <p class="Location">{CITY}</p>
+      meeting_date   → <meta name="han.startDate" content="YYYYMMDD">
+      start_time     → <meta name="han.startTime" content="HHMM"> (1226 = 12:26)
+      issue_number   → trailing "Issue No. N" in <title>
+      parliament     → <meta name="han.parliament" content="43rd">
+      session        → <meta name="han.session" content="First">
+    """
+    # han.* meta tags
+    metas: dict[str, str] = {}
+    for m in _HAN_META_RE.finditer(html_text):
+        metas[m.group("key").lower()] = m.group("val").strip()
+
+    meeting_date: Optional[date] = None
+    sd = metas.get("startdate", "")
+    if re.fullmatch(r"\d{8}", sd):
+        try:
+            meeting_date = datetime.strptime(sd, "%Y%m%d").date()
+        except ValueError:
+            meeting_date = None
+
+    start_time: Optional[time] = None
+    st = metas.get("starttime", "")
+    if re.fullmatch(r"\d{3,4}", st):
+        # "1226" → 12:26 ; "905" → 9:05
+        st = st.zfill(4)
+        try:
+            start_time = time(int(st[:2]), int(st[2:]))
+        except ValueError:
+            start_time = None
+
+    committee_name: Optional[str] = None
+    issue_number: Optional[int] = None
+    tm = _COMMITTEE_TITLE_RE.search(html_text)
+    if tm:
+        committee_name = tm.group("name").strip()
+        if tm.group("issue"):
+            try:
+                issue_number = int(tm.group("issue"))
+            except ValueError:
+                pass
+
+    location: Optional[str] = None
+    lm = _LOCATION_TAG_RE.search(html_text[:8000])
+    if lm:
+        location = lm.group(1).strip()
+
+    return CommitteeMeta(
+        committee_name=committee_name,
+        location=location,
+        meeting_date=meeting_date,
+        start_time=start_time,
+        issue_number=issue_number,
+        parliament=metas.get("parliament"),
+        session=metas.get("session"),
+    )
+
+
 def parse_url_meta(url: str) -> UrlMeta:
+    # Committee transcripts share the floor parser internals (same markup
+    # taxonomy, same date/half semantics) — return a UrlMeta with the same
+    # shape so extract_speeches can run unmodified. Committee-only fields
+    # (short_name, location) are recovered separately via
+    # parse_committee_url_meta / extract_committee_meta when callers need
+    # them for the raw payload.
+    cm = _COMMITTEE_FILENAME_RE.search(url)
+    if cm:
+        d = datetime.strptime(cm.group("date"), "%Y%m%d").date()
+        kind_lower = cm.group("kind").lower()
+        variant = "blues" if kind_lower == "blues" else "final"
+        issue = cm.group("issue")
+        return UrlMeta(
+            sitting_date=d,
+            half=cm.group("half").lower(),
+            variant=variant,
+            issue=int(issue) if issue else None,
+            volume=None,
+        )
+
     m = _URL_FILENAME_RE.search(url)
     if m:
         d = datetime.strptime(m.group("date"), "%Y%m%d").date()

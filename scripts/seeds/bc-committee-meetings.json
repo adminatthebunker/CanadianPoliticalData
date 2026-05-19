@@ -1,0 +1,57 @@
+{
+  "_about": [
+    "BC standing-committee transcript seed list.",
+    "",
+    "Operator-curated catalog of known BC standing/special-committee transcript",
+    "URLs on lims.leg.bc.ca/hdms/file/Committees/{parl}{sess}/{code}/.",
+    "",
+    "WHY THIS EXISTS:",
+    "BC has no structured listing endpoint for standing-committee transcripts.",
+    "Probed exhaustively on 2026-05-19 — LIMS HDMS /hdms/committees/{parl}{sess}",
+    "returns 404; HDMS directory listings return 404; LIMS GraphQL has zero",
+    "committee fields; leg.bc.ca per-committee pages are SPA-rendered with no",
+    "meeting dates in static HTML; Drupal /jsonapi/ + ?_format=json are both",
+    "disabled. Per-transcript URL fetch works cleanly (200 OK, ~140KB HTML)",
+    "once the specific filename is known, so v1 ships with an operator-curated",
+    "seed: the ingester reads this file and is correct + idempotent over",
+    "whatever set it sees.",
+    "",
+    "ADDING NEW MEETINGS:",
+    "1. Find the transcript URL (Google site:lims.leg.bc.ca, or paste a known",
+    "   URL from leg.bc.ca's committee page).",
+    "2. Append to the appropriate committee's transcript_urls list.",
+    "3. Re-run ingest-bc-committees (idempotent on canonical_url).",
+    "",
+    "KNOWN COMMITTEE CODES (probed 2026-05-19 via site:lims.leg.bc.ca):",
+    "  cay   - Children and Youth                       -> ChildrenYouth",
+    "  fgs   - Finance and Government Services          -> Finance",
+    "  dem   - Democratic and Electoral Reform          -> DemElecReform",
+    "  pac   - Public Accounts                          -> PublicAccounts (historical)",
+    "  health - Health                                  -> Health (historical, 40th P)",
+    "  rpa   - Reforming the Police Act                 -> varies (historical, 42nd-2nd)",
+    "  rpea  - Review Provisions of the Election Act    -> ElectionActReview (historical)",
+    "Special-prefix shape not supported in v1:",
+    "  42nd-LAMC - Legislative Assembly Management Committee"
+  ],
+  "parliament": 43,
+  "session": 1,
+  "committees": {
+    "fgs": {
+      "transcript_urls": [
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/fgs/20250609am-Finance-Nelson-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/fgs/20250610pm-Finance-Cranbrook-Blues.htm"
+      ]
+    },
+    "cay": {
+      "transcript_urls": [
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/cay/20250528am-ChildrenYouth-Victoria-Blues.htm"
+      ]
+    },
+    "dem": {
+      "transcript_urls": [
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/dem/20250714am-DemElecReform-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/dem/20250716am-DemElecReform-Victoria-Blues.htm"
+      ]
+    }
+  }
+}

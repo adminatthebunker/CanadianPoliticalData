@@ -3382,6 +3382,106 @@ def cmd_ingest_ab_committees(
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 
 
+@cli.command("ingest-bc-committees")
+@click.option("--parliament", type=int, default=None,
+              help="BC Parliament number (e.g. 43). Default: latest in legislative_sessions.")
+@click.option("--session", type=int, default=None,
+              help="Session within the parliament (e.g. 1). Default: latest.")
+@click.option("--since", type=str, default=None,
+              help="Only fetch meetings on/after this ISO date (YYYY-MM-DD).")
+@click.option("--since-days", type=int, default=None,
+              help="Forward-incremental: clamp --since to today - N days.")
+@click.option("--until", type=str, default=None,
+              help="Only fetch meetings on/before this ISO date (YYYY-MM-DD).")
+@click.option("--limit-meetings", type=int, default=None,
+              help="Cap on meetings fetched (newest-first).")
+@click.option("--limit-speeches", type=int, default=None,
+              help="Cap on TOTAL speeches ingested. Smoke-test friendly.")
+@click.option("--committees", "committees", type=str, default=None,
+              help="Optional comma-separated committee codes (e.g. 'fgs,cay'). "
+                   "Default: all in seed file.")
+@click.option("--seed-file", "seed_file", type=str, default=None,
+              help="Override seed JSON path. Default: scripts/seeds/"
+                   "bc-committee-meetings.json")
+@click.pass_context
+def cmd_ingest_bc_committees(
+    ctx: click.Context, parliament, session, since, since_days, until,
+    limit_meetings, limit_speeches, committees, seed_file,
+) -> None:
+    """Ingest BC standing-committee transcripts (HTML from lims.leg.bc.ca/hdms/file/Committees).
+
+    Lands rows in `speeches` with `speech_type='committee'`. v1 uses an
+    operator-curated seed file (scripts/seeds/bc-committee-meetings.json)
+    for transcript-URL discovery because BC has no structured listing API
+    for standing-committee meetings — see the module docstring for the
+    probe rationale.
+
+    Speaker resolution falls back to chamber-wide BC lookup since
+    `politician_committees` has no BC rows; witness over-attribution is
+    a known v1 limitation that lands when membership ingest lands.
+
+    When --parliament/--session are omitted, resolves the current BC
+    session from legislative_sessions. The seed file's own parliament/
+    session block wins on mismatch (with a warning).
+    """
+    from pathlib import Path as _Path
+    from .legislative.bc_committees import (
+        ingest_committees as _ingest_committees,
+        DEFAULT_SEED_PATH,
+    )
+    from .legislative.current_session import current_session
+    from .legislative._forward import parse_iso_date, clamp_since_with_days
+
+    effective_since = clamp_since_with_days(parse_iso_date(since), since_days)
+    committees_list = (
+        [c.strip() for c in committees.split(",") if c.strip()]
+        if committees
+        else None
+    )
+    seed_path = _Path(seed_file) if seed_file else DEFAULT_SEED_PATH
+
+    async def _wrap(db: Database) -> None:
+        nonlocal parliament, session
+        if parliament is None or session is None:
+            parliament, session = await current_session(
+                db, level="provincial", province_territory="BC",
+            )
+            console.print(
+                f"[dim]auto-resolved current BC session: "
+                f"P{parliament}-S{session}[/dim]"
+            )
+        if since_days is not None and effective_since is not None:
+            console.print(
+                f"[dim]forward-incremental: --since clamped to "
+                f"{effective_since.isoformat()} (since_days={since_days})[/dim]"
+            )
+        stats = await _ingest_committees(
+            db,
+            parliament=parliament,
+            session=session,
+            since=effective_since,
+            until=parse_iso_date(until),
+            limit_meetings=limit_meetings,
+            limit_speeches=limit_speeches,
+            committees=committees_list,
+            seed_path=seed_path,
+        )
+        console.print(
+            f"[green]ingest-bc-committees[/green]: "
+            f"meetings={stats.meetings_scanned} seen={stats.speeches_seen} "
+            f"inserted={stats.speeches_inserted} updated={stats.speeches_updated} "
+            f"skipped_empty={stats.skipped_empty} "
+            f"fetch_failures={stats.fetch_failures} "
+            f"parse_errors={stats.parse_errors} "
+            f"resolved={stats.speeches_resolved} "
+            f"presiding={stats.speeches_presiding} "
+            f"role_only={stats.speeches_role_only} "
+            f"ambiguous={stats.speeches_ambiguous} "
+            f"unresolved={stats.speeches_unresolved}"
+        )
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
 @cli.command("ingest-bc-hansard")
 @click.option("--parliament", type=int, default=None,
               help="BC Parliament number (e.g. 43). Default: latest in legislative_sessions.")
