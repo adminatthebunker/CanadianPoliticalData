@@ -37,6 +37,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, time
@@ -45,6 +46,7 @@ from typing import Optional
 
 import httpx
 
+from ..committees import upsert_committee
 from ..db import Database
 from . import bc_hansard_parse as parse_mod
 from .bc_hansard import (
@@ -55,7 +57,9 @@ from .bc_hansard import (
     SOURCE_SYSTEM,
     BC_PARLIAMENT_SPEAKER,
     SittingRef,
+    SpeakerLookup,
     _get_with_retry,
+    _norm,
     _parl_slug,
     _sess_slug,
     _upsert_speech,
@@ -162,6 +166,218 @@ class IngestCommitteeStats:
     skipped_empty: int = 0
     fetch_failures: int = 0
     parse_errors: int = 0
+    # Membership block (when present in the title page) → politician_committees:
+    members_parsed: int = 0      # MembershipEntry rows extracted from <h1>Membership</h1>
+    members_resolved: int = 0    # successfully FK-matched against politicians
+    members_inserted: int = 0    # net-new politician_committees rows
+    members_updated: int = 0     # existing open row, role/source updated
+
+
+# Constituency normalization — collapses en-dash / em-dash / hyphen
+# variants so "North Vancouver–Seymour" (en-dash, U+2013) and
+# "North Vancouver-Seymour" (ASCII hyphen) match each other. Politicians
+# table values vary across the en-dash/hyphen boundary by source — LIMS
+# uses en-dashes, opennorth uses hyphens.
+_CONST_DASH_RE = re.compile(r"[‐-―−]")  # all dash variants
+
+
+def _norm_constituency(s: str) -> str:
+    if not s:
+        return ""
+    return _CONST_DASH_RE.sub("-", s).strip().lower()
+
+
+async def resolve_member_to_politician(
+    db: Database, name: str, constituency: str,
+) -> Optional[str]:
+    """Match a MembershipEntry name + constituency to a politician.id.
+
+    Strategy:
+      1. Last-name + first-name-token match on active BC politicians.
+      2. If multiple, narrow by constituency (via politician_terms,
+         dash-normalized).
+      3. If still ambiguous → return None (better than guessing).
+
+    Returns politician.id (uuid str) or None.
+    """
+    # The MembershipEntry name shape can be:
+    #   "Rohini Arora"
+    #   "Hon. David Eby"
+    #   "Amshen / Joan Phillip"  (Indigenous + English name, slash-sep)
+    # For Amshen / Joan Phillip the chamber-Hansard parser already
+    # canonicalises one form. Try the slash-second half first since
+    # politicians table typically carries the English-form name.
+    candidates = [name]
+    if "/" in name:
+        candidates.extend(p.strip() for p in name.split("/") if p.strip())
+
+    constituency_norm = _norm_constituency(constituency)
+
+    for candidate in candidates:
+        # Strip "Hon. " prefix; we don't store it in first_name.
+        clean = re.sub(r"^Hon\.?\s+", "", candidate).strip()
+        parts = clean.split()
+        if len(parts) < 2:
+            continue
+        first_token = parts[0]
+        last_name = parts[-1]
+
+        rows = await db.fetch(
+            """
+            SELECT p.id::text AS id, p.name, p.first_name, p.last_name
+              FROM politicians p
+             WHERE p.level = 'provincial'
+               AND p.province_territory = 'BC'
+               AND p.is_active = true
+               AND lower(p.last_name) = lower($1)
+               AND (
+                     lower(p.first_name) = lower($2)
+                  OR lower(p.first_name) LIKE lower($2) || ' %'
+                  OR lower(p.first_name) LIKE lower($2) || '.%'
+               )
+            """,
+            last_name, first_token,
+        )
+
+        if len(rows) == 1:
+            return rows[0]["id"]
+
+        if len(rows) > 1 and constituency_norm:
+            # Disambiguate via politician_terms.constituency.
+            narrowed = await db.fetch(
+                """
+                SELECT DISTINCT p.id::text AS id
+                  FROM politicians p
+                  LEFT JOIN politician_terms pt ON pt.politician_id = p.id
+                 WHERE p.level = 'provincial'
+                   AND p.province_territory = 'BC'
+                   AND p.is_active = true
+                   AND lower(p.last_name) = lower($1)
+                   AND (
+                         lower(p.first_name) = lower($2)
+                      OR lower(p.first_name) LIKE lower($2) || ' %'
+                      OR lower(p.first_name) LIKE lower($2) || '.%'
+                   )
+                   AND replace(replace(replace(replace(lower(pt.constituency),
+                       '–','-'), '—','-'), '‐','-'), '−','-')
+                       = $3
+                """,
+                last_name, first_token, constituency_norm,
+            )
+            if len(narrowed) == 1:
+                return narrowed[0]["id"]
+
+    return None
+
+
+async def load_bc_committee_speaker_lookup(
+    db: Database, *, committee_name: str,
+) -> tuple[SpeakerLookup, bool]:
+    """BC analog of ab_committees.load_committee_speaker_lookup.
+
+    Builds a SpeakerLookup restricted to MLAs who are open members of
+    `committee_name`. Returns (lookup, is_restricted). is_restricted=False
+    when the committee has no membership rows — caller falls back to the
+    chamber-wide lookup. Witness-rejection is the v1 prize: a non-MLA
+    presenter named "Cory Heavener" no longer surname-matches an MLA
+    named "Heavener" (none exists, but for the general case this prevents
+    AIMCo-CIO-style collisions like "Mr. Lord" → MLA Lord that AB faced).
+
+    Implementation mirrors `bc_hansard.load_bc_speaker_lookup`'s three-
+    index structure (by_full_name / by_initial_last / by_surname) so the
+    BC SpeakerLookup.resolve() works unchanged.
+    """
+    rows = await db.fetch(
+        """
+        SELECT p.id::text       AS id,
+               p.name, p.first_name, p.last_name,
+               p.lims_member_id
+          FROM politicians p
+          JOIN politician_committees pc ON pc.politician_id = p.id
+         WHERE p.level = 'provincial'
+           AND p.province_territory = 'BC'
+           AND pc.committee_name = $1
+           AND pc.ended_at IS NULL
+        """,
+        committee_name,
+    )
+    if not rows:
+        return (await load_bc_speaker_lookup(db)), False
+
+    lookup = SpeakerLookup()
+    for r in rows:
+        full = _norm(r["name"] or "")
+        if full:
+            lookup.by_full_name.setdefault(full, []).append(dict(r))
+        fl = _norm(f"{r['first_name'] or ''} {r['last_name'] or ''}")
+        if fl and fl != full:
+            lookup.by_full_name.setdefault(fl, []).append(dict(r))
+        last = _norm(r["last_name"] or "")
+        first = _norm(r["first_name"] or "")
+        if last:
+            for tok in {last, last.split()[-1]}:
+                lookup.by_surname.setdefault(tok, []).append(dict(r))
+            if first:
+                initial = first[0]
+                lookup.by_initial_last.setdefault(
+                    f"{initial} {last.split()[-1]}", []
+                ).append(dict(r))
+
+    # Dedupe (same lims_member_id collapses accent variants).
+    for idx in (lookup.by_full_name, lookup.by_initial_last, lookup.by_surname):
+        for k, lst in idx.items():
+            seen_ids: set[str] = set()
+            seen_lims: set[int] = set()
+            dedup: list[dict] = []
+            for p in lst:
+                lims_id = p.get("lims_member_id")
+                if p["id"] in seen_ids:
+                    continue
+                if lims_id is not None and lims_id in seen_lims:
+                    continue
+                seen_ids.add(p["id"])
+                if lims_id is not None:
+                    seen_lims.add(lims_id)
+                dedup.append(p)
+            idx[k] = dedup
+
+    return lookup, True
+
+
+async def ingest_membership_from_transcript(
+    db: Database,
+    *,
+    html_text: str,
+    committee_name: str,
+    stats: IngestCommitteeStats,
+) -> None:
+    """Parse the title-page Membership block (when present) and upsert
+    politician_committees rows. Updates stats in-place. Idempotent via
+    upsert_committee."""
+    entries = parse_mod.extract_committee_membership(html_text)
+    if not entries:
+        return
+
+    stats.members_parsed += len(entries)
+    for entry in entries:
+        pid = await resolve_member_to_politician(
+            db, entry.name, entry.constituency,
+        )
+        if pid is None:
+            continue
+        stats.members_resolved += 1
+        is_new = await upsert_committee(
+            db,
+            politician_id=pid,
+            committee_name=committee_name,
+            role=entry.role,
+            level="provincial",
+            source=SOURCE_SYSTEM,  # 'hansard-bc'
+        )
+        if is_new:
+            stats.members_inserted += 1
+        else:
+            stats.members_updated += 1
 
 
 # ── Seed loader ──────────────────────────────────────────────────────
@@ -335,7 +551,13 @@ async def ingest_committees(
     session_id = await ensure_session(
         db, parliament=parliament, session=session,
     )
-    lookup = await load_bc_speaker_lookup(db)
+    # Per-committee cache for the restricted speaker lookup. Built lazily
+    # per ref AFTER the meeting's Membership-block ingest so any
+    # net-new rows are visible. Keyed by committee_name only — BC
+    # memberships don't carry date semantics in v1 (we observe as of
+    # "most-recent transcript ingested"). load_bc_committee_speaker_lookup
+    # internally falls back to chamber-wide when 0 membership rows exist.
+    restricted_cache: dict[str, tuple[SpeakerLookup, bool]] = {}
 
     if limit_meetings:
         refs = refs[-limit_meetings:]  # newest N
@@ -379,6 +601,18 @@ async def ingest_committees(
                 stats.parse_errors += 1
                 continue
 
+            # Parse the title-page Membership block (when present) and
+            # upsert politician_committees rows. Idempotent — re-running
+            # over already-seen members updates role/source on the open
+            # row but doesn't duplicate. DEM-style committees without a
+            # Membership block produce zero entries and are a soft-miss.
+            await ingest_membership_from_transcript(
+                db,
+                html_text=page_html,
+                committee_name=ref.committee_name,
+                stats=stats,
+            )
+
             # Optional: pull title-page metadata to fill in any missing
             # location / committee_name fields. The URL-derived values
             # win when present, but committee_meta backfills missing ones.
@@ -417,6 +651,18 @@ async def ingest_committees(
                 len(result.speeches), result.url_meta.variant,
                 len(result.section_hits), ref.meeting_location,
             )
+
+            # Build/fetch the committee-restricted lookup AFTER membership
+            # ingest (so net-new rows from this transcript's Membership
+            # block are visible). Falls back to the chamber-wide lookup
+            # when the committee has 0 membership rows (is_restricted=False).
+            cached = restricted_cache.get(ref.committee_name)
+            if cached is None:
+                cached = await load_bc_committee_speaker_lookup(
+                    db, committee_name=ref.committee_name,
+                )
+                restricted_cache[ref.committee_name] = cached
+            lookup, is_restricted = cached
 
             for ps in result.speeches:
                 if (limit_speeches
@@ -479,7 +725,8 @@ async def ingest_committees(
         "bc_committees done: %d meetings, %d speeches "
         "(inserted=%d updated=%d skipped_empty=%d fetch_failures=%d "
         "parse_errors=%d) "
-        "resolved=%d presiding=%d role_only=%d ambiguous=%d unresolved=%d",
+        "resolved=%d presiding=%d role_only=%d ambiguous=%d unresolved=%d "
+        "members_parsed=%d members_resolved=%d members_inserted=%d members_updated=%d",
         stats.meetings_scanned,
         stats.speeches_seen,
         stats.speeches_inserted,
@@ -492,5 +739,304 @@ async def ingest_committees(
         stats.speeches_role_only,
         stats.speeches_ambiguous,
         stats.speeches_unresolved,
+        stats.members_parsed,
+        stats.members_resolved,
+        stats.members_inserted,
+        stats.members_updated,
     )
     return stats
+
+
+# ── Freshness / dead-canary check ─────────────────────────────────
+# BC committees have no auto-discovery API; the seed file at
+# scripts/seeds/bc-committee-meetings.json is hand-curated. If the
+# operator forgets to add new meetings, daily-cron silently no-ops over
+# the same N URLs forever. This check makes the staleness loud:
+# per-committee, compute "days since most recent meeting in our DB" and
+# emit a warning + email when any active committee crosses a threshold.
+#
+# Cadence guidance (probed 2026-05-19 from leg.bc.ca content):
+#   - FGS does an annual ~3-week Budget Consultation tour (May-June);
+#     dormant the rest of the year.
+#   - CAY meets ~monthly on inquiry topics.
+#   - DEM is an active special committee meeting weekly during inquiry.
+# A single threshold can't capture cadence variation cleanly, so this
+# check is a CANARY not a SLA — when the threshold trips, the operator
+# decides whether it's a real gap or just recess.
+
+
+@dataclass
+class CommitteeFreshness:
+    committee_code: str
+    committee_name: str
+    last_meeting_date: Optional[date]
+    meetings_in_db: int
+    days_stale: Optional[int]   # None when meetings_in_db == 0
+
+
+async def check_committee_freshness(
+    db: Database, *, today: Optional[date] = None,
+) -> list[CommitteeFreshness]:
+    """Return one CommitteeFreshness per code in STANDING_COMMITTEES.
+
+    Codes with 0 meetings in our DB get last_meeting_date=None,
+    days_stale=None — caller decides whether to flag those as alerts
+    (probably yes, with a "never ingested" annotation).
+    """
+    today = today or date.today()
+
+    # Single grouped query — much cheaper than N round-trips.
+    rows = await db.fetch(
+        """
+        SELECT
+          raw->'bc_committee'->>'committee_acronym' AS code_upper,
+          MAX(spoken_at)::date AS last_meeting,
+          COUNT(DISTINCT source_url) AS meetings
+        FROM speeches
+        WHERE source_url LIKE 'https://hansard-bc.canonical/Committees/%'
+          AND raw->'bc_committee' ? 'committee_acronym'
+        GROUP BY 1
+        """
+    )
+    seen: dict[str, dict] = {
+        (r["code_upper"] or "").lower(): {
+            "last_meeting": r["last_meeting"],
+            "meetings": int(r["meetings"]),
+        }
+        for r in rows
+    }
+
+    out: list[CommitteeFreshness] = []
+    for code, name in STANDING_COMMITTEES.items():
+        hit = seen.get(code)
+        if hit is None:
+            out.append(
+                CommitteeFreshness(
+                    committee_code=code,
+                    committee_name=name,
+                    last_meeting_date=None,
+                    meetings_in_db=0,
+                    days_stale=None,
+                )
+            )
+            continue
+        last = hit["last_meeting"]
+        stale = (today - last).days if last else None
+        out.append(
+            CommitteeFreshness(
+                committee_code=code,
+                committee_name=name,
+                last_meeting_date=last,
+                meetings_in_db=hit["meetings"],
+                days_stale=stale,
+            )
+        )
+
+    # Sort by staleness descending (most stale / never-ingested first), so
+    # the alert summary leads with the most actionable rows.
+    def _sort_key(c: CommitteeFreshness) -> tuple[int, int, str]:
+        # never-ingested → bucket 2 (most alarming), then stale-N → bucket
+        # 1 with N as tiebreak, then fresh → bucket 0 with -N
+        if c.days_stale is None:
+            return (2, 0, c.committee_code)
+        return (1, -c.days_stale, c.committee_code)
+    out.sort(key=_sort_key)
+    return out
+
+
+def stale_committees(
+    rows: list[CommitteeFreshness], threshold_days: int,
+) -> list[CommitteeFreshness]:
+    """Filter to rows that should trigger an alert.
+
+    Distinguishes "stale" (actionable: we've seen this committee
+    meeting, but the most recent meeting in our DB is > threshold days
+    old — operator should check leg.bc.ca for new ones) from "dormant"
+    (informational: never-ingested; could be a historical-only code
+    like `health`/`pac` that the operator chose not to seed). Only
+    stale rows are returned — dormant ones still appear in the report
+    table but don't drive the email alert.
+    """
+    return [
+        r for r in rows
+        if r.meetings_in_db > 0
+        and r.days_stale is not None
+        and r.days_stale > threshold_days
+    ]
+
+
+def format_freshness_report(
+    rows: list[CommitteeFreshness], threshold_days: int,
+) -> tuple[str, str]:
+    """Return (text, html) summaries. Both versions include the full per-
+    committee table so the operator can spot-check fresh committees too,
+    not only stale ones."""
+    today = date.today().isoformat()
+    stale = stale_committees(rows, threshold_days)
+    dormant = [r for r in rows if r.meetings_in_db == 0]
+
+    lines = [
+        f"BC committee freshness report — {today}",
+        f"Stale threshold: > {threshold_days} days since most-recent meeting",
+        f"Stale (actionable): {len(stale)}    "
+        f"Dormant (never ingested): {len(dormant)}    "
+        f"Fresh: {len(rows) - len(stale) - len(dormant)}",
+        "",
+        f"{'Code':6s} {'Last meeting':14s} {'Days stale':>10s} {'Meetings':>9s}  Name",
+        "-" * 90,
+    ]
+    for r in rows:
+        last = r.last_meeting_date.isoformat() if r.last_meeting_date else "(never)"
+        if r.days_stale is None:
+            stale_repr = "dormant"
+        else:
+            is_stale_row = r.meetings_in_db > 0 and r.days_stale > threshold_days
+            stale_repr = f"{r.days_stale:d}{'*' if is_stale_row else ''}"
+        lines.append(
+            f"{r.committee_code:6s} {last:14s} {stale_repr:>10s} {r.meetings_in_db:>9d}  {r.committee_name}"
+        )
+    if stale:
+        lines.append("")
+        lines.append("Action: check leg.bc.ca/parliamentary-business/committees for new meetings,")
+        lines.append("then append URLs to scripts/seeds/bc-committee-meetings.json and re-run")
+        lines.append("ingest-bc-committees.")
+    text = "\n".join(lines)
+
+    # HTML: same table, monospace.
+    html_rows: list[str] = []
+    for r in rows:
+        last = r.last_meeting_date.isoformat() if r.last_meeting_date else "(never)"
+        if r.days_stale is None:
+            bg = "#f0f0f0"   # dormant — grey, informational
+            stale_repr = "dormant"
+        elif r.days_stale > threshold_days:
+            bg = "#ffe9e9"   # stale — red, actionable
+            stale_repr = str(r.days_stale)
+        else:
+            bg = ""           # fresh — default
+            stale_repr = str(r.days_stale)
+        html_rows.append(
+            f'<tr style="background:{bg}">'
+            f'<td><code>{r.committee_code}</code></td>'
+            f'<td>{last}</td>'
+            f'<td style="text-align:right">{stale_repr}</td>'
+            f'<td style="text-align:right">{r.meetings_in_db}</td>'
+            f'<td>{r.committee_name}</td>'
+            f'</tr>'
+        )
+    html = (
+        f'<h2>BC committee freshness — {today}</h2>'
+        f'<p>Stale threshold: &gt; {threshold_days} days since most-recent meeting. '
+        f'<b>Stale (actionable): {len(stale)}</b> &middot; '
+        f'Dormant (never ingested): {len(dormant)} &middot; '
+        f'Fresh: {len(rows) - len(stale) - len(dormant)}</p>'
+        f'<table cellpadding="6" cellspacing="0" border="1" '
+        f'style="border-collapse:collapse;font-family:monospace">'
+        f'<tr><th>Code</th><th>Last meeting</th><th>Days stale</th>'
+        f'<th>Meetings</th><th>Name</th></tr>'
+        + "".join(html_rows)
+        + '</table>'
+        + (
+            '<p><b>Action:</b> check '
+            '<a href="https://www.leg.bc.ca/parliamentary-business/committees">'
+            'leg.bc.ca/parliamentary-business/committees</a> for new meetings, '
+            'then append URLs to <code>scripts/seeds/bc-committee-meetings.json</code> '
+            'and re-run <code>ingest-bc-committees</code>.</p>'
+            if stale else ''
+        )
+    )
+    return text, html
+
+
+# ── SMTP helper (inlined; mirrors alerts_worker pattern) ──────────
+
+
+def _smtp_is_configured() -> bool:
+    return bool(
+        os.environ.get("SMTP_USERNAME")
+        and os.environ.get("SMTP_PASSWORD")
+        and os.environ.get("SMTP_FROM")
+    )
+
+
+def _send_freshness_email(
+    to: str, subject: str, text: str, html: str,
+) -> None:
+    """Blocking SMTP send. Mirrors alerts_worker.send_smtp shape so any
+    fix to the SMTP plumbing there can be backported here verbatim."""
+    import smtplib
+    import ssl
+    from email.message import EmailMessage
+
+    host = os.environ.get("SMTP_HOST", "smtp.protonmail.ch")
+    port = int(os.environ.get("SMTP_PORT", "587"))
+    username = os.environ["SMTP_USERNAME"]
+    password = os.environ["SMTP_PASSWORD"]
+    from_addr = os.environ["SMTP_FROM"]
+
+    msg = EmailMessage()
+    msg["From"] = from_addr
+    msg["To"] = to
+    msg["Subject"] = subject
+    msg.set_content(text)
+    msg.add_alternative(html, subtype="html")
+
+    ctx = ssl.create_default_context()
+    with smtplib.SMTP(host, port, timeout=30) as s:
+        s.ehlo()
+        s.starttls(context=ctx)
+        s.ehlo()
+        s.login(username, password)
+        s.send_message(msg)
+
+
+async def check_freshness_and_alert(
+    db: Database,
+    *,
+    threshold_days: int = 21,
+    alert_to: Optional[str] = None,
+    always_email: bool = False,
+) -> tuple[list[CommitteeFreshness], bool]:
+    """Run the freshness check and send an alert email when warranted.
+
+    Returns (rows, emailed). Idempotent — safe to run every cron tick.
+    """
+    rows = await check_committee_freshness(db)
+    stale = stale_committees(rows, threshold_days)
+
+    text, html = format_freshness_report(rows, threshold_days)
+    # Always print to stdout so the admin Jobs page captures the report.
+    print(text)
+
+    should_email = always_email or bool(stale)
+    if not should_email:
+        return rows, False
+
+    if not _smtp_is_configured():
+        log.warning(
+            "bc_committees freshness: %d stale committees but SMTP not "
+            "configured (SMTP_USERNAME/PASSWORD/FROM unset) — skipping email",
+            len(stale),
+        )
+        return rows, False
+
+    to_addr = (
+        alert_to
+        or os.environ.get("CPD_OPS_EMAIL")
+        or "admin@thebunkerops.ca"
+    )
+    subject = (
+        f"[CPD] BC committees freshness — {len(stale)} stale"
+        if stale
+        else "[CPD] BC committees freshness — OK"
+    )
+    try:
+        _send_freshness_email(to_addr, subject, text, html)
+        log.info(
+            "bc_committees freshness: emailed %d-stale report to %s",
+            len(stale), to_addr,
+        )
+        return rows, True
+    except Exception as exc:
+        log.error("bc_committees freshness: SMTP send failed: %s", exc)
+        return rows, False

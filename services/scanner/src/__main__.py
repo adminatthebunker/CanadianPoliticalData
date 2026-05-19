@@ -3477,7 +3477,55 @@ def cmd_ingest_bc_committees(
             f"presiding={stats.speeches_presiding} "
             f"role_only={stats.speeches_role_only} "
             f"ambiguous={stats.speeches_ambiguous} "
-            f"unresolved={stats.speeches_unresolved}"
+            f"unresolved={stats.speeches_unresolved} "
+            f"members_parsed={stats.members_parsed} "
+            f"members_resolved={stats.members_resolved} "
+            f"members_inserted={stats.members_inserted} "
+            f"members_updated={stats.members_updated}"
+        )
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
+@cli.command("check-bc-committees-freshness")
+@click.option("--threshold-days", type=int, default=21,
+              help="Days stale at which to flag a committee. Default: 21.")
+@click.option("--alert-to", type=str, default=None,
+              help="Override email recipient. Default: $CPD_OPS_EMAIL or admin@thebunkerops.ca.")
+@click.option("--always-email", is_flag=True, default=False,
+              help="Send email even when no committees are stale (audit cadence).")
+@click.pass_context
+def cmd_check_bc_committees_freshness(
+    ctx: click.Context, threshold_days, alert_to, always_email,
+) -> None:
+    """Dead-canary: report BC standing-committee freshness (days since last meeting per code).
+
+    BC has no auto-discovery API; the seed file at scripts/seeds/
+    bc-committee-meetings.json is hand-curated. If the operator forgets to
+    add new meetings, daily-cron silently no-ops over the same N URLs
+    forever. This command makes the staleness loud — prints a per-
+    committee table to stdout (captured by the admin Jobs page) and
+    emails the operator when any active committee crosses the threshold.
+
+    The report is a CANARY not an SLA: BC committees have varied
+    cadences (FGS budget-tour bursts, CAY monthly, DEM weekly during
+    inquiry, dormant during recess). The operator decides whether a
+    flagged staleness is a real gap or just recess.
+    """
+    from .legislative.bc_committees import check_freshness_and_alert
+
+    async def _wrap(db: Database) -> None:
+        rows, emailed = await check_freshness_and_alert(
+            db,
+            threshold_days=threshold_days,
+            alert_to=alert_to,
+            always_email=always_email,
+        )
+        from .legislative.bc_committees import stale_committees as _stale
+        stale = _stale(rows, threshold_days)
+        console.print(
+            f"[green]check-bc-committees-freshness[/green]: "
+            f"committees={len(rows)} stale={len(stale)} "
+            f"threshold_days={threshold_days} emailed={emailed}"
         )
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 

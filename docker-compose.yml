@@ -314,6 +314,16 @@ services:
       SCRAPE_MASTODON_POSTS_PER_RUN: ${SCRAPE_MASTODON_POSTS_PER_RUN:-20}
       SCRAPE_DAILY_USD_CAP: ${SCRAPE_DAILY_USD_CAP:-5}
       SCRAPE_DISPATCH_INTERVAL: ${SCRAPE_DISPATCH_INTERVAL:-60}
+      # SMTP creds for dead-canary alerts (e.g. check-bc-committees-
+      # freshness emails admin@thebunkerops.ca when committees go stale).
+      # Same shape as alerts-worker / reports-worker. Unset → command
+      # logs the SMTP-not-configured warning and exits cleanly.
+      SMTP_HOST: ${SMTP_HOST:-smtp.protonmail.ch}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+      CPD_OPS_EMAIL: ${CPD_OPS_EMAIL:-admin@thebunkerops.ca}
     volumes:
       - ./data:/data:ro
       - ./db:/app/db:ro

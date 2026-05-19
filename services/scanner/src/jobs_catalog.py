@@ -162,6 +162,19 @@ COMMANDS: dict[str, dict[str, Any]] = {
              "help": "Report stub→twin pairs without modifying any rows."},
         ],
     },
+    "check-bc-committees-freshness": {
+        "description": "Dead-canary: per BC standing committee, report days since last meeting in our DB. Prints table to stdout and emails admin when any committee crosses the threshold (default 21 days). BC committees lack an auto-discovery API; this surfaces a stale seed file at scripts/seeds/bc-committee-meetings.json before it becomes a silent ingest gap.",
+        "cli": "check-bc-committees-freshness",
+        "category": "maintenance",
+        "args": [
+            {"name": "threshold_days", "type": "int", "required": False,
+             "help": "Days stale at which to flag a committee. Default: 21."},
+            {"name": "alert_to", "type": "str", "required": False,
+             "help": "Override email recipient. Default: $CPD_OPS_EMAIL or admin@thebunkerops.ca."},
+            {"name": "always_email", "type": "bool", "required": False,
+             "help": "Send email even when no committees are stale (audit cadence)."},
+        ],
+    },
     "ingest-bc-committees": {
         "description": "Pull BC standing-committee transcripts (HTML from lims.leg.bc.ca/hdms/file/Committees) into `speeches` with speech_type='committee'. Discovery driven by scripts/seeds/bc-committee-meetings.json (BC has no structured listing API; see module docstring).",
         "cli": "ingest-bc-committees",

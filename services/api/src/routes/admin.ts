@@ -101,6 +101,14 @@ const COMMAND_CATALOG = [
       { name: "dry_run", type: "bool", required: false, help: "Report stub→twin pairs without modifying any rows." },
     ],
   },
+  { key: "check-bc-committees-freshness", category: "maintenance",
+    description: "Dead-canary: per BC standing committee, report days since last meeting in our DB. Prints table to admin Jobs page and emails admin when any committee crosses the threshold (default 21 days). Surfaces a stale scripts/seeds/bc-committee-meetings.json seed before it becomes a silent ingest gap.",
+    args: [
+      { name: "threshold_days", type: "int", required: false, help: "Days stale at which to flag a committee. Default: 21." },
+      { name: "alert_to", type: "string", required: false, help: "Override email recipient. Default: $CPD_OPS_EMAIL or admin@thebunkerops.ca." },
+      { name: "always_email", type: "bool", required: false, help: "Send email even when no committees are stale (audit cadence)." },
+    ],
+  },
   { key: "ingest-bc-committees", category: "hansard",
     description: "Pull BC standing-committee transcripts (HTML from lims.leg.bc.ca/hdms/file/Committees) into `speeches` with speech_type='committee'. Discovery via scripts/seeds/bc-committee-meetings.json (BC has no structured listing API).",
     args: [

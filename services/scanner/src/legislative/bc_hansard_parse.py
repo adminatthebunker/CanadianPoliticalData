@@ -245,6 +245,157 @@ def extract_committee_meta(html_text: str) -> CommitteeMeta:
     )
 
 
+# ── Membership block extraction ───────────────────────────────────
+# 43rd-Parliament committee transcripts carry the meeting's attending
+# roster in a structured title-page block:
+#
+#   <h1>Membership</h1>
+#   <p class="Title-and-Member-Name"><span class="Italic">Chair:</span>
+#       Rohini Arora (Burnaby East, BC NDP)</p>
+#   <p class="Title-and-Member-Name"><span class="Italic">Deputy Chair:</span>
+#       Amelia Boultbee (Penticton-Summerland, Conservative Party of BC)</p>
+#   <p class="Title-and-Member-Name"><span class="Italic">Members:</span>
+#       Susie Chant (North Vancouver–Seymour, BC NDP)</p>
+#   <p class="Member-Name">Heather Maahs (Chilliwack North, Conservative Party of BC)</p>
+#   ...
+#   <p class="Title-and-Member-Name"><span class="Italic">Clerk:</span>
+#       Darryl Hol</p>
+#
+# Title-and-Member-Name carries a role label (Italic span); Member-Name
+# entries inherit the most-recent role label (typically "Members:" for
+# rank-and-file). Clerk entries are NOT MLAs and must be filtered out.
+#
+# Some committees use a less-structured introduction format with no
+# Membership block at all (e.g. some Special Committees like DEM where
+# the chair calls a round-robin introduction). For those, this function
+# returns an empty list — callers should treat as soft-miss, not error.
+#
+# 42nd-Parliament transcripts use a table-based markup (WitnessRow /
+# WitnessListIntro / WitnessListFirstMember) — not supported in v1.
+# When historical backfill ships, add a second extractor branch keyed on
+# detect_membership_era().
+@dataclass
+class MembershipEntry:
+    role: str             # "Chair" | "Deputy Chair" | "Member"
+    name: str             # "Rohini Arora"
+    constituency: str     # "Burnaby East"
+    party: str            # "BC NDP" / "Conservative Party of BC"
+
+
+# Pull <h1>Membership</h1> ... <h1>Contents</h1> (or end of div) block.
+_MEMBERSHIP_BLOCK_RE = re.compile(
+    r"<h1>\s*Membership\s*</h1>(?P<body>.*?)(?:<h1>|</div>\s*</div>)",
+    re.DOTALL | re.IGNORECASE,
+)
+
+# Title-and-Member-Name carries an Italic role label + tail text.
+_MEMBERSHIP_TITLE_LINE_RE = re.compile(
+    r'<p\s+class="Title-and-Member-Name"[^>]*>\s*'
+    r'<span\s+class="Italic"[^>]*>\s*(?P<role>[^<]+?)\s*:?\s*</span>\s*'
+    r'(?P<tail>.*?)</p>',
+    re.DOTALL | re.IGNORECASE,
+)
+
+# Member-Name has no role label — inherits the most-recent role seen.
+_MEMBERSHIP_PLAIN_LINE_RE = re.compile(
+    r'<p\s+class="Member-Name"[^>]*>\s*(?P<tail>.*?)</p>',
+    re.DOTALL | re.IGNORECASE,
+)
+
+# Name + (constituency, party) shape in the tail text. Constituency can
+# carry en-dash or em-dash separators ("Burnaby South–Metrotown");
+# party can be multi-word ("Conservative Party of BC", "BC NDP").
+_MEMBER_TAIL_RE = re.compile(
+    r"^\s*(?P<name>[^()]+?)\s*"
+    r"\(\s*(?P<constituency>[^,]+?)\s*,\s*(?P<party>[^)]+?)\s*\)\s*$",
+)
+
+# Combined role-iterator: walks the membership body in source order so
+# Member-Name entries inherit the most-recent Title-and-Member-Name role.
+_ANY_MEMBERSHIP_LINE_RE = re.compile(
+    r'<p\s+class="(?P<cls>Title-and-Member-Name|Member-Name)"[^>]*>(?P<body>.*?)</p>',
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def _normalize_role(label: str) -> Optional[str]:
+    """'Chair:' → 'Chair', 'Deputy Chair:' → 'Deputy Chair', 'Members:' →
+    'Member' (singular — the role lands on each rank-and-file entry).
+    Returns None for Clerk / Auditor / other non-MLA roles."""
+    lab = label.strip().rstrip(":").strip()
+    low = lab.lower()
+    if low in ("chair",):
+        return "Chair"
+    if low in ("deputy chair", "vice chair"):
+        return "Deputy Chair"
+    if low in ("member", "members"):
+        return "Member"
+    # Clerk / Auditor / Hansard Services / Officials — not MLAs.
+    return None
+
+
+def extract_committee_membership(html_text: str) -> list[MembershipEntry]:
+    """Parse the title-page Membership block. Returns ordered list of
+    MembershipEntry; empty list if no block present or no parseable rows.
+
+    Roles are normalized: "Chair" / "Deputy Chair" / "Member". Clerk /
+    Auditor / Hansard Services entries are filtered out (not MLAs).
+
+    Names are returned raw — caller does the politician_id resolution.
+    """
+    bm = _MEMBERSHIP_BLOCK_RE.search(html_text)
+    if not bm:
+        return []
+    body = bm.group("body")
+
+    out: list[MembershipEntry] = []
+    current_role: Optional[str] = None
+    for m in _ANY_MEMBERSHIP_LINE_RE.finditer(body):
+        cls = m.group("cls")
+        inner = m.group("body")
+
+        if cls.lower() == "title-and-member-name":
+            # Has an Italic role label + tail text after it.
+            tm = _MEMBERSHIP_TITLE_LINE_RE.search(m.group(0))
+            if not tm:
+                continue
+            current_role = _normalize_role(tm.group("role"))
+            tail = tm.group("tail")
+        else:
+            # Member-Name: no role label, inherit current_role.
+            tail = inner
+
+        if current_role is None:
+            # Clerk / non-MLA — skip both this entry and any following
+            # plain Member-Name entries that would inherit Clerk role.
+            continue
+
+        # Strip any inner tags from tail before regex-matching the
+        # Name (Constituency, Party) shape.
+        tail_text = _TAG_RE.sub(" ", tail)
+        tail_text = _WS_RE.sub(" ", html.unescape(tail_text)).strip()
+        if not tail_text:
+            continue
+        nm = _MEMBER_TAIL_RE.match(tail_text)
+        if not nm:
+            # Doesn't fit the (Constituency, Party) shape — Clerk entries
+            # typically end up here (just "Darryl Hol" with no parens) —
+            # skip silently. Caller's audit log shows skipped vs parsed
+            # counts.
+            continue
+
+        out.append(
+            MembershipEntry(
+                role=current_role,
+                name=nm.group("name").strip(),
+                constituency=nm.group("constituency").strip(),
+                party=nm.group("party").strip(),
+            )
+        )
+
+    return out
+
+
 def parse_url_meta(url: str) -> UrlMeta:
     # Committee transcripts share the floor parser internals (same markup
     # taxonomy, same date/half semantics) — return a UrlMeta with the same

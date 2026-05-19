@@ -75,6 +75,14 @@ INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) V
 ('BC committee transcripts daily ingest',
  'ingest-bc-committees', '{"since_days": 14}'::jsonb,
  '25 14 * * *', true, 'daily-ingest-rollout'),
+-- Weekly dead-canary: surface stale BC committee seeds before they become
+-- a silent ingest gap. BC has no auto-discovery API; if the operator
+-- forgets to append URLs to scripts/seeds/bc-committee-meetings.json,
+-- daily-cron no-ops over the same N URLs forever. Monday 13:30 UTC
+-- (early enough that any email lands before North-American workday).
+('BC committees freshness weekly check',
+ 'check-bc-committees-freshness', '{}'::jsonb,
+ '30 13 * * 1', true, 'daily-ingest-rollout'),
 ('BC speaker resolver',
  'resolve-bc-speakers', '{}'::jsonb,
  '30 14 * * *', true, 'daily-ingest-rollout'),
