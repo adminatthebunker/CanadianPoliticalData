@@ -470,18 +470,48 @@ services:
     restart: unless-stopped
     networks: [sw]
 
-  # ── Change detection (external service) ───────────────────────────
-  change-detection:
-    image: ghcr.io/thedurancode/change:latest
-    container_name: sw-change
-    volumes:
-      - changedata:/data
-    environment:
-      WEBHOOK_URL: http://api:3000/api/v1/webhooks/change
-      WEBHOOK_SECRET: ${WEBHOOK_SECRET}
-    depends_on: [api]
-    restart: unless-stopped
-    networks: [sw]
+  # ── Change detection (page-content monitoring) — FUTURE-DEV, disabled ────
+  # Watches politician/party/government URLs for page-content changes and POSTs
+  # diffs to /api/v1/webhooks/change. The receiver is fully built
+  # (services/api/src/routes/webhooks.ts + scan_changes.change_type='content_changed')
+  # but the SENDER is gated on a prior milestone: ingesting politicians' personal
+  # site CONTENT (not just hostnames) into the database. Without that, "what
+  # changed" has no canonical baseline to diff against and watch-list curation
+  # has no anchor. See docs/timeline.md § Later — Politician website content
+  # ingestion. Current `scan_changes` rows are infrastructure-only (IP/TLS/CDN
+  # via compare.py); content_changed will land here once enabled.
+  #
+  # When ready to enable:
+  #   1. Uncomment this block + the `changedata` volume below.
+  #   2. `docker compose pull change-detection && docker compose up -d change-detection`
+  #   3. Reach the UI at http://127.0.0.1:5000 (SSH-tunnel from remote).
+  #      Set BASE_URL, default notification URL = http://api:3000/api/v1/webhooks/change.
+  #   4. Decide auth: API verifier expects HMAC-SHA256 in X-Signature
+  #      (webhooks.ts:75-86). changedetection.io's Apprise notifications can't
+  #      compute HMAC natively — likely want to relax verifier to also accept
+  #      a bearer token in X-Auth, then template the notification body to
+  #      include `WEBHOOK_SECRET` as that header.
+  #   5. Seed a small watch list (top-25 personal sites + party policy + gov
+  #      press indexes); blanket monitoring of every website row produces noise.
+  #
+  # change-detection:
+  #   image: ghcr.io/dgtlmoon/changedetection.io:latest
+  #   container_name: sw-change
+  #   hostname: changedetection
+  #   ports:
+  #     - "127.0.0.1:5000:5000"  # localhost-only — no built-in auth on the UI
+  #   volumes:
+  #     - changedata:/datastore  # changedetection.io uses /datastore, NOT /data
+  #   environment:
+  #     BASE_URL: http://127.0.0.1:5000
+  #     # WEBHOOK_URL / WEBHOOK_SECRET below are NOT consumed by the image —
+  #     # they're configured in the web UI under Settings → Notifications.
+  #     # Exposed here so the operator can copy-paste from `docker compose config`.
+  #     WEBHOOK_URL: http://api:3000/api/v1/webhooks/change
+  #     WEBHOOK_SECRET: ${WEBHOOK_SECRET}
+  #   depends_on: [api]
+  #   restart: unless-stopped
+  #   networks: [sw]
 
   # ── Uptime Kuma ───────────────────────────────────────────────────
   uptime-kuma:
@@ -555,7 +585,7 @@ services:
 
 volumes:
   pgdata:
-  changedata:
+  # changedata:  # uncomment when re-enabling the change-detection service above
   kumadata:
   embedmodels:
   assets:

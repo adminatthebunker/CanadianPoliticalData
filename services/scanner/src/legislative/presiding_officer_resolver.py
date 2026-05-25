@@ -710,6 +710,16 @@ ROLE_ONLY_PRESIDING_ROSTER: dict[str, dict[str, list[SpeakerTerm]]] = {
     # Cycle 2026-05-14 expansion closes the ~10,624-row pre-43L bucket
     # surfaced when `relink-mb-speaker-roles` tagged the empty-role
     # `Mr./Madam Deputy Speaker` shapes the parser previously missed.
+    # MB Chairperson / Deputy Chair / Acting Speaker — DEFERRED 2026-05-20.
+    # 10,909 + 151 + 133 = 11,193 rows tagged with these rotating roles but
+    # politician_id NULL. Probe 2026-05-20 confirmed MB Hansard does NOT
+    # carry the "I now invite X to take the chair" / "elected as Chairperson"
+    # announcement shape that SK Deputy Speaker mining (2026-05-14) used —
+    # only 3 of 11,170 Chairperson rows contain anything resembling chair-
+    # handover language, and the matches are content references, not
+    # announcement shapes. Same shape as deferred AB Acting Speaker /
+    # BC Chairman families. Re-evaluate if an external roster source
+    # emerges (e.g. Manitoba Assembly Journals).
     "MB": {
         "Deputy Speaker": [
             SpeakerTerm("Conrad Santos",       "Conrad",  "Santos",       date(1999, 10, 25), date(2007,  5, 22)),  # 37L+38L
@@ -740,6 +750,26 @@ ROLE_ONLY_PRESIDING_ROSTER: dict[str, dict[str, list[SpeakerTerm]]] = {
             SpeakerTerm("Blaine McLeod", "Blaine", "McLeod",   date(2024, 11, 26), None),                # 30L
         ],
     },
+    # Nova Scotia: Premier. CABINET role (not presiding-officer), but the
+    # resolver mechanism — date-windowed single-holder lookup — is
+    # identical, so it fits this table. The NS Hansard parser emits the
+    # ALL-CAPS `THE PREMIER` form in `speaker_name_raw` (with
+    # `speaker_role IS NULL`) for the Liberal era 2013-12-03 → 2021-03-31
+    # (~1,904 unattributed rows). Houston (PC, 2021-08+) gets the parens-
+    # form `HON. TIM HOUSTON (The Premier)` which Pass 1 already
+    # attributes, so this roster only needs to cover the two Liberal
+    # Premiers whose tenures overlap the role-only bucket. Pre-2013
+    # Hansard (Dexter NDP era) is not currently ingested — confirmed
+    # 2026-05-22 that MIN(spoken_at) for the bucket is 2013-12-03, so
+    # Dexter is omitted. Add him if/when earlier Hansard ingest lands.
+    # Boundaries sourced from Wikipedia "Premier of Nova Scotia" +
+    # Nova Scotia Legislature transition records.
+    "NS": {
+        "Premier": [
+            SpeakerTerm("Stephen McNeil", "Stephen", "McNeil", date(2013, 10, 22), date(2021,  2, 23)),  # 62L + 63L
+            SpeakerTerm("Iain Rankin",    "Iain",    "Rankin", date(2021,  2, 23), date(2021,  8, 31)),  # 63L tail
+        ],
+    },
 }
 
 # Per-province map from `speeches.speaker_role` → `politician_terms.office`
@@ -761,6 +791,26 @@ ROLE_ONLY_OFFICE_MAP: dict[str, dict[str, str]] = {
         # SK parser emits lowercase snake "deputy_speaker" (28L3S–29L4S
         # role-only bucket; 30L inline-name turns are parser-attributed).
         "deputy_speaker": "Deputy Speaker",
+    },
+    # NS: parser sets `speaker_role IS NULL` and stamps the role token
+    # into `speaker_name_raw` (ALL-CAPS "THE PREMIER"). The resolver
+    # honours this via ROLE_ONLY_NAME_PATTERNS below; this office-map
+    # entry is left empty so the role-keyed path doesn't double-match.
+    "NS": {},
+}
+
+# Companion to ROLE_ONLY_OFFICE_MAP for jurisdictions whose chamber
+# parser doesn't populate `speaker_role` for role-only turns and instead
+# leaves the role token in `speaker_name_raw`. Maps a literal
+# `speaker_name_raw` value → `politician_terms.office`. Matched only
+# when `speaker_role IS NULL OR speaker_role = ''`.
+ROLE_ONLY_NAME_PATTERNS: dict[str, dict[str, str]] = {
+    "NS": {
+        # NS Hansard parser emits ALL-CAPS `THE PREMIER` for the bare-
+        # role-only turns. Houston-era parens-form
+        # (`HON. TIM HOUSTON (The Premier)`) is Pass-1 territory and
+        # is not touched here.
+        "THE PREMIER": "Premier",
     },
 }
 
@@ -991,7 +1041,8 @@ async def resolve_role_only_presiding(
     stats = ResolveStats()
 
     role_map = ROLE_ONLY_OFFICE_MAP.get(province, {})
-    if not role_map:
+    name_map = ROLE_ONLY_NAME_PATTERNS.get(province, {})
+    if not role_map and not name_map:
         log.info("resolve_role_only_presiding(%s): no role map configured", province)
         return stats
 
@@ -1052,6 +1103,39 @@ async def resolve_role_only_presiding(
                 continue
             by_politician.setdefault(pid, []).append(r["id"])
 
+    # Name-pattern path: jurisdictions (currently NS) whose chamber
+    # parser leaves `speaker_role` NULL and stamps the role token into
+    # `speaker_name_raw`. Matched only when `speaker_role` is NULL or
+    # empty so we don't trample legitimate role-keyed paths.
+    for name_pattern, office in name_map.items():
+        if office not in terms_by_office:
+            continue
+        sql = """
+            SELECT s.id::text AS id,
+                   s.spoken_at::date AS spoken_date
+              FROM speeches s
+             WHERE s.level = 'provincial'
+               AND s.province_territory = $1
+               AND s.politician_id IS NULL
+               AND (s.speaker_role IS NULL OR s.speaker_role = '')
+               AND s.speaker_name_raw = $2
+        """
+        params = [province, name_pattern]
+        if limit is not None:
+            sql += f" LIMIT {int(limit)}"
+        rows = await db.fetch(sql, *params)
+        stats.scanned += len(rows)
+        for r in rows:
+            d = r["spoken_date"]
+            if d is None:
+                stats.no_term_match += 1
+                continue
+            pid = find_holder_for(office, d)
+            if pid is None:
+                stats.no_term_match += 1
+                continue
+            by_politician.setdefault(pid, []).append(r["id"])
+
     BATCH = 5000
     for pid, speech_ids in by_politician.items():
         for i in range(0, len(speech_ids), BATCH):
@@ -1081,6 +1165,54 @@ async def resolve_role_only_presiding(
                 stats.chunks_updated += int(result.split()[-1])
             except (ValueError, AttributeError):
                 pass
+
+    # Reconcile sweep: a previous timeout-aborted run can commit the
+    # speech UPDATE but leave matching chunks desynced. On re-run the
+    # speeches no longer match the NULL filter above, so we'd never
+    # catch up. One targeted sweep over speeches the resolver owns
+    # (by role-key or by name-pattern, with politician_id NOT NULL)
+    # closes the loop. Mirrors resolve_speakers().
+    role_keys = list(role_map.keys())
+    name_keys = list(name_map.keys())
+    if role_keys:
+        reconcile = await db.execute(
+            """
+            UPDATE speech_chunks sc
+               SET politician_id = s.politician_id
+              FROM speeches s
+             WHERE sc.speech_id = s.id
+               AND s.level = 'provincial'
+               AND s.province_territory = $1
+               AND s.speaker_role = ANY($2::text[])
+               AND s.politician_id IS NOT NULL
+               AND sc.politician_id IS DISTINCT FROM s.politician_id
+            """,
+            province, role_keys,
+        )
+        try:
+            stats.chunks_updated += int(reconcile.split()[-1])
+        except (ValueError, AttributeError):
+            pass
+    if name_keys:
+        reconcile = await db.execute(
+            """
+            UPDATE speech_chunks sc
+               SET politician_id = s.politician_id
+              FROM speeches s
+             WHERE sc.speech_id = s.id
+               AND s.level = 'provincial'
+               AND s.province_territory = $1
+               AND (s.speaker_role IS NULL OR s.speaker_role = '')
+               AND s.speaker_name_raw = ANY($2::text[])
+               AND s.politician_id IS NOT NULL
+               AND sc.politician_id IS DISTINCT FROM s.politician_id
+            """,
+            province, name_keys,
+        )
+        try:
+            stats.chunks_updated += int(reconcile.split()[-1])
+        except (ValueError, AttributeError):
+            pass
 
     log.info(
         "resolve_role_only_presiding(%s): scanned=%d resolved=%d "

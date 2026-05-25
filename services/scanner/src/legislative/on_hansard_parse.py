@@ -198,6 +198,11 @@ _HONORIFIC_RE = re.compile(
 # stripped. ON publishes "The Speaker", "The Acting Speaker",
 # "The Deputy Speaker" plus ad-hoc clerk / officer roles, AND the
 # legacy "Madam Speaker" / "Mr. Speaker" forms used in older transcripts.
+#
+# Staff and chorus entries below the presiding-officer block drive
+# `speech_type='staff'` / `'group'` via the `_STAFF_ROLES` / `_GROUP_ROLES`
+# frozensets at the build site. Adding a pattern here without adding the
+# canonical to the right frozenset leaves it tagged `speech_type='floor'`.
 _ROLE_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"^the\s+speaker$"),                      "The Speaker"),
     (re.compile(r"^madam\s+speaker$"),                    "The Speaker"),
@@ -207,11 +212,57 @@ _ROLE_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"^the\s+acting\s+speaker$"),             "The Acting Speaker"),
     (re.compile(r"^the\s+deputy\s+speaker$"),             "The Deputy Speaker"),
     (re.compile(r"^the\s+chair$"),                        "The Chair"),
-    (re.compile(r"^the\s+clerk(?:\s+of\s+the\s+assembly)?$"), "The Clerk"),
-    (re.compile(r"^the\s+sergeant[-\s]at[-\s]arms$"),     "The Sergeant-at-Arms"),
+    # Parliamentary-staff roles. The Clerk family + Sergeant-at-Arms.
+    # politician_id stays NULL by design on these — they're not MPPs;
+    # `speech_type='staff'` is what lets coverage queries exclude them
+    # honestly from the unattributed-politicians denominator.
+    (re.compile(r"^the\s+acting\s+clerk[-\s]at[-\s]the[-\s]table$"), "The Acting Clerk-at-the-Table"),
+    (re.compile(r"^the\s+clerk[-\s]at[-\s]the[-\s]table$"),          "The Clerk-at-the-Table"),
+    (re.compile(r"^the\s+deputy\s+clerk$"),                          "The Deputy Clerk"),
+    (re.compile(r"^the\s+acting\s+clerk\s+of\s+the\s+assembly$"),    "The Acting Clerk of the Assembly"),
+    (re.compile(r"^the\s+clerk\s+of\s+the\s+committee$"),            "The Clerk of the Committee"),
+    (re.compile(r"^the\s+acting\s+table\s+clerk$"),                  "The Acting Table Clerk"),
+    (re.compile(r"^the\s+clerk(?:\s+of\s+the\s+assembly)?$"),        "The Clerk"),
+    (re.compile(r"^the\s+sergeant[-\s]at[-\s]arms$"),                "The Sergeant-at-Arms"),
+    # Chorus / heckle attributions. No individual speaker; politician_id
+    # stays NULL by design. Drives `speech_type='group'`. The variant set
+    # covers both "hon."/"hon" (period optional) and Member/Members case-
+    # and-comma variants observed in the ON corpus.
+    (re.compile(r"^an\.?\s+hon\.?\s+members?$"),                     "An hon. member"),
+    (re.compile(r"^a\s+hon\.?\s+member$"),                           "An hon. member"),
+    (re.compile(r"^some\s+hon\.?\s+members?$"),                      "Some hon. members"),
+    (re.compile(r"^interjections?$"),                                "Interjection"),
     # Fall-through in caller: anything starting with "The " is a role we
     # don't specifically recognise but is still a role-only attribution.
 ]
+
+
+# Roles that correspond to parliamentary-staff turns. Membership here
+# drives `speech_type='staff'` at the speech-build site. Includes the
+# nested-parens variant for William Wong ("The Clerk-at-the-Table (Mr.
+# Wai Lam (William) Wong)") which slips through `_ROLE_WITH_PARENS_RE`
+# uncanonicalised because that regex assumes a single parens pair —
+# easier to enumerate explicitly than to add a nested-parens parser.
+_STAFF_ROLES: frozenset[str] = frozenset({
+    "The Clerk",
+    "The Clerk-at-the-Table",
+    "The Deputy Clerk",
+    "The Acting Clerk-at-the-Table",
+    "The Clerk of the Committee",
+    "The Acting Clerk of the Assembly",
+    "The Acting Table Clerk",
+    "The Sergeant-at-Arms",
+    "The Clerk-at-the-Table (Mr. Wai Lam (William) Wong)",
+})
+
+# Roles that correspond to chorus / heckle turns. No individual speaker;
+# `politician_id` stays NULL by design. Drives `speech_type='group'`.
+# Mirrors `qc_hansard_parse._GROUP_ROLES`.
+_GROUP_ROLES: frozenset[str] = frozenset({
+    "An hon. member",
+    "Some hon. members",
+    "Interjection",
+})
 
 # Attribution carrying an inline "(name)" — e.g. "The Speaker (Hon. Donna Skelly)".
 # We capture the parens content for parens_name extraction.
@@ -453,7 +504,11 @@ def _build_speech(
         honorific=attr.honorific,
         surname=attr.surname,
         full_name=attr.full_name,
-        speech_type="floor",
+        speech_type=(
+            "group" if attr.role in _GROUP_ROLES
+            else "staff" if attr.role in _STAFF_ROLES
+            else "floor"
+        ),
         spoken_at=spoken_at,
         text=body_text,
         language=_detect_language(body_text),

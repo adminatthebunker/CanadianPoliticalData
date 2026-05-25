@@ -176,6 +176,12 @@ const COMMAND_CATALOG = [
       { name: "limit", type: "int", required: false, help: "Cap candidate speeches scanned (smoke-test aid)." },
     ],
   },
+  { key: "resolve-qc-speakers-doc-continuity", category: "hansard",
+    description: "Document-level continuity QC speaker resolver. Propagates an already-attributed politician_id from another speech in the SAME QC Hansard document to unresolved bare-surname rows whose parsed surname matches that politician's last_name. Confidence 0.75. Run after resolve-qc-speakers-dated. Idempotent.",
+    args: [
+      { name: "limit", type: "int", required: false, help: "Cap candidate speeches scanned (smoke-test aid)." },
+    ],
+  },
   { key: "ingest-mb-hansard", category: "hansard",
     description: "Pull Manitoba Hansard (Word-exported HTML) into `speeches`. Speaker resolution via politicians.mb_assembly_slug.",
     args: [
@@ -291,9 +297,9 @@ const COMMAND_CATALOG = [
     ],
   },
   { key: "resolve-role-only-presiding-officers", category: "hansard",
-    description: "Tier-2 attribution Pass 3 — resolve role-only presiding-officer rows (e.g. 'The Deputy Speaker' with no inline name) by date-windowed lookup against ROLE_ONLY_PRESIDING_ROSTER. Covers single-person date-determined offices (Deputy Speaker, Deputy Chair of Committees) for AB / BC / MB / SK.",
+    description: "Tier-2 attribution Pass 3 — resolve role-only presiding-officer / cabinet rows (e.g. 'The Deputy Speaker' with no inline name, NS 'THE PREMIER') by date-windowed lookup against ROLE_ONLY_PRESIDING_ROSTER. Covers single-person date-determined offices (Deputy Speaker, Deputy Chair of Committees, Premier) for AB / BC / MB / NS / SK.",
     args: [
-      { name: "province", type: "enum", required: false, choices: ["AB", "BC", "MB", "SK"],
+      { name: "province", type: "enum", required: false, choices: ["AB", "BC", "MB", "NS", "SK"],
         help: "2-letter code; default runs every province with a role-only roster." },
       { name: "limit", type: "int", required: false, help: "Cap candidate speeches scanned." },
     ],
@@ -485,10 +491,11 @@ const COMMAND_CATALOG = [
       { name: "delay", type: "float", required: false, default: 1.0, help: "Seconds between page fetches (be polite to ola.org)." },
     ] },
   { key: "ingest-qc-former-mnas", category: "enrichment",
-    description: "Backfill historical QC MNAs from assnat.qc.ca/fr/membres/notices/index*.html (16 alphabet-letter pages, ~2,500 MNAs since 1764). Per-MNA bio page is parsed via prose-regex for first/last career years; one wide-span politician_terms row inserted per MNA (source='assnat.qc.ca:former-mnas'). Prereq for resolve-qc-speakers-dated.",
+    description: "Backfill historical QC MNAs from assnat.qc.ca/fr/membres/notices/index*.html (16 alphabet-letter pages, ~2,600 unique MNAs across deputes/ and patrimoine/ URL families since 1764). Per-MNA bio page is parsed via prose-regex for first/last career years; one wide-span politician_terms row inserted per MNA (source='assnat.qc.ca:former-mnas'). The two URL families share a small-integer ID space — deputes/ rows claim qc_assnat_id, patrimoine/ rows leave it NULL. Prereq for resolve-qc-speakers-dated.",
     args: [
       { name: "delay", type: "float", required: false, default: 1.5, help: "Seconds between page fetches (be polite to assnat.qc.ca)." },
       { name: "limit", type: "int", required: false, help: "Cap MNAs processed this run (smoke-test aid)." },
+      { name: "bio-for-existing", type: "bool", required: false, default: false, help: "Re-fetch bios for MNAs already in the DB (default: skip). Use after a regex-improvement to widen career spans." },
     ] },
   { key: "enrich-bc-member-parliaments", category: "enrichment",
     description: "Stamp politician_terms for every BC (member, parliament) edge from LIMS GraphQL allMemberParliaments (~750 edges, single query). One term per edge with source='lims.leg.bc.ca:parliament-N'. Prereq: scripts/bc-enrich-historical-mlas.py for the 376-MLA historical roster.",

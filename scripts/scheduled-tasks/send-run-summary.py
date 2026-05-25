@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
 """Email a one-paragraph summary of a scheduled enrichment run.
 
-Invoked by run-socials-weekly.sh after the headless Claude Code
-session finishes. Reads the log file, extracts the agent's own summary
-(everything after the final "socials enrichment complete" line that
-the prompt's safety-rule section instructs the agent to emit), and
-sends it to the admin via the project's existing Proton SMTP setup.
+Invoked by the headless Claude Code wrapper scripts after a session
+finishes. Reads the log file, extracts the agent's own summary
+(everything after the final "<task> complete" line that the prompt's
+safety-rule section instructs the agent to emit), and sends it to
+the admin via the project's existing Proton SMTP setup.
+
+Task-name parameterization: a third positional argument (defaulting to
+"socials enrichment" for back-compat with the original caller) drives
+both the subject prefix and the signal-line grep so the same helper
+can serve every headless task in scripts/scheduled-tasks/ without
+forking.
 
 Why not just rely on cron's MAILTO: the user's crontab pins MAILTO=""
 to suppress fleet mail. We want one targeted email per run, not the
@@ -40,12 +46,12 @@ def load_env(env_path: Path) -> None:
         os.environ.setdefault(key.strip(), val.strip())
 
 
-def build_subject(exit_code: int, log_path: Path) -> str:
+def build_subject(exit_code: int, log_path: Path, task_name: str) -> str:
     pass_fail = "✓" if exit_code == 0 else "✗"
-    return f"[CPD socials enrichment] {pass_fail} run {log_path.stem} (exit={exit_code})"
+    return f"[CPD {task_name}] {pass_fail} run {log_path.stem} (exit={exit_code})"
 
 
-def build_body(log_path: Path, exit_code: int) -> str:
+def build_body(log_path: Path, exit_code: int, task_name: str) -> str:
     """Read the log, surface the agent-emitted summary if present,
     else fall back to the last 80 lines."""
     if not log_path.exists():
@@ -57,9 +63,10 @@ def build_body(log_path: Path, exit_code: int) -> str:
     # to print this exact phrase on completion; grep for it as the
     # divider between the agent's verbose reasoning and the canonical
     # one-line summary it produces.
+    signal = f"{task_name} complete"
     marker_idx = None
     for i, ln in enumerate(lines):
-        if "socials enrichment complete" in ln:
+        if signal in ln:
             marker_idx = i
             break
 
@@ -111,7 +118,10 @@ def send(to_addr: str, subject: str, body: str) -> None:
 
 def main(argv: list[str]) -> int:
     if len(argv) < 3:
-        print("usage: send-run-summary.py <log_path> <exit_code>", file=sys.stderr)
+        print(
+            "usage: send-run-summary.py <log_path> <exit_code> [<task_name>]",
+            file=sys.stderr,
+        )
         return 2
 
     log_path = Path(argv[1])
@@ -119,6 +129,10 @@ def main(argv: list[str]) -> int:
         exit_code = int(argv[2])
     except ValueError:
         exit_code = -1
+    # Default preserves the original call shape (run-socials-weekly.sh
+    # has called this without a task name since shipping); new wrappers
+    # pass an explicit name so the email + signal-line search line up.
+    task_name = argv[3] if len(argv) >= 4 else "socials enrichment"
 
     # Source SMTP creds from the project .env (cron's environment
     # doesn't inherit anything from the user's interactive shell).
@@ -130,8 +144,8 @@ def main(argv: list[str]) -> int:
         return 0  # Silent skip — not a failure condition.
 
     to_addr = os.environ.get("CPD_OPS_EMAIL", "admin@thebunkerops.ca")
-    subject = build_subject(exit_code, log_path)
-    body = build_body(log_path, exit_code)
+    subject = build_subject(exit_code, log_path, task_name)
+    body = build_body(log_path, exit_code, task_name)
 
     try:
         send(to_addr, subject, body)

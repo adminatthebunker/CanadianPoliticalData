@@ -260,8 +260,20 @@ _ROLE_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"^the\s+attorney\s+general.*$"),          "The Attorney General"),
     (re.compile(r"^the\s+government\s+house\s+leader.*$"), "The Government House Leader"),
     (re.compile(r"^the\s+official\s+opposition.*$"),       "The Official Opposition Leader"),
-    (re.compile(r"^the\s+clerk\s*$"),                      "The Clerk"),
-    (re.compile(r"^the\s+sergeant[-\s]at[-\s]arms\s*$"),   "The Sergeant-at-Arms"),
+    # Parliamentary staff — Clerk / Sergeant-at-Arms family. After
+    # _norm() parens are replaced with whitespace, so `Madam Clerk
+    # (Patricia Chaychuk)` normalizes to `madam clerk patricia chaychuk`
+    # — the optional trailing-name tail catches the parens-name variant
+    # alongside the bare form. Order is significant: `clerk assistant`
+    # and `deputy clerk` must come before the generic `clerk` pattern so
+    # iteration in _match_role() picks the more-specific role first.
+    # politician_id stays NULL by design (these are not MLAs); the role
+    # tag is what lets coverage queries exclude them honestly.
+    (re.compile(r"^(?:the\s+|madam\s+|mr\s+)?(?:acting\s+)?clerk\s+assistant(?:\s+\S.*)?$"),                "The Clerk Assistant"),
+    (re.compile(r"^(?:the\s+|madam\s+|mr\s+)?(?:acting\s+)?deputy\s+clerk(?:\s+\S.*)?$"),                   "The Deputy Clerk"),
+    (re.compile(r"^(?:the\s+|madam\s+|mr\s+)?(?:acting\s+)?clerk(?:\s+\S.*)?$"),                            "The Clerk"),
+    (re.compile(r"^(?:the\s+|madam\s+|mr\s+)?(?:acting\s+)?deputy\s+sergeant[-\s]at[-\s]arms(?:\s+\S.*)?$"), "The Deputy Sergeant-at-Arms"),
+    (re.compile(r"^(?:the\s+|madam\s+|mr\s+)?(?:acting\s+)?sergeant[-\s]at[-\s]arms(?:\s+\S.*)?$"),         "The Sergeant-at-Arms"),
     # Anonymous / group.
     (re.compile(r"^(?:an|some|several)\s+hon(?:ourable)?\s+members?$"),
                                                            "Honourable Members"),

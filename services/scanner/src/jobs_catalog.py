@@ -289,6 +289,15 @@ COMMANDS: dict[str, dict[str, Any]] = {
              "help": "Cap candidate speeches scanned (smoke-test aid)."},
         ],
     },
+    "resolve-qc-speakers-doc-continuity": {
+        "description": "Document-level continuity QC speaker resolver. Propagates an already-attributed politician_id from another speech in the SAME QC Hansard document (raw->'qc_hansard'->>'document_id') to unresolved bare-surname rows whose parsed surname matches that politician's last_name. Confidence 0.75. Run after resolve-qc-speakers-dated. Idempotent.",
+        "cli": "resolve-qc-speakers-doc-continuity",
+        "category": "hansard",
+        "args": [
+            {"name": "limit", "type": "int", "required": False,
+             "help": "Cap candidate speeches scanned (smoke-test aid)."},
+        ],
+    },
     "ingest-mb-hansard": {
         "description": "Pull Manitoba Hansard (Word-exported HTML) into `speeches`. Speaker resolution via politicians.mb_assembly_slug.",
         "cli": "ingest-mb-hansard",
@@ -696,11 +705,11 @@ COMMANDS: dict[str, dict[str, Any]] = {
         ],
     },
     "resolve-role-only-presiding-officers": {
-        "description": "Tier-2 attribution Pass 3 — resolve role-only presiding-officer rows (e.g. `The Deputy Speaker` with no inline name) by date-windowed lookup against ROLE_ONLY_PRESIDING_ROSTER. Covers single-person date-determined offices (Deputy Speaker, Deputy Chair of Committees). Provinces: AB / BC / MB / SK. Idempotent.",
+        "description": "Tier-2 attribution Pass 3 — resolve role-only presiding-officer / cabinet rows (e.g. `The Deputy Speaker` with no inline name, NS `THE PREMIER`) by date-windowed lookup against ROLE_ONLY_PRESIDING_ROSTER. Covers single-person date-determined offices (Deputy Speaker, Deputy Chair of Committees, Premier). Provinces: AB / BC / MB / NS / SK. Idempotent.",
         "cli": "resolve-role-only-presiding-officers", "category": "hansard",
         "args": [
             {"name": "province", "type": "str", "required": False,
-             "help": "2-letter code (AB/BC/MB/SK) to scope the run. Default: all provinces with a role-only roster."},
+             "help": "2-letter code (AB/BC/MB/NS/SK) to scope the run. Default: all provinces with a role-only roster."},
             {"name": "limit", "type": "int", "required": False,
              "help": "Cap candidate speeches scanned (smoke-test aid)."},
         ],
@@ -995,13 +1004,15 @@ COMMANDS: dict[str, dict[str, Any]] = {
         ],
     },
     "ingest-qc-former-mnas": {
-        "description": "Backfill historical QC MNAs from assnat.qc.ca/fr/membres/notices/index*.html (16 alphabet-letter pages, ~2,500 MNAs since 1764). Per-MNA bio page is parsed via prose-regex for first/last career years; one wide-span politician_terms row inserted per MNA (source='assnat.qc.ca:former-mnas'). Prereq for resolve-qc-speakers-dated.",
+        "description": "Backfill historical QC MNAs from assnat.qc.ca/fr/membres/notices/index*.html (16 alphabet-letter pages, ~2,600 unique MNAs across deputes/ and patrimoine/ URL families since 1764). Per-MNA bio page is parsed via prose-regex for first/last career years; one wide-span politician_terms row inserted per MNA (source='assnat.qc.ca:former-mnas'). The two URL families share a small-integer ID space — deputes/ rows claim qc_assnat_id, patrimoine/ rows leave it NULL (use --bio-for-existing to widen ended_at on re-runs after the 'Ne s'est pas représenté' regex shipped 2026-05-21). Prereq for resolve-qc-speakers-dated.",
         "cli": "ingest-qc-former-mnas", "category": "enrichment",
         "args": [
             {"name": "delay", "type": "float", "required": False, "default": 1.5,
              "help": "Seconds between page fetches (be polite to assnat.qc.ca)."},
             {"name": "limit", "type": "int", "required": False,
              "help": "Cap MNAs processed this run (smoke-test aid)."},
+            {"name": "bio-for-existing", "type": "bool", "required": False, "default": False,
+             "help": "Re-fetch bios for MNAs already in the DB (default: skip). Use after a regex-improvement to widen career spans."},
         ],
     },
     "enrich-bc-member-parliaments": {

@@ -4015,6 +4015,7 @@ def cmd_ingest_qc_former_mnas(
             f"inserted={stats.politicians_inserted} "
             f"updated={stats.politicians_updated} "
             f"name_matched={stats.politicians_name_matched} "
+            f"patrimoine_demoted={stats.patrimoine_demoted} "
             f"terms_inserted={stats.terms_inserted} "
             f"terms_skipped={stats.terms_skipped_existing}"
         )
@@ -4051,31 +4052,80 @@ def cmd_resolve_qc_speakers_dated(
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 
 
+@cli.command("resolve-qc-speakers-doc-continuity")
+@click.option("--limit", type=int, default=None,
+              help="Cap candidate speeches scanned (smoke-test aid).")
+@click.pass_context
+def cmd_resolve_qc_speakers_doc_continuity(
+    ctx: click.Context, limit: Optional[int],
+) -> None:
+    """Document-level continuity QC speaker resolver: propagates an
+    already-attributed politician_id from another speech in the SAME QC
+    Hansard document (raw->'qc_hansard'->>'document_id') to unresolved
+    bare-surname rows whose parsed surname matches that politician's
+    last_name (accent-stripped, lowercased).
+
+    Run AFTER resolve-qc-speakers-dated. That resolver attributes by
+    date-windowed last_name match (single-candidate gate); this one
+    bootstraps off the resulting per-doc ground truth — for genuine
+    same-surname date-overlap collisions, the surname is usually
+    unambiguous within any single sitting day's Hansard.
+
+    Confidence 0.75 (lower than dated's 0.85: corpus-bootstrap rather
+    than date-windowed direct match). Same-surname-multiple-politician
+    rows in a single doc stay NULL. Idempotent.
+    """
+    async def _wrap(db: Database) -> None:
+        from .legislative.qc_hansard import (
+            resolve_qc_speakers_doc_continuity as _resolve,
+        )
+        stats = await _resolve(db, limit=limit)
+        console.print(
+            f"[green]resolve-qc-speakers-doc-continuity[/green]: "
+            f"scanned={stats.speeches_scanned} updated={stats.speeches_updated} "
+            f"still_unresolved={stats.still_unresolved}"
+        )
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
 @cli.command("resolve-on-speakers-dated")
 @click.option("--limit", type=int, default=None,
               help="Cap candidate speeches scanned (smoke-test aid).")
 @click.pass_context
 def cmd_resolve_on_speakers_dated(ctx: click.Context, limit: Optional[int]) -> None:
-    """Parliament-keyed ON speaker resolver: joins on the parliament
-    number from speeches.raw->'on_hansard'->>'parliament' against
-    politician_terms.source = 'ola.org:parliament-N'.
+    """Date-windowed ON speaker resolver: surname-equality join against
+    politicians whose politician_terms window contains spoken_at.
+
+    Rewritten 2026-05-21 (was parliament-keyed; that approach attributed
+    only 0.3% of candidates because most politician_terms lack the
+    'ola.org:parliament-N' source tag). Mirrors qc/mb dated resolvers.
 
     Run after ingest-on-former-mpps lands the historical roster, and
-    after backfilling pre-current-Parliament Hansard. Mirrors AB's
-    legl-keyed resolver — the speech raw payload already carries the
-    parliament number, so disambiguation is exact (not date-windowed)
-    against the 5000+ MPPs whose terms were stamped per-parliament.
+    after backfilling pre-current-Parliament Hansard.
 
-    Same-surname-within-one-parliament rows stay NULL (cand_count > 1).
+    Same-surname-overlapping-terms rows stay NULL (count DISTINCT > 1).
     Idempotent.
     """
     async def _wrap(db: Database) -> None:
-        from .legislative.on_hansard import resolve_on_speakers_dated as _resolve
+        from .legislative.on_hansard import (
+            resolve_on_speakers_dated as _resolve,
+            resolve_on_speakers_middle_initial as _resolve_mi,
+        )
         stats = await _resolve(db, limit=limit)
         console.print(
             f"[green]resolve-on-speakers-dated[/green]: "
             f"scanned={stats.speeches_scanned} updated={stats.speeches_updated} "
             f"still_unresolved={stats.still_unresolved}"
+        )
+        # Second pass: rescue same-surname-same-first-initial-different-
+        # middle-initial cases (e.g. Dave Cooke ['D. S. Cooke'] vs
+        # David R. Cooke ['D. R. Cooke']) that the dated resolver can't
+        # break with first-token disambiguation alone.
+        mi_stats = await _resolve_mi(db, limit=limit)
+        console.print(
+            f"[green]resolve-on-speakers-middle-initial[/green]: "
+            f"scanned={mi_stats.speeches_scanned} updated={mi_stats.speeches_updated} "
+            f"still_unresolved={mi_stats.still_unresolved}"
         )
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 

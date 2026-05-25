@@ -59,7 +59,13 @@ INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) V
 -- the votes extractor as a new sibling row here (created_by='daily-ingest-
 -- rollout') puts it in the rollup-managed group while leaving the legacy
 -- rows untouched. :50 13 sits right after the legacy 13:30 NS Hansard.
+-- NS presiding-officer resolver (Premier role-only Pass-3, shipped
+-- 2026-05-22) slots at :45 13 — right before the votes extractor at
+-- :50 13 and before the BC chain starts at :00 14.
 INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) VALUES
+('NS role-only presiding/cabinet resolver',
+ 'resolve-role-only-presiding-officers', '{"province": "NS"}'::jsonb,
+ '45 13 * * *', true, 'daily-ingest-rollout'),
 ('NS votes extraction',
  'extract-ns-votes', '{}'::jsonb,
  '50 13 * * *', true, 'daily-ingest-rollout');
@@ -136,6 +142,22 @@ INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) V
 ('QC speaker resolver',
  'resolve-qc-speakers', '{}'::jsonb,
  '30 16 * * *', true, 'daily-ingest-rollout'),
+('QC date-windowed speaker resolver',
+ 'resolve-qc-speakers-dated', '{}'::jsonb,
+ '32 16 * * *', true, 'daily-ingest-rollout'),
+('QC doc-continuity speaker resolver',
+ 'resolve-qc-speakers-doc-continuity', '{}'::jsonb,
+ '33 16 * * *', true, 'daily-ingest-rollout'),
+-- Former MNAs roster refresh runs weekly (Sundays 04:20 UTC) — idempotent
+-- alphabet-walk of /fr/membres/notices/index*.html. Latent gap closed
+-- 2026-05-21: ingester shipped 2026-04-27 but never scheduled, and the
+-- httpx client was missing the verify=False that other QC ingesters use
+-- to work around assnat.qc.ca's cert chain. Known coverage gap: the
+-- 16-letter alphabet listing doesn't include recent retirees (post-~2015);
+-- those need a separate URL family (deferred to a future cycle).
+('QC former MNAs roster refresh',
+ 'ingest-qc-former-mnas', '{}'::jsonb,
+ '20 4 * * 0', true, 'daily-ingest-rollout'),
 ('QC presiding speaker resolver',
  'resolve-presiding-speakers', '{"province": "QC"}'::jsonb,
  '45 16 * * *', true, 'daily-ingest-rollout'),
@@ -364,6 +386,80 @@ INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) V
  'extract-sk-votes', '{"current_only": true}'::jsonb,
  '50 22 * * *', true, 'daily-ingest-rollout');
 
+-- ─── Audit-driven schedule additions (2026-05-21) ────────────────────
+-- `scripts/audit-schedule-gaps.py` surfaced commands registered in
+-- `jobs_catalog.COMMANDS` that had no `scanner_schedules` row. After
+-- categorising the gaps by "should this be scheduled?" heuristics, the
+-- following 7 rows close the genuinely-latent slots. The audit script
+-- excluded BC ALL-CAPS / BC-dated / federal acting-speakers as
+-- one-shot / superseded — see audit-schedule-gaps.py for the categoriser.
+INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) VALUES
+-- Historical-roster ingesters — weekly Sundays at 04:25-04:40 UTC,
+-- continuing the QC slot (04:20) added earlier 2026-05-21. New
+-- retirements trickle in across years; weekly cadence is right.
+('BC former MLAs roster refresh',
+ 'ingest-bc-former-mlas', '{}'::jsonb,
+ '25 4 * * 0', true, 'audit-2026-05-21'),
+('MB former MLAs roster refresh',
+ 'ingest-mb-former-mlas', '{}'::jsonb,
+ '30 4 * * 0', true, 'audit-2026-05-21'),
+('NU former MLAs roster refresh',
+ 'ingest-nu-former-mlas', '{}'::jsonb,
+ '35 4 * * 0', true, 'audit-2026-05-21'),
+('ON former MPPs roster refresh',
+ 'ingest-on-former-mpps', '{}'::jsonb,
+ '40 4 * * 0', true, 'audit-2026-05-21'),
+
+-- ON parliament-keyed speaker resolver (sister of resolve-qc-speakers-dated
+-- which was also unscheduled until earlier today). Slot is between
+-- resolve-on-speakers (35 18) and extract-on-votes (55 18). First
+-- manual run on 2026-05-21 only attributed 90/32,297 candidates because
+-- the parliament-vs-source-tag matching is weaker than QC's date-window;
+-- the schedule is for steady-state catch-up on new ingest.
+('ON parliament-keyed speaker resolver',
+ 'resolve-on-speakers-dated', '{}'::jsonb,
+ '40 18 * * *', true, 'audit-2026-05-21'),
+
+-- Coverage stats + materialized-view refresh. End-of-day so they see
+-- the full day's ingest. TODO line 141 explicitly calls these Always-on.
+('Coverage stats refresh',
+ 'refresh-coverage-stats', '{}'::jsonb,
+ '50 23 * * *', true, 'audit-2026-05-21'),
+('Map materialized views refresh',
+ 'refresh-views', '{}'::jsonb,
+ '55 23 * * *', true, 'audit-2026-05-21'),
+
+-- Roster enrichment + slug-stamping additions (MEDIUM-bucket triage,
+-- same audit cycle, later in the day). Slotted into the Sunday
+-- weekly-enrichment block right after the historical-roster
+-- ingesters (25-40 04 UTC) and before verify-socials (00 05 UTC).
+-- Ordering within the block:
+--   42 04  enrich-socials-all (largest fan-out: wikidata→openparl→masto)
+--   45 04  enrich-ab-mlas      (per-MLA page fetch, ~90 MLAs × 1s delay)
+--   48 04  enrich-bc-member-parliaments (single LIMS GraphQL query)
+--   50 04  ingest-mb-mlas      (slug stamping from /legislature/members/info/)
+--   52 04  ingest-nt-mlas      (slug stamping + ~100 former MLAs paginated)
+-- `ingest-mb-mlas` is distinct from `ingest-manitoba-mlas` (Open North):
+-- this one stamps the surname-slug from the Legislative Assembly so
+-- sponsor / speaker resolution is an exact FK lookup. Both should run.
+-- `ingest-nt-mlas` is the prereq for the daily NT Hansard chain at
+-- 30 21 UTC — refreshes nt_mla_slug stamping + picks up new former MLAs.
+('Socials enrichment chain (wikidata+openparl+masto)',
+ 'enrich-socials-all', '{}'::jsonb,
+ '42 4 * * 0', true, 'audit-2026-05-21'),
+('AB MLA detail enrichment (per-MID fetch)',
+ 'enrich-ab-mlas', '{}'::jsonb,
+ '45 4 * * 0', true, 'audit-2026-05-21'),
+('BC member-parliament edges enrichment',
+ 'enrich-bc-member-parliaments', '{}'::jsonb,
+ '48 4 * * 0', true, 'audit-2026-05-21'),
+('MB MLA assembly-slug stamping',
+ 'ingest-mb-mlas', '{}'::jsonb,
+ '50 4 * * 0', true, 'audit-2026-05-21'),
+('NT MLA slug stamping + former-members ingest',
+ 'ingest-nt-mlas', '{}'::jsonb,
+ '52 4 * * 0', true, 'audit-2026-05-21');
+
 -- next_run_at is computed by the worker the first time it polls; leave
 -- it NULL here so croniter advances it correctly on the worker tick.
 
@@ -371,5 +467,5 @@ COMMIT;
 
 -- Show what we just wrote.
 SELECT name, cron, enabled, command FROM scanner_schedules
- WHERE created_by = 'daily-ingest-rollout'
+ WHERE created_by IN ('daily-ingest-rollout', 'audit-2026-05-21')
  ORDER BY cron, name;

@@ -189,6 +189,22 @@ _ROLE_PATTERNS: list[tuple[re.Pattern[str], str]] = [
     (re.compile(r"^une\s+voix$"),                                       "Une voix"),
 ]
 
+# Roles that correspond to chorus / heckle turns. No individual speaker;
+# `politician_id` stays NULL by design. Drives `speech_type='group'` so
+# coverage queries can honestly exclude them from the unattributed-
+# politicians denominator. Mirrors `nl_hansard_parse._STAFF_ROLES`'s
+# role-set discrimination pattern.
+_GROUP_ROLES: frozenset[str] = frozenset({"Des voix", "Une voix"})
+
+# Roles that correspond to parliamentary-staff turns (Secretary / Clerk).
+# Not MNAs; `politician_id` stays NULL by design. Drives `speech_type='staff'`.
+# Currently single-entry — the `Le Secrétaire` pattern's `\b.*$` tail
+# absorbs `Le Secrétaire général` and similar cabinet-secretary variants
+# into the same canonical role. Add new entries here when QC introduces
+# additional non-MNA presiding shapes (Le Sergent d'armes / Le Greffier /
+# Le Huissier) that the parser starts emitting.
+_STAFF_ROLES: frozenset[str] = frozenset({"Le Secrétaire"})
+
 # Main/paren split: "La Vice-Présidente (Mme Soucy)" or "M. Legault (chef du gouvernement)"
 _PAREN_SPLIT_RE = re.compile(r"^(?P<main>[^()]+?)\s*\((?P<paren>[^()]+)\)\s*$")
 
@@ -406,7 +422,11 @@ def extract_speeches(html_text: str, url: str) -> ParseResult:
             paren_honorific=turn_attr.paren_honorific,
             paren_surname=turn_attr.paren_surname,
             constituency_hint=turn_attr.constituency_hint,
-            speech_type="floor",
+            speech_type=(
+                "group" if turn_attr.role in _GROUP_ROLES
+                else "staff" if turn_attr.role in _STAFF_ROLES
+                else "floor"
+            ),
             spoken_at=spoken_at,
             text=text,
             language="fr",

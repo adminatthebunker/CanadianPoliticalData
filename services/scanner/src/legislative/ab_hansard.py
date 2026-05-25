@@ -286,6 +286,28 @@ _GROUP_SPEAKER_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Roles that correspond to chorus / heckle turns. No individual speaker;
+# `politician_id` stays NULL by design. Drives `speech_type='group'` so
+# coverage queries can honestly exclude them from the unattributed-
+# politicians denominator. Mirrors `qc_hansard_parse._GROUP_ROLES` /
+# `nl_hansard_parse._STAFF_ROLES`'s role-set discrimination pattern.
+_GROUP_ROLES: frozenset[str] = frozenset({
+    "Hon. Members",
+    "Some Hon. Members",
+    "Some Members",
+})
+
+# Roles that correspond to parliamentary-staff turns (Clerk / Sergeant-at-Arms).
+# Not MLAs; `politician_id` stays NULL by design. Drives `speech_type='staff'`.
+# `The Sergeant At Arms` (space-separated, no hyphens) is canonicalized to
+# `The Sergeant-at-Arms` by `_normalize_role` so this set only needs the
+# hyphenated form.
+_STAFF_ROLES: frozenset[str] = frozenset({
+    "The Clerk",
+    "The Clerk Assistant",
+    "The Sergeant-at-Arms",
+})
+
 # End-of-sitting marker.
 _ADJOURN_RE = re.compile(r"^\[The Assembly adjourned at", re.IGNORECASE)
 
@@ -515,9 +537,15 @@ def _normalize_surname(raw: str) -> str:
 def _normalize_role(raw: str) -> str:
     """Title-case a role string that may arrive as ALL CAPS ("THE SPEAKER"
     in Legs 24-25) or mixed ("The Speaker"). Preserves internal hyphens
-    in compound roles like "Sergeant-at-Arms".
+    in compound roles like "Sergeant-at-Arms" and canonicalizes the
+    space-separated variant ("Sergeant At Arms") to the same hyphenated
+    form so `_STAFF_ROLES` membership stays unambiguous.
     """
     s = _normalize_ws(raw)
+    # Canonicalize the space-separated Sergeant-at-Arms variant (seen once
+    # in the corpus) to the hyphenated form before title-casing — keeps
+    # `_STAFF_ROLES` lookup single-keyed.
+    s = re.sub(r"sergeant\s+at\s+arms", "Sergeant-at-Arms", s, flags=re.IGNORECASE)
     # Title-case tokens split on whitespace AND hyphens so "sergeant-at-arms"
     # → "Sergeant-At-Arms" → final fixup to "Sergeant-at-Arms".
     parts = re.split(r"([\s\-])", s)
@@ -840,7 +868,17 @@ async def _upsert_speech(
         }
     raw_json = orjson.dumps(raw_payload).decode("utf-8")
 
-    speech_type = _pick_speech_type(sitting.url)
+    # Group / staff role discrimination takes precedence over URL routing:
+    # a chorus "Hon. Members: Aye." or a "The Clerk: …" turn is more
+    # meaningfully tagged 'group' / 'staff' than 'floor' / 'committee'.
+    # Coverage queries lean on this to honestly exclude non-MLA turns from
+    # the unattributed-politicians denominator. Mirrors the QC / NL idiom.
+    if parsed.speaker_role in _GROUP_ROLES:
+        speech_type = "group"
+    elif parsed.speaker_role in _STAFF_ROLES:
+        speech_type = "staff"
+    else:
+        speech_type = _pick_speech_type(sitting.url)
     ch = _content_hash(parsed.body)
 
     result = await db.fetchrow(

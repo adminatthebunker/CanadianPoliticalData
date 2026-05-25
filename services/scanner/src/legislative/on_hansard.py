@@ -680,187 +680,303 @@ async def resolve_on_speakers(
     return stats
 
 
-# ── Parliament-keyed post-pass resolver ────────────────────────────
+# ── Date-windowed post-pass resolver ──────────────────────────────
 
 
 async def resolve_on_speakers_dated(
     db: Database, *, limit: Optional[int] = None,
 ) -> ResolveStats:
-    """Re-resolve politician_id on ON speeches with NULL politician_id,
-    using the historical MPP roster from ingest-on-former-mpps.
+    """Date-windowed resolver — rescues historical ON surnames that the
+    name-only resolver rejects as ambiguous after the former-MPPs
+    backfill (ingest-on-former-mpps).
 
-    Parliament-keyed (mirrors ab_hansard.resolve_ab_speakers). The
-    speech raw payload carries the parliament number that the sitting
-    came from (`raw->'on_hansard'->>'parliament'`); the
-    historical-roster ingester stamps each (politician, parliament)
-    edge as a politician_terms row with
-    ``source = 'ola.org:parliament-N'``. A pure-SQL surname-equality
-    join restricted to that source resolves each speech against
-    contemporaneous MPPs only — no cross-parliament name bleed.
+    Rewritten 2026-05-21 to mirror qc_hansard.resolve_qc_speakers_dated
+    and mb_hansard.resolve_mb_speakers_dated. The previous
+    parliament-keyed approach (JOIN on
+    ``pt.source = 'ola.org:parliament-N'``) required BOTH the speech to
+    carry a `parliament` key in raw AND the politician_term to carry a
+    matching `ola.org:parliament-N` tag — most rows failed one or both,
+    yielding only 0.3% attribution on a 32K candidate set.
 
-    The exact-one-candidate gate (`cand_count = 1`) means rows where
-    two MPPs share a surname within the same parliament stay NULL.
-    They are rare but real (Stewart, Smith, Brown family members
-    across overlapping eras); riding/honorific disambiguation would
-    be needed to resolve them and is out of scope for v1.
+    Date-window matching uses ON's well-populated politician_terms
+    (5,061 rows, 100% started_at, 95% ended_at as of probe on
+    2026-05-21) and the speech's `spoken_at` to join surname to the
+    correct contemporaneous MPP without depending on the parliament
+    tag at all.
 
-    Naming: ``_dated`` keeps parity with MB's resolver name even
-    though ON's filter is parliament-keyed, not date-windowed. Both
-    serve the same role — disambiguating same-surname speakers
-    across the historical corpus.
+    For each unresolved hansard-on speech with a parsed surname and a
+    known spoken_at, join politicians by last_name (accent-stripped,
+    lowercase) AND join politician_terms where spoken_at falls inside
+    [started_at, ended_at]. If exactly one distinct politician emerges,
+    attribute the speech (and its chunks).
 
-    Idempotent: re-running once everything resolvable has resolved is
-    a no-op.
+    Skipped by design: rows where no surname is parsed, rows where
+    surname+first-token+date matches multiple politicians (genuine
+    ambiguity — e.g. duplicate Dave/David Cooke records that survive
+    even with first-name matching), and parser-noise surnames like
+    "Chairman" / "Table" / "Assistant" / "Interjection" that no
+    politician matches.
+
+    Disambiguator: ON historical Hansard uses initial-style speaker
+    names ("F. S. Miller", "R. F. Nixon"); date-window + surname
+    alone resolves to ambiguity 100% of the time because Frank/Gordon
+    Miller, John/Robert Nixon, George/James Taylor (etc.) frequently
+    overlap. The first-token disambiguator in the candidates CTE
+    matches the speech's first initial / first name against
+    politicians.first_name to break those collisions.
+
+    The ON parser stores surname as `raw->'on_hansard'->>'surname'`
+    and the full speaker label as `raw->'on_hansard'->>'full_name'`
+    (the original parliament-keyed resolver also tried
+    `split_part(p.last_name, ' ', -1)` to handle compound surnames;
+    that fallback is preserved here).
+
+    Idempotent. The `count(DISTINCT p.id) = 1` gate keeps ambiguous
+    cases NULL.
     """
     stats = ResolveStats()
+    limit_clause = f"LIMIT {int(limit)}" if limit else ""
 
-    # Step 1 — count work, pre-update.
-    scanned_row = await db.fetchrow(
-        f"""
-        SELECT COUNT(*) AS n
-          FROM speeches s
-         WHERE s.source_system = '{SOURCE_SYSTEM}'
-           AND s.politician_id IS NULL
-           AND s.raw->'on_hansard'->>'surname' IS NOT NULL
-           AND s.raw->'on_hansard'->>'parliament' IS NOT NULL
-        """
+    # First-token extraction notes:
+    #   ON parser stores `full_name` as the raw "Hon. F. S. Miller",
+    #   "Mrs. Smith", "Natalia Kusendova" style text. We strip a leading
+    #   honorific (Mr./Mrs./Ms./Mme/Hon./Dr./Sir/An/The) and take the
+    #   first remaining whitespace-delimited token. That token is either
+    #   a single-letter or "X."-style initial (historical "F. S. Miller")
+    #   or a full first name (modern "Natalia Kusendova"). The
+    #   first-token disambiguator below accepts either shape against
+    #   politicians.first_name and is what cracks the otherwise-100%-
+    #   ambiguous Frank/Gordon Miller, John/Robert Nixon, George/James
+    #   Taylor (etc.) overlaps. Probed 2026-05-21 to lift unique
+    #   candidates from 0 to ~4,000.
+    update_sql = f"""
+    WITH unresolved AS (
+      SELECT s.id::text AS id,
+             s.spoken_at,
+             s.raw->'on_hansard'->>'surname' AS surname_raw,
+             regexp_replace(
+               regexp_replace(
+                 COALESCE(s.raw->'on_hansard'->>'full_name', ''),
+                 '^(Mr\\.|Mrs\\.|Ms\\.|Mme|Hon\\.|Hon|Dr\\.|Sir|An|The)\\s+',
+                 '',
+                 'i'
+               ),
+               '\\s.*$',
+               ''
+             ) AS first_tok
+        FROM speeches s
+       WHERE s.source_system = '{SOURCE_SYSTEM}'
+         AND s.politician_id IS NULL
+         AND s.spoken_at IS NOT NULL
+         AND s.raw->'on_hansard'->>'surname' IS NOT NULL
+       {limit_clause}
+    ),
+    candidates AS (
+      SELECT u.id AS speech_id,
+             array_agg(DISTINCT p.id) AS cand_ids,
+             count(DISTINCT p.id)     AS n_cands
+        FROM unresolved u
+        JOIN politicians p
+          ON p.province_territory = 'ON'
+         AND p.level = 'provincial'
+         AND (
+           lower(unaccent(p.last_name))                    = lower(unaccent(u.surname_raw))
+           OR lower(unaccent(split_part(p.last_name, ' ', -1))) = lower(unaccent(u.surname_raw))
+         )
+         AND (
+           -- First-token disambiguator: full first-name match,
+           -- 'F.'-style initial, or bare single-letter initial.
+           lower(unaccent(u.first_tok)) = lower(unaccent(p.first_name))
+           OR (u.first_tok ~ '^[A-Za-z]\\.$'
+               AND upper(left(u.first_tok, 1)) = upper(left(p.first_name, 1)))
+           OR (length(u.first_tok) = 1
+               AND upper(u.first_tok) = upper(left(p.first_name, 1)))
+         )
+        JOIN politician_terms pt
+          ON pt.politician_id = p.id
+         AND pt.province_territory = 'ON'
+         AND pt.level = 'provincial'
+         AND (pt.started_at IS NULL OR pt.started_at::date <= u.spoken_at::date)
+         AND (pt.ended_at   IS NULL OR pt.ended_at::date   >= u.spoken_at::date)
+       GROUP BY u.id
+    ),
+    uniq AS (
+      SELECT speech_id, cand_ids[1] AS politician_id
+        FROM candidates WHERE n_cands = 1
+    ),
+    updated_speeches AS (
+      UPDATE speeches s
+         SET politician_id = u.politician_id::uuid,
+             confidence    = GREATEST(s.confidence, 0.85),
+             updated_at    = now()
+        FROM uniq u
+       WHERE s.id::text = u.speech_id
+       RETURNING s.id, s.politician_id
+    ),
+    updated_chunks AS (
+      UPDATE speech_chunks sc
+         SET politician_id = us.politician_id
+        FROM updated_speeches us
+       WHERE sc.speech_id = us.id
+         AND sc.politician_id IS DISTINCT FROM us.politician_id
+       RETURNING sc.id
     )
-    stats.speeches_scanned = int(scanned_row["n"])
-
-    # Step 2 — enumerate parliaments with unresolved speeches and
-    # batch-update each one. Per-parliament budget keeps each
-    # statement under the asyncpg default (60s); explicit timeout=600
-    # is a defensive cap on the rare case where one parliament has a
-    # six-figure unresolved volume.
-    parliament_rows = await db.fetch(
-        f"""
-        SELECT DISTINCT (s.raw->'on_hansard'->>'parliament')::int AS p
-          FROM speeches s
-         WHERE s.source_system = '{SOURCE_SYSTEM}'
-           AND s.politician_id IS NULL
-           AND s.raw->'on_hansard'->>'surname' IS NOT NULL
-           AND s.raw->'on_hansard'->>'parliament' IS NOT NULL
-         ORDER BY 1
-        """
-    )
-    parliaments = [int(r["p"]) for r in parliament_rows]
+    SELECT
+      (SELECT count(*) FROM candidates)                  AS scanned,
+      (SELECT count(*) FROM updated_speeches)            AS speeches_updated,
+      (SELECT count(*) FROM updated_chunks)              AS chunks_updated,
+      (SELECT count(*) FROM candidates WHERE n_cands > 1) AS still_ambiguous
+    """
+    row = await db.pool.fetchrow(update_sql, timeout=1800)
+    stats.speeches_scanned = int(row["scanned"] or 0)
+    stats.speeches_updated = int(row["speeches_updated"] or 0)
+    stats.still_unresolved = int(row["still_ambiguous"] or 0)
     log.info(
-        "resolve_on_speakers_dated: parliaments with unresolved speeches = %s",
-        parliaments,
+        "resolve_on_speakers_dated: scanned=%d speeches_updated=%d "
+        "chunks_updated=%d still_ambiguous=%d",
+        stats.speeches_scanned, stats.speeches_updated,
+        int(row["chunks_updated"] or 0), stats.still_unresolved,
     )
+    return stats
 
-    budget_left = int(limit) if limit else None
-    for p in parliaments:
-        if budget_left is not None and budget_left <= 0:
-            break
-        per_p_limit = f"LIMIT {budget_left}" if budget_left is not None else ""
 
-        update_sql = f"""
-        WITH target_speeches AS (
-          SELECT s.id,
-                 lower(unaccent(s.raw->'on_hansard'->>'surname')) AS norm_surname
-            FROM speeches s
-           WHERE s.source_system = '{SOURCE_SYSTEM}'
-             AND s.politician_id IS NULL
-             AND (s.raw->'on_hansard'->>'parliament')::int = $1
-             AND s.raw->'on_hansard'->>'surname' IS NOT NULL
-           {per_p_limit}
-        ),
-        candidates AS (
-          SELECT ts.id AS speech_id,
-                 p.id  AS politician_id,
-                 p.party AS party,
-                 p.constituency_name AS constituency_name,
-                 COUNT(*) OVER (PARTITION BY ts.id) AS cand_count
-            FROM target_speeches ts
-            JOIN politician_terms pt
-              ON pt.source = 'ola.org:parliament-' || $1::text
-            JOIN politicians p
-              ON p.id = pt.politician_id
-             AND p.province_territory = 'ON'
-             AND p.level = 'provincial'
-             AND (
-               lower(unaccent(split_part(p.last_name, ' ', -1))) = ts.norm_surname
-               OR lower(unaccent(p.last_name))                    = ts.norm_surname
-             )
-        ),
-        updated AS (
-          UPDATE speeches s
-             SET politician_id        = c.politician_id,
-                 party_at_time        = COALESCE(s.party_at_time, c.party),
-                 constituency_at_time = COALESCE(s.constituency_at_time, c.constituency_name),
-                 confidence           = GREATEST(s.confidence, 0.9),
-                 updated_at           = now()
-            FROM candidates c
-           WHERE s.id = c.speech_id
-             AND c.cand_count = 1
-          RETURNING s.id
-        )
-        SELECT COUNT(*) AS n FROM updated
-        """
-        upd_row = await db.fetchrow(update_sql, p, timeout=600)
-        n = int(upd_row["n"])
-        stats.speeches_updated += n
-        if budget_left is not None:
-            budget_left -= n
-        log.info("resolve_on_speakers_dated: parliament=%d updated=%d", p, n)
+async def resolve_on_speakers_middle_initial(
+    db: Database, *, limit: Optional[int] = None,
+) -> ResolveStats:
+    """Middle-initial-aware second pass for ON Hansard.
 
-    # Step 3 — propagate to speech_chunks per-parliament. Same
-    # autovacuum-contention reasoning as ab_hansard.resolve_ab_speakers.
-    chunk_p_rows = await db.fetch(
-        f"""
-        SELECT DISTINCT (s.raw->'on_hansard'->>'parliament')::int AS p
-          FROM speech_chunks sc
-          JOIN speeches s ON s.id = sc.speech_id
-         WHERE s.source_system = '{SOURCE_SYSTEM}'
-           AND s.politician_id IS NOT NULL
-           AND sc.politician_id IS DISTINCT FROM s.politician_id
-         ORDER BY 1
-        """
+    The first-token dated resolver above leaves a ~1,982-row residue
+    where two same-surname MPPs served simultaneously and share the
+    same first initial — the classic case is Dave Cooke (Windsor-
+    Riverside, NDP, 1977-1997, recorded in Hansard as "David S. Cooke"
+    / "D. S. Cooke") vs David R. Cooke (Kitchener, Liberal, 1985-1990,
+    recorded as "David R. Cooke" / "D. R. Cooke"). Both have OLA
+    member IDs (325 vs 477) and are genuinely different MPPs — they
+    are NOT duplicate person records and must NOT be merged. The
+    discriminator Hansard already provides is the **middle initial**.
+
+    This pass extracts the middle initial from the speech's full_name
+    and from the politician's `name` column, requires both to be
+    present, and joins on exact match. When the speech provides a
+    middle initial that uniquely matches one contemporaneous MPP, we
+    attribute. Cases without a middle initial in the label, or where
+    the surviving candidate set is still >1, stay NULL.
+
+    Nickname tolerance: matching is on middle initial + surname + date
+    only — first initial / first name is intentionally NOT constrained
+    here. "David S. Cooke" labels resolve to `Dave Cooke` (db
+    `first_name='Dave'`, name `Dave Cooke`) without a Dave↔David
+    nickname map, because the surname-only first-pass surfaces both
+    Cooke MPPs and the middle-initial filter rejects David R. The
+    `politicians.name` middle-initial extraction does the work.
+
+    Idempotent. Safe to re-run.
+    """
+    stats = ResolveStats()
+    limit_clause = f"LIMIT {int(limit)}" if limit else ""
+
+    # Politician middle-initial extraction:
+    #   Strip the leading first_name and trailing last_name from `name`,
+    #   trim, take the first character. If the remainder is empty (e.g.
+    #   `name='Dave Cooke'`, first='Dave', last='Cooke') the middle
+    #   initial is empty and the politician is excluded from this pass
+    #   (we require BOTH sides to carry a middle initial).
+    #
+    # Speech middle-initial extraction:
+    #   Strip honorific, take the second whitespace-delimited token,
+    #   take its first character. Only join when the result is a
+    #   letter (filters out 'M. Le Président' etc.).
+    update_sql = f"""
+    WITH unresolved AS (
+      SELECT s.id::text AS id,
+             s.spoken_at,
+             s.raw->'on_hansard'->>'surname' AS surname_raw,
+             upper(left(
+               (regexp_match(
+                  regexp_replace(
+                    COALESCE(s.raw->'on_hansard'->>'full_name', ''),
+                    '^(Mr\\.|Mrs\\.|Ms\\.|Mme|Hon\\.|Hon|Dr\\.|Sir|An|The)\\s+',
+                    '',
+                    'i'
+                  ),
+                  '^\\S+\\s+(\\S+)'
+                ))[1],
+               1
+             )) AS middle_init
+        FROM speeches s
+       WHERE s.source_system = '{SOURCE_SYSTEM}'
+         AND s.politician_id IS NULL
+         AND s.spoken_at IS NOT NULL
+         AND s.raw->'on_hansard'->>'surname' IS NOT NULL
+       {limit_clause}
+    ),
+    filtered AS (
+      SELECT * FROM unresolved
+       WHERE middle_init IS NOT NULL AND middle_init ~ '^[A-Z]$'
+    ),
+    candidates AS (
+      SELECT u.id AS speech_id,
+             array_agg(DISTINCT p.id) AS cand_ids,
+             count(DISTINCT p.id)     AS n_cands
+        FROM filtered u
+        JOIN politicians p
+          ON p.province_territory = 'ON'
+         AND p.level = 'provincial'
+         AND (
+           lower(unaccent(p.last_name))                         = lower(unaccent(u.surname_raw))
+           OR lower(unaccent(split_part(p.last_name, ' ', -1))) = lower(unaccent(u.surname_raw))
+         )
+         AND upper(left(
+           trim(regexp_replace(
+             regexp_replace(p.name, '^' || p.first_name || '\\s*', ''),
+             '\\s*' || p.last_name || '$',
+             ''
+           )),
+           1
+         )) = u.middle_init
+        JOIN politician_terms pt
+          ON pt.politician_id = p.id
+         AND pt.province_territory = 'ON'
+         AND pt.level = 'provincial'
+         AND (pt.started_at IS NULL OR pt.started_at::date <= u.spoken_at::date)
+         AND (pt.ended_at   IS NULL OR pt.ended_at::date   >= u.spoken_at::date)
+       GROUP BY u.id
+    ),
+    uniq AS (
+      SELECT speech_id, cand_ids[1] AS politician_id
+        FROM candidates WHERE n_cands = 1
+    ),
+    updated_speeches AS (
+      UPDATE speeches s
+         SET politician_id = u.politician_id::uuid,
+             confidence    = GREATEST(s.confidence, 0.85),
+             updated_at    = now()
+        FROM uniq u
+       WHERE s.id::text = u.speech_id
+       RETURNING s.id, s.politician_id
+    ),
+    updated_chunks AS (
+      UPDATE speech_chunks sc
+         SET politician_id = us.politician_id
+        FROM updated_speeches us
+       WHERE sc.speech_id = us.id
+         AND sc.politician_id IS DISTINCT FROM us.politician_id
+       RETURNING sc.id
     )
-    chunk_parliaments = [int(r["p"]) for r in chunk_p_rows]
+    SELECT
+      (SELECT count(*) FROM candidates)                  AS scanned,
+      (SELECT count(*) FROM updated_speeches)            AS speeches_updated,
+      (SELECT count(*) FROM updated_chunks)              AS chunks_updated,
+      (SELECT count(*) FROM candidates WHERE n_cands > 1) AS still_ambiguous
+    """
+    row = await db.pool.fetchrow(update_sql, timeout=1800)
+    stats.speeches_scanned = int(row["scanned"] or 0)
+    stats.speeches_updated = int(row["speeches_updated"] or 0)
+    stats.still_unresolved = int(row["still_ambiguous"] or 0)
     log.info(
-        "resolve_on_speakers_dated: parliaments with stale chunks = %s",
-        chunk_parliaments,
-    )
-    for p in chunk_parliaments:
-        n_row = await db.fetchrow(
-            f"""
-            WITH updated AS (
-              UPDATE speech_chunks sc
-                 SET politician_id = s.politician_id
-                FROM speeches s
-               WHERE sc.speech_id = s.id
-                 AND s.source_system = '{SOURCE_SYSTEM}'
-                 AND s.politician_id IS NOT NULL
-                 AND sc.politician_id IS DISTINCT FROM s.politician_id
-                 AND (s.raw->'on_hansard'->>'parliament')::int = $1
-              RETURNING sc.id
-            )
-            SELECT COUNT(*) AS n FROM updated
-            """,
-            p, timeout=600,
-        )
-        log.info(
-            "resolve_on_speakers_dated: chunk propagation parliament=%d updated=%d",
-            p, int(n_row["n"]),
-        )
-
-    # Step 4 — tally still-unresolved post-update.
-    tail_row = await db.fetchrow(
-        f"""
-        SELECT COUNT(*) AS n
-          FROM speeches s
-         WHERE s.source_system = '{SOURCE_SYSTEM}'
-           AND s.politician_id IS NULL
-           AND s.raw->'on_hansard'->>'surname' IS NOT NULL
-           AND s.raw->'on_hansard'->>'parliament' IS NOT NULL
-        """
-    )
-    stats.still_unresolved = int(tail_row["n"])
-
-    log.info(
-        "resolve_on_speakers_dated: scanned=%d updated=%d still_unresolved=%d",
-        stats.speeches_scanned, stats.speeches_updated, stats.still_unresolved,
+        "resolve_on_speakers_middle_initial: scanned=%d speeches_updated=%d "
+        "chunks_updated=%d still_ambiguous=%d",
+        stats.speeches_scanned, stats.speeches_updated,
+        int(row["chunks_updated"] or 0), stats.still_unresolved,
     )
     return stats

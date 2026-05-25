@@ -65,6 +65,8 @@ The NS Hansard pages sit on a different CDN path than the per-bill HTML that tri
 
 **Phase-1 scope (landed 2026-04-22):** Session 65-1 only, 44 sittings, 10,608 speeches, 100 % politician_id resolved (5,665 slug-joined to MLAs + 4,943 Speaker turns resolved to Danielle Barkhouse via `presiding_officer_resolver`). Historical sessions (back to 1994) deferred until an historical-MLA roster pass lands slugs for departed members.
 
+**Premier role-only Pass-3 (shipped 2026-05-22):** Historical NS sessions ingested between Phase-1 and this cycle surfaced a 1,904-row `speaker_name_raw='THE PREMIER'` bucket (`speaker_role IS NULL`) spanning 2013-12-03 → 2021-03-31 — the McNeil + Rankin Liberal era. The NS Hansard parser stamps the ALL-CAPS role token into `speaker_name_raw` rather than `speaker_role` for the bare-role turns, so the cross-jurisdictional `resolve-role-only-presiding-officers` resolver (previously role-keyed only) grew a `ROLE_ONLY_NAME_PATTERNS` companion map that matches on `speaker_name_raw` when `speaker_role IS NULL OR ''`. Roster: Stephen McNeil (2013-10-22 → 2021-02-23), Iain Rankin (2021-02-23 → 2021-08-31). Houston (PC, 2021-08-31+) ships in the parens-form `HON. TIM HOUSTON (The Premier)` and is Pass-1 territory. Resolver attributed all 1,904 rows at confidence 0.85; NS attribution rose from 96.73 % → 99.70 %. Daily schedule: `45 13 * * *` UTC, between `extract-ns-votes` (50 13) and the BC chain (00 14). **Pre-existing Houston mis-attribution cleanup (shipped same cycle 2026-05-22):** the Phase-1 ingest pipeline had attributed `speaker_name_raw='THE PREMIER'` rows to Houston at confidence 1.0 by simple last-name match without a date-window check — including 112 rows from McNeil/Rankin's era (17 in 2016 + 18 in 2017 + 9 in 2018 + 68 pre-Aug-2021). Cleanup: one transaction reset `politician_id=NULL` on those 112 rows + cleared 144 `speech_chunks` denorms; re-ran `resolve-role-only-presiding-officers --province NS` which re-attributed all 112 via the McNeil/Rankin roster (17 + 18 + 9 = 44 → Stephen McNeil; 68 → Iain Rankin). The other 435 Houston-at-confidence-1.0 rows (post-2023-10-19, within his actual Premiership) were left untouched as legitimately correct. NS attribution % unchanged at 99.70 % (politician_id swap only).
+
 ## Voting Records / Divisions
 
 - **Source URL(s):** https://nslegislature.ca/ruling-topics/votes ; https://nslegislature.ca/legislative-business/hansard-dates/
@@ -94,6 +96,6 @@ The NS Hansard pages sit on a different CDN path than the per-bill HTML that tri
 - [x] Ingestion prototyped (Socrata → 3,522 bills across 24 sessions)
 - [~] Production ingestion partial — bill rows complete; per-bill HTML fetch blocked by WAF budget (25/3,522 cached). RSS-feed pivot or email allowlist pending.
 - [x] Sponsor→politician resolver working (14/14 parsed sponsors linked)
-- [x] Hansard — session 65-1 live (10,608 speeches, 100% resolved); historical backfill deferred
+- [x] Hansard — session 65-1 live (10,608 speeches, 100% resolved); historical sessions ingested with Premier role-only Pass-3 (2026-05-22) closing the 1,904-row `THE PREMIER` bucket → 99.70% NS attribution overall. Pre-2013 historical backfill still deferred
 - [ ] Votes
 - [ ] Committees

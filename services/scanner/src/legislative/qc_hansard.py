@@ -1127,3 +1127,124 @@ async def resolve_qc_speakers_dated(
         int(row["chunks_updated"] or 0), stats.still_unresolved,
     )
     return stats
+
+
+async def resolve_qc_speakers_doc_continuity(
+    db: Database, *, limit: Optional[int] = None,
+) -> ResolveStats:
+    """Document-level continuity resolver — propagates an already-attributed
+    politician_id from another speech in the SAME QC Hansard document
+    (raw->'qc_hansard'->>'document_id') to unresolved bare-surname rows
+    whose surname matches that politician's last_name.
+
+    Hypothesis: within a single QC Hansard document a given surname is
+    usually unambiguous. If we already attributed at least one row in the
+    doc to a politician whose last_name (accent-stripped, lowercased)
+    equals the unresolved row's parsed surname, and exactly one such
+    politician appears under that surname in that doc, we propagate the
+    politician_id at confidence 0.75 (lower than dated's 0.85 because
+    this is corpus-bootstrap rather than date-windowed direct match).
+
+    Mirrors resolve_qc_speakers_dated's single-CTE shape:
+      * unresolved   — bare-surname QC floor rows with politician_id NULL
+                       and no speaker_role (by-design-NULL roles are
+                       handled by Pass-3 elsewhere; staff/group are
+                       skipped via speech_type filter).
+      * ground       — doc-level surname → politician_id ground truth
+                       derived from already-attributed QC speeches.
+      * uniq         — only (doc, surname) pairs that map to exactly
+                       one politician (genuine same-surname overlaps in
+                       a single doc stay NULL).
+      * updated_speeches / updated_chunks — single UPDATE per CTE with
+                       the standard IS DISTINCT FROM guard for chunks.
+
+    Idempotent: the politician_id IS NULL filter on unresolved means
+    re-runs see only what's still unresolved. Safe to schedule daily.
+
+    Note (2026-05-21): the initial empirical probe showed only ~18 rows
+    of immediate lift — the remaining unresolved bucket is dominated by
+    documents where the speaker is ALWAYS bare-surname (no richer-form
+    reference earlier in the doc to bootstrap from). Lift may grow as
+    other resolvers (e.g. role-based, first-name) attribute more rows,
+    which is why this still runs daily.
+    """
+    stats = ResolveStats()
+    limit_clause = f"LIMIT {int(limit)}" if limit else ""
+
+    update_sql = f"""
+    WITH unresolved AS (
+      SELECT s.id::text AS id,
+             s.raw->'qc_hansard'->>'document_id' AS doc_id,
+             lower(unaccent(
+               COALESCE(
+                 s.raw->'qc_hansard'->>'paren_surname',
+                 s.raw->'qc_hansard'->>'surname'
+               )
+             )) AS surname_key
+        FROM speeches s
+       WHERE s.source_system = 'hansard-qc'
+         AND s.politician_id IS NULL
+         AND s.speech_type = 'floor'
+         AND s.speaker_role IS NULL
+         AND COALESCE(
+               s.raw->'qc_hansard'->>'paren_surname',
+               s.raw->'qc_hansard'->>'surname'
+             ) IS NOT NULL
+         AND s.raw->'qc_hansard'->>'document_id' IS NOT NULL
+       {limit_clause}
+    ),
+    ground AS (
+      SELECT s.raw->'qc_hansard'->>'document_id'   AS doc_id,
+             lower(unaccent(p.last_name))           AS surname_key,
+             array_agg(DISTINCT s.politician_id)    AS cand_ids,
+             count(DISTINCT s.politician_id)        AS n_pol
+        FROM speeches s
+        JOIN politicians p ON p.id = s.politician_id
+       WHERE s.source_system = 'hansard-qc'
+         AND s.politician_id IS NOT NULL
+         AND s.raw->'qc_hansard'->>'document_id' IS NOT NULL
+       GROUP BY 1, 2
+    ),
+    uniq AS (
+      SELECT u.id AS speech_id, g.cand_ids[1] AS politician_id
+        FROM unresolved u
+        JOIN ground g
+          ON g.doc_id = u.doc_id
+         AND g.surname_key = u.surname_key
+       WHERE g.n_pol = 1
+    ),
+    updated_speeches AS (
+      UPDATE speeches s
+         SET politician_id = u.politician_id,
+             confidence    = GREATEST(s.confidence, 0.75),
+             updated_at    = now()
+        FROM uniq u
+       WHERE s.id::text = u.speech_id
+       RETURNING s.id, s.politician_id
+    ),
+    updated_chunks AS (
+      UPDATE speech_chunks sc
+         SET politician_id = us.politician_id
+        FROM updated_speeches us
+       WHERE sc.speech_id = us.id
+         AND sc.politician_id IS DISTINCT FROM us.politician_id
+       RETURNING sc.id
+    )
+    SELECT
+      (SELECT count(*) FROM unresolved)         AS scanned,
+      (SELECT count(*) FROM updated_speeches)   AS speeches_updated,
+      (SELECT count(*) FROM updated_chunks)     AS chunks_updated,
+      (SELECT count(*) FROM unresolved)
+        - (SELECT count(*) FROM updated_speeches) AS still_unresolved
+    """
+    row = await db.pool.fetchrow(update_sql, timeout=1800)
+    stats.speeches_scanned = int(row["scanned"] or 0)
+    stats.speeches_updated = int(row["speeches_updated"] or 0)
+    stats.still_unresolved = int(row["still_unresolved"] or 0)
+    log.info(
+        "resolve_qc_speakers_doc_continuity: scanned=%d speeches_updated=%d "
+        "chunks_updated=%d still_unresolved=%d",
+        stats.speeches_scanned, stats.speeches_updated,
+        int(row["chunks_updated"] or 0), stats.still_unresolved,
+    )
+    return stats

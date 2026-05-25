@@ -1,30 +1,33 @@
 #!/usr/bin/env bash
-# Socials-enrichment runner — invoked by cron on Linux.
+# Websites-enrichment runner — invoked by cron on Linux.
 #
-# Spins up a non-interactive Claude Code session with the prompt body from
-# scripts/scheduled-tasks/socials-weekly-enrichment.md (frontmatter stripped),
-# runs it autonomously, logs stdout+stderr to a timestamped file, and emails
-# a one-paragraph summary to admin via the project's Proton SMTP creds.
+# Spins up a non-interactive Claude Code session with the prompt body
+# from scripts/scheduled-tasks/websites-weekly-enrichment.md (frontmatter
+# stripped), runs it autonomously, logs stdout+stderr to a timestamped
+# file, and emails a one-paragraph summary to admin via the project's
+# Proton SMTP creds.
+#
+# Subscription-billed counterpart to the API-billed
+# `agent-missing-websites` Click command (which is retained for ad-hoc
+# admin-panel triggering — only the weekly schedule was migrated).
 #
 # Why a wrapper instead of inlining the prompt in crontab: the prompt is
-# ~250 lines and version-controlled. The wrapper keeps cron tidy and gives
-# us a single edit point.
+# ~200 lines and version-controlled. The wrapper keeps cron tidy and
+# gives us a single edit point.
 #
 # Cron entry (install via `crontab -e` for the bunker-admin user):
-#   7 9 * * *  /home/bunker-admin/sovpro/scripts/scheduled-tasks/run-socials-weekly.sh
+#   17 9 * * 1  /home/bunker-admin/sovpro/scripts/scheduled-tasks/run-websites-weekly.sh
 #
-# Daily 09:07 local. Off-minute on purpose (not :00) so it doesn't clump
-# with the rest of the fleet's hourly tasks at the top of the hour.
-#
-# (The filename retains the "weekly" suffix from the original design — the
-# script itself is cadence-neutral; the cron schedule is what dictates how
-# often it fires.)
+# Weekly, Mondays at 09:17 local. Off-minute on purpose (not :00) so it
+# doesn't clump with the rest of the fleet's hourly tasks at the top of
+# the hour, and shifted 10 minutes off the daily socials run at 09:07
+# to avoid concurrent WebSearch contention.
 
 set -euo pipefail
 
 PROJECT_DIR="/home/bunker-admin/sovpro"
-PROMPT_FILE="$PROJECT_DIR/scripts/scheduled-tasks/socials-weekly-enrichment.md"
-LOG_DIR="$PROJECT_DIR/docs/runbooks/socials-agent-logs"
+PROMPT_FILE="$PROJECT_DIR/scripts/scheduled-tasks/websites-weekly-enrichment.md"
+LOG_DIR="$PROJECT_DIR/docs/runbooks/websites-agent-logs"
 LOG_FILE="$LOG_DIR/$(date -u +%Y-%m-%dT%H%M%SZ).log"
 
 # cron's PATH is minimal — make sure docker and claude are findable.
@@ -48,11 +51,11 @@ if [[ ! -f "$PROMPT_FILE" ]]; then
   exit 1
 fi
 
-# Strip the wiring/setup section above the second `---` divider, plus the
-# header before it. What remains is the agent-facing prompt body.
-# `awk '/^---$/{i++; next} i>=1'` would include the body verbatim from
-# after the FIRST divider in the in-repo file; we want the second since
-# the repo file has both an intro and a frontmatter-style divider.
+# Strip the wiring/setup section above the second `---` divider, plus
+# the header before it. What remains is the agent-facing prompt body.
+# `awk '/^---$/{i++; next} i>=1'` includes the body verbatim from after
+# the FIRST divider in the in-repo file; we want the body from after
+# the divider that ends the header.
 BODY=$(awk '/^---$/{i++; next} i>=1' "$PROMPT_FILE")
 
 cd "$PROJECT_DIR"
@@ -64,7 +67,7 @@ cd "$PROJECT_DIR"
 RC_FILE=$(mktemp)
 
 {
-  echo "=== socials enrichment scheduled run: $(date -u +%FT%TZ) ==="
+  echo "=== websites enrichment scheduled run: $(date -u +%FT%TZ) ==="
   echo "host=$(hostname) user=$(whoami) pwd=$(pwd)"
   echo "prompt: $PROMPT_FILE ($(wc -c < "$PROMPT_FILE") bytes, body $(echo -n "$BODY" | wc -c) bytes)"
   echo "---"
@@ -89,9 +92,9 @@ rm -f "$RC_FILE"
 # project's existing Proton SMTP creds (.env). The helper script
 # silently skips when SMTP isn't configured, so this is safe on
 # fresh installs without credentials.
-"$PROJECT_DIR/scripts/scheduled-tasks/send-run-summary.py" "$LOG_FILE" "$CLAUDE_EXIT" "socials enrichment" >> "$LOG_FILE" 2>&1 || true
+"$PROJECT_DIR/scripts/scheduled-tasks/send-run-summary.py" "$LOG_FILE" "$CLAUDE_EXIT" "websites enrichment" >> "$LOG_FILE" 2>&1 || true
 
-# Prune logs older than 12 weeks (we run daily, so this keeps ~3 months of history).
+# Prune logs older than 12 weeks (weekly cadence → ~12 logs retained).
 find "$LOG_DIR" -name '*.log' -mtime +84 -delete 2>/dev/null || true
 
 exit "$CLAUDE_EXIT"
