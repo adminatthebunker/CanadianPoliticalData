@@ -92,7 +92,7 @@ to the free tier.
 
 ## What's in v1.0
 
-19 endpoints across eight tags:
+27 endpoints across thirteen tags:
 
 **Reference data** (any tier including anonymous):
 
@@ -101,9 +101,21 @@ to the free tier.
   pipelines status + row counts.
 - **`GET /jurisdiction-sources`** — flat per-jurisdiction list, no
   summary rollup.
-- **`GET /politicians/:id`** — single politician with currently-active
-  websites (hosting provider, country, CDN/CMS, sovereignty tier 1-6)
-  and constituency boundary GeoJSON.
+- **`GET /politicians`** — paginated list with civic-app filters
+  (`jurisdiction`, `role`, `status`, `constituency_id`, `q`). The
+  headline use case is seeding "the 87 sitting AB MLAs" in one call.
+  See [Politicians](./politicians.md).
+- **`GET /politicians/:id`** — single politician with contact info
+  (`email`, `phone`, `fax`, office addresses, `honorific`, `status`,
+  term dates), currently-active websites (hosting provider, country,
+  CDN/CMS, sovereignty tier 1-6), and constituency boundary GeoJSON.
+- **`GET /politicians/:id/offices`** — structured offices list with
+  lat/lng, hours, and per-office contact. See
+  [Contact info](./contact.md).
+- **`GET /postcodes/:postcode`** — geocode a Canadian postcode (or
+  3-char FSA) to lat/lng + containing federal/provincial/municipal
+  ridings. The geocoding leg of "find my representatives" widgets.
+  See [Postcodes](./postcodes.md).
 
 **Legislative data** (free tier; authenticated):
 
@@ -115,6 +127,29 @@ to the free tier.
   per-politician position breakdowns. See [Votes](./votes.md).
 - **`GET /committees/meetings`** — distinct committee meetings derived
   from the speeches table. See [Committees](./committees.md).
+
+**Politician socials** (free tier; authenticated):
+
+- **`GET /politicians/{id}/socials`** — live social-media handles per
+  politician across Twitter, Bluesky, Mastodon, Instagram, Facebook,
+  YouTube, TikTok, LinkedIn, Threads. Opt into dead handles with
+  `?include_dead=true`. See [Politician socials](./socials.md).
+- **`GET /politicians/{id}/posts`** — scraped public-record posts
+  captured by the paid monitoring pipeline, with optional `funded_by`
+  attribution from the subscriber that captured them.
+
+**Constituency boundaries** (free tier; authenticated):
+
+- **`GET /boundaries`** — paginated metadata list with `level`,
+  `province_territory`, and `bbox` filters. Metadata only — fetch
+  GeoJSON via detail.
+- **`GET /boundaries/lookup`** — point-in-polygon lookup at a lat/lng;
+  returns the containing riding at each level for a one-call
+  "who's my MP / MLA / councillor" widget.
+- **`GET /boundaries/{source_set}/{slug}`** — single boundary with
+  simplified GeoJSON. Detail URL uses two path params so the upstream
+  `constituency_id` slash doesn't need URL-encoding. See
+  [Constituency boundaries](./boundaries.md).
 
 **Search auxiliaries** (any tier including anonymous; no embeddings, fast lookups):
 
@@ -167,6 +202,11 @@ API surface adds auth + per-key metering. See
 - **[Bills](./bills.md)** — legislation, events, sponsors.
 - **[Votes](./votes.md)** — chamber votes + per-politician positions.
 - **[Committees](./committees.md)** — committee meetings and transcript search.
+- **[Politicians](./politicians.md)** — list (`?jurisdiction=&role=&status=`) + detail (contact + term + boundary).
+- **[Contact info](./contact.md)** — email / phone / addresses, plus the structured offices subresource.
+- **[Politician socials](./socials.md)** — handles + scraped posts per politician.
+- **[Constituency boundaries](./boundaries.md)** — federal / provincial / municipal boundary list, point-in-polygon lookup (lat/lng or postcode), GeoJSON detail.
+- **[Postcodes](./postcodes.md)** — postcode (or FSA) → lat/lng + containing ridings; real-time Open North proxy.
 - **[Bulk export](./bulk-export.md)** — `read:bulk` scope,
   `pg_dump` artifacts, restore guide.
 - **[Errors](./errors.md)** — 400 / 401 / 403 / 404 / 429 / 503

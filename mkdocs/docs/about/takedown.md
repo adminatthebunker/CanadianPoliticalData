@@ -42,6 +42,18 @@ We will remove or substantially edit content in any of these cases:
   official deletes a tweet and a paying subscriber of ours had
   previously scraped it into our system, we'll remove the captured
   copy on request from the original poster.
+- **Office contact info** (email, phone, fax, office addresses) — when
+  there's an active harassment / safety case. We expose the same
+  email/phone/office addresses that every legislature publishes on
+  their member pages and that Open North redistributes, but we make
+  bulk programmatic access easier. If you're a public official facing
+  an active threat and need a contact channel pulled from our API
+  while the underlying upstream is being addressed, we'll honour that.
+  Because our data is mirrored from Open North, we will also forward
+  your request to them as the canonical source — a takedown on our
+  side is effective immediately for `/api/public/v1/*` consumers but
+  the data remains available at Open North until they process the
+  same request.
 
 ## What we won't remove on request
 

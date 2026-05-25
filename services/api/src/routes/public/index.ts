@@ -8,16 +8,20 @@ import {
   jsonSchemaTransform,
   type ZodTypeProvider,
 } from "fastify-type-provider-zod";
-import { query, queryOne } from "../../db.js";
+import { query } from "../../db.js";
 import { optionalApiKey } from "../../middleware/api-key-auth.js";
 import { publicRateLimitConfig } from "../../middleware/api-rate-limit.js";
-import { resolvePhotoUrl } from "../../lib/photos.js";
 import { config } from "../../config.js";
 import publicV1SearchRoutes from "./search.js";
 import publicV1ExportsRoutes from "./exports.js";
 import publicV1BillsRoutes from "./bills.js";
 import publicV1VotesRoutes from "./votes.js";
 import publicV1CommitteesRoutes from "./committees.js";
+import publicV1SocialsRoutes from "./socials.js";
+import publicV1BoundariesRoutes from "./boundaries.js";
+import publicV1PoliticiansRoutes from "./politicians.js";
+import publicV1OfficesRoutes from "./offices.js";
+import publicV1PostcodesRoutes from "./postcodes.js";
 
 /**
  * Public developer API surface (/api/public/v1/*).
@@ -66,13 +70,6 @@ const coverageQuery = z.object({
     .enum(["live", "partial", "blocked", "none"])
     .optional()
     .describe("Filter to jurisdictions whose bills_status matches"),
-});
-
-const politicianIdParam = z.object({
-  id: z
-    .string()
-    .regex(/^[0-9a-f-]{36}$/i)
-    .describe("UUID of the politician"),
 });
 
 interface JurisdictionRow {
@@ -206,6 +203,21 @@ export default async function publicV1Routes(app: FastifyInstance) {
   await app.register(publicV1VotesRoutes);
   await app.register(publicV1CommitteesRoutes);
 
+  // Politician socials + constituency boundaries — both free-tier
+  // (requireApiKey only). Socials projects only public-safe columns;
+  // boundaries are mirrored from Open North's free public API, so
+  // paywalling them would be poor citizenship.
+  await app.register(publicV1SocialsRoutes);
+  await app.register(publicV1BoundariesRoutes);
+
+  // Politicians list + detail (the detail handler was inline until
+  // 2026-05-24 — now lives in politicians.ts with the new contact +
+  // status + term fields). Offices subresource and postcode lookup
+  // ship in the same round.
+  await app.register(publicV1PoliticiansRoutes);
+  await app.register(publicV1OfficesRoutes);
+  await app.register(publicV1PostcodesRoutes);
+
   // ── GET /api/public/v1/coverage ───────────────────────────────
   a.get(
     "/coverage",
@@ -290,70 +302,6 @@ export default async function publicV1Routes(app: FastifyInstance) {
     },
   );
 
-  // ── GET /api/public/v1/politicians/:id ────────────────────────
-  a.get(
-    "/politicians/:id",
-    {
-      config: { rateLimit: publicRateLimitConfig },
-      schema: {
-        tags: ["Politicians"],
-        summary: "Single politician with active websites + boundary",
-        description:
-          "Returns the politician row, all currently-active websites " +
-          "with their latest infrastructure scan (DNS + hosting + " +
-          "sovereignty tier), and the constituency GeoJSON boundary " +
-          "when constituency_id is set. 404 on missing or malformed id. " +
-          "Response shape: `{ politician: {...}, websites: [...], " +
-          "boundary: { constituency_id, name, level, boundary_geojson, " +
-          "centroid_lng, centroid_lat } | null }`. " +
-          "Cache-Control: public, max-age=60.",
-        params: politicianIdParam,
-      },
-    },
-    async (req, reply) => {
-      const { id } = req.params;
-      const pol = await queryOne<Record<string, unknown>>(
-        `SELECT p.*,
-                (SELECT MAX(ended_at)
-                   FROM politician_terms
-                  WHERE politician_id = p.id
-                    AND ended_at IS NOT NULL) AS latest_term_ended_at
-           FROM politicians p
-          WHERE p.id = $1`,
-        [id],
-      );
-      if (!pol) return reply.notFound();
-      (pol as Record<string, unknown>).photo_url = resolvePhotoUrl(
-        pol as { photo_path?: string | null; photo_url?: string | null },
-      );
-
-      const websites = await query(
-        `
-        SELECT w.*, s.ip_country, s.ip_city, s.ip_latitude, s.ip_longitude,
-               s.hosting_provider, s.hosting_country, s.sovereignty_tier,
-               s.cdn_detected, s.cms_detected, s.scanned_at
-        FROM websites w
-        LEFT JOIN LATERAL (
-          SELECT * FROM infrastructure_scans WHERE website_id = w.id
-          ORDER BY scanned_at DESC LIMIT 1
-        ) s ON true
-        WHERE w.owner_type='politician' AND w.owner_id=$1 AND w.is_active=true
-        ORDER BY w.label
-        `,
-        [id],
-      );
-
-      const boundary = (pol as { constituency_id?: string }).constituency_id
-        ? await queryOne(
-            `SELECT constituency_id, name, level, ST_AsGeoJSON(boundary_simple)::jsonb AS boundary_geojson,
-                    ST_X(centroid) AS centroid_lng, ST_Y(centroid) AS centroid_lat
-               FROM constituency_boundaries WHERE constituency_id = $1`,
-            [(pol as { constituency_id: string }).constituency_id],
-          )
-        : null;
-
-      reply.header("Cache-Control", "public, max-age=60");
-      return { politician: pol, websites, boundary };
-    },
-  );
+  // (/politicians/:id lives in politicians.ts as of 2026-05-24 —
+  // bundled with the new list endpoint + extended contact fields.)
 }

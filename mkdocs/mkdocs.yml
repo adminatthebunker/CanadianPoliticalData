@@ -168,11 +168,18 @@ nav:
       - Generating a report: reports/generate.md
   - Developer API:
       - developers/index.md
+      - Interactive reference (Swagger): https://canadianpoliticaldata.org/api/public/v1/docs/
+      - OpenAPI spec (JSON): https://canadianpoliticaldata.org/api/public/v1/docs/json
       - Authentication: developers/authentication.md
       - Rate limiting: developers/rate-limiting.md
       - Bills: developers/bills.md
       - Votes: developers/votes.md
       - Committees: developers/committees.md
+      - Politicians: developers/politicians.md
+      - Contact info: developers/contact.md
+      - Politician socials: developers/socials.md
+      - Constituency boundaries: developers/boundaries.md
+      - Postcodes: developers/postcodes.md
       - Bulk export: developers/bulk-export.md
       - Errors: developers/errors.md
   - Contributors:

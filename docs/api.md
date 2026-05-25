@@ -620,7 +620,7 @@ Body: `{ "status": "<status>", "admin_notes"?: "<= 2000 chars or null>" }`. `res
 
 ## Public API (`/api/public/v1/*`)
 
-A separate, third-party-friendly tree under `/api/public/v1/*`, derived from the v1.0 internal contract. **19 endpoints across eight tags** as of 2026-05-19 (phases 1a + 1b + 1c + 1d + 1e shipped 2026-05-12; bills + votes + committee-meetings added 2026-05-19). Plan: [`docs/plans/public-developer-api.md`](./plans/public-developer-api.md).
+A separate, third-party-friendly tree under `/api/public/v1/*`, derived from the v1.0 internal contract. **27 endpoints across 13 tags** as of 2026-05-24 (phases 1a + 1b + 1c + 1d + 1e shipped 2026-05-12; bills + votes + committee-meetings added 2026-05-19; politician socials + constituency boundaries added 2026-05-24; politician contact + politicians list + postcode geocoding added 2026-05-24). Plan: [`docs/plans/public-developer-api.md`](./plans/public-developer-api.md).
 
 **The canonical reference is auto-generated:**
 - **Swagger UI** (interactive, "Try it out"): [`/api/public/v1/docs/`](https://canadianpoliticaldata.org/api/public/v1/docs/)
@@ -673,8 +673,26 @@ This section is the operator-side overview only; the auto-generated specs above 
 | `GET /votes/:id` | free | read:public | Single vote with motion + tallies |
 | `GET /votes/:id/positions` | free | read:public | Per-politician position breakdown |
 | `GET /committees/meetings` | free | read:public | Distinct meetings derived from `speeches` WHERE `speech_type='committee'` |
+| `GET /politicians/:id/socials` | free | read:public | Social handles per politician; live-only by default (`?include_dead=true` to opt in) |
+| `GET /politicians/:id/posts` | free | read:public | Scraped social posts captured by the paid monitoring pipeline; carries `funded_by` attribution |
+| `GET /boundaries` | free | read:public | Paginated boundary metadata; supports `level`, `province_territory`, and `bbox` filters |
+| `GET /boundaries/lookup` | free | read:public | Point-in-polygon lookup at lat/lng; returns containing riding at each level (or `?level=` to narrow) |
+| `GET /boundaries/:source_set/:slug` | free | read:public | Single boundary with simplified GeoJSON |
+| `GET /politicians` | free | read:public | Paginated list with civic-app filters (`jurisdiction`, `role`, `status`, `constituency_id`, `q`); designed for seeding "the 87 sitting AB MLAs" in one call |
+| `GET /politicians/:id/offices` | free | read:public | Structured offices list (constituency + legislature + other); kind/address/phone/fax/email/hours/lat/lng |
+| `GET /postcodes/:postcode` | free | read:public | Resolve postcode (or 3-char FSA) to lat/lng + `boundaries.{federal,provincial,municipal}` (byte-identical shape to `/boundaries/lookup` for parser reuse). Real-time Open North proxy; no local cache |
 
 **Implementation pattern.** All search, bills, votes, and committee-meetings public handlers proxy to the corresponding internal `/api/v1/*` route via Fastify's `app.inject()` in-process pipeline. The shared helper lives at `services/api/src/routes/public/proxy.ts`. Internal handlers remain the single source of truth for route semantics; the public surface is a thin auth-gate + (where relevant) tier/scope/semaphore wrapper. Behavior changes there propagate to the public surface for free.
+
+**Socials + boundaries — direct handlers, not proxies.** Unlike bills/votes/committees, the socials and boundaries routes don't go through `app.inject()`. They query the DB directly because (a) they need to project a narrower column set than the internal `/api/v1/socials/*` route exposes (operator enrichment fields stay internal), and (b) the boundary endpoints have shapes with no internal mirror (`/lookup`, the bbox filter). The socials SQL is otherwise copy-paste of `services/api/src/routes/socials.ts`; if the internal projection changes, audit the public file at `services/api/src/routes/public/socials.ts` for drift.
+
+**Politicians list/detail/offices — direct handlers with derived fields.** Same pattern as socials/boundaries. `/politicians/:id` adds derived fields not present on the internal route: `honorific` (regex-extracted from `name` prefix — `Hon.`, `Dr.`, `Rt. Hon.`, etc.; null if no prefix matches), `status` (derived from `is_active` AND current term presence in `politician_terms` — returns `sitting` | `former` only; deceased politicians appear as `former` because we don't track that state), the two `_office_address` freeform strings (formatted from `politician_offices` rows of the matching `kind`), and `term_start_at`/`term_end_at` (from the most recent `politician_terms` row). `mailing_address` always returns null in v1 — no upstream discriminator separates mailing from constituency/legislature offices. `phone` falls back to constituency-office phone when `politicians.phone` is null (covers ~1500 politicians; politicians.phone has 203/2000+ coverage).
+
+**Postcodes — cached Open North proxy with our own PIP.** `/postcodes/:postcode` proxies Open North's `/postcodes/:code/` for geocoding, **backed by the `public.postcode_cache` table** (migration `0055`) with 30-day TTL + stale-while-revalidate. The returned centroid is then fed into `lookupBoundariesAtPoint()` (exported from `public/boundaries.ts`) for the `boundaries.*` slot, NOT passed through from Open North's `boundaries_centroid` array. This trades upstream completeness (Open North returns ward + school + non-mirrored sets) for parser-reuse: callers parsing `/boundaries/lookup` responses can reuse the same parser on `/postcodes/:postcode` boundary entries. FSAs (3-char) are resolved by probing Open North with three fallback suffixes (`1A1`, `0A0`, `1B1`); the FSA result is cached on the 3-char key so the suffix-probe dance is skipped on repeat lookups.
+
+**Cache semantics:** Fresh row (< 30 days) → served from cache, no upstream call. Stale row + upstream succeeds → cache updated, served as `source=live`. Stale row + upstream 5xx → served as `source=cache_stale` (postcodes don't move; we just haven't double-checked lately). Confirmed 404 from upstream → cache row evicted; only return 503 if no cache row exists. The `source` field on every response and the `X-Cache-Source` header surface which path was taken.
+
+**`/boundaries/lookup` accepts `?postcode=` as an alternative to `?lat=&lng=`.** When postcode is passed it's resolved via `resolvePostcode()` and the centroid feeds the existing PIP. If both are passed, postcode wins. Same 503 semantics as `/postcodes/:postcode` when Open North is unreachable.
 
 **Bulk-export files.** The same `pg_dump --schema=public` archives nginx serves anonymously at [`/datasets/`](https://canadianpoliticaldata.org/datasets/). The api container mounts the same directory read-only at `/srv/datasets` (configured via `PUBLIC_DUMPS_DIR`); the `/exports/dumps` endpoints adds auth + per-key metering on top of the existing artifact pipeline. See [`docs/operations.md`](./operations.md) § Public developer API for env-var details.
 
