@@ -22,35 +22,55 @@
     "2. Append to the appropriate committee's transcript_urls list.",
     "3. Re-run ingest-bc-committees (idempotent on canonical_url).",
     "",
-    "KNOWN COMMITTEE CODES (probed 2026-05-19 via site:lims.leg.bc.ca):",
-    "  cay   - Children and Youth                       -> ChildrenYouth",
-    "  fgs   - Finance and Government Services          -> Finance",
-    "  dem   - Democratic and Electoral Reform          -> DemElecReform",
-    "  pac   - Public Accounts                          -> PublicAccounts (historical)",
-    "  health - Health                                  -> Health (historical, 40th P)",
-    "  rpa   - Reforming the Police Act                 -> varies (historical, 42nd-2nd)",
-    "  rpea  - Review Provisions of the Election Act    -> ElectionActReview (historical)",
+    "KNOWN COMMITTEE CODES (probed 2026-05-19 + re-probed 2026-05-25):",
+    "Active in 43rd-1st (freshness canary watches these):",
+    "  cay    - Children and Youth                       -> ChildrenYouth",
+    "  fgs    - Finance and Government Services          -> Finance",
+    "  dem    - Democratic and Electoral Reform          -> DemElecReform",
+    "  pac    - Public Accounts                          -> PublicAccounts",
+    "  health - Health                                   -> Health (not sat in 43rd-1st)",
+    "Historical, mandate concluded (NOT in freshness canary):",
+    "  rpa    - Reforming the Police Act                 -> 42nd Parliament only",
+    "  rpea   - Review Provisions of the Election Act    -> 42nd Parliament only",
     "Special-prefix shape not supported in v1:",
-    "  42nd-LAMC - Legislative Assembly Management Committee"
+    "  42nd-LAMC - Legislative Assembly Management Committee",
+    "",
+    "FUTURE: 43rd-2nd session opened 2026-02-24. Special Committee on the",
+    "Insurance (Vehicle) Act (slug `iva`) struck 2026-04-22; first transcripts",
+    "expected fall 2026. When 43rd-2nd transcripts start landing, the seed",
+    "file's single (parliament, session) pin will need a restructure."
   ],
   "parliament": 43,
   "session": 1,
   "committees": {
     "fgs": {
       "transcript_urls": [
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/fgs/20250605am-Finance-Vancouver-Blues.htm",
         "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/fgs/20250609am-Finance-Nelson-Blues.htm",
-        "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/fgs/20250610pm-Finance-Cranbrook-Blues.htm"
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/fgs/20250609pm-Finance-Penticton-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/fgs/20250610pm-Finance-Cranbrook-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/fgs/20250616am-Finance-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/fgs/20250617am-Finance-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/fgs/20250618am-Finance-Victoria-Blues.htm"
       ]
     },
     "cay": {
       "transcript_urls": [
-        "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/cay/20250528am-ChildrenYouth-Victoria-Blues.htm"
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/cay/20250528am-ChildrenYouth-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/cay/20251119am-ChildrenYouth-Victoria-Blues.htm"
       ]
     },
     "dem": {
       "transcript_urls": [
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/dem/20250710am-DemElecReform-Kelowna-Blues.htm",
         "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/dem/20250714am-DemElecReform-Victoria-Blues.htm",
         "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/dem/20250716am-DemElecReform-Victoria-Blues.htm"
+      ]
+    },
+    "pac": {
+      "transcript_urls": [
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/pac/20250430am-PublicAccounts-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/pac/20251128am-PublicAccounts-Victoria-Blues.htm"
       ]
     }
   }

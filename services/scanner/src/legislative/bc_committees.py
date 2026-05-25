@@ -79,12 +79,26 @@ log = logging.getLogger(__name__)
 # Affairs, Agriculture/Fish/Food) but have no LIMS-indexed transcripts are
 # omitted from the catalog. New entries: add (code, full name) here and
 # append seed URLs to scripts/seeds/bc-committee-meetings.json.
+#
+# The catalogue is split into two buckets: STANDING_COMMITTEES is the set
+# the freshness canary watches every cycle (active or potentially-active
+# committees of the current Parliament); HISTORICAL_COMMITTEES holds codes
+# whose mandate has concluded (special committees that reported and were
+# discharged). Display-name lookup falls back from STANDING to HISTORICAL
+# so re-ingesting an old transcript still attributes correctly.
 STANDING_COMMITTEES: dict[str, str] = {
     "cay": "Select Standing Committee on Children and Youth",
     "fgs": "Select Standing Committee on Finance and Government Services",
     "dem": "Special Committee on Democratic and Electoral Reform",
     "pac": "Select Standing Committee on Public Accounts",
     "health": "Select Standing Committee on Health",
+}
+
+# Concluded-mandate committees. Not watched by the freshness canary — they
+# will not meet again under these codes. Kept here so display-name lookup
+# stays correct if a historical transcript is ingested (and so a future
+# operator probing for a code finds the prior name without git-spelunking).
+HISTORICAL_COMMITTEES: dict[str, str] = {
     "rpa": "Special Committee on Reforming the Police Act",
     "rpea": "Special Committee to Review Provisions of the Election Act",
 }
@@ -430,7 +444,9 @@ def _meeting_ref_from_url(
         log.warning("seed url %s: filename parse failed: %s", url, exc)
         return None
 
-    name = STANDING_COMMITTEES.get(code, code.upper())
+    name = STANDING_COMMITTEES.get(
+        code, HISTORICAL_COMMITTEES.get(code, code.upper()),
+    )
     # Best-effort blues/final URL: the seed lists ONE URL per meeting in
     # v1 (operator decides whether to track Blues or Final). The URL's
     # filename variant tells us which slot to fill.
