@@ -114,17 +114,9 @@ User accounts, sessions, payments, corrections, and reports live in the **`priva
 
 Tables that move to `private` when added: anything that holds an account, an email, a payment, a session token, a saved query, or user-submitted content. Public-side tables must not gain `user_id` / `created_by_user_id` columns — that bleeds PII back across the boundary.
 
-Application code **always qualifies** `private.X` in SQL. Never alias, never lean on `search_path`. Grep-ability is the safety net: a future migration that puts a user-data table in `public` is caught by the dump-time guardrail in `scripts/make-public-dump.sh`, but the qualification convention is the first line of defence.
+Application code **always qualifies** `private.X` in SQL. Never alias, never lean on `search_path`. Grep-ability is the safety net: the qualification convention is the first line of defence against a future migration that puts a user-data table in `public` and bleeds PII across the boundary.
 
-The redistributable artifact is produced by `cli/sovpro db public-dump` → `pg_dump --schema=public`. By construction, nothing in `private` can leak into it.
-
-### 9. Public dataset distribution surface
-
-The redistributable dump is published at `https://canadianpoliticaldata.org/datasets/` — nginx autoindex over a read-only bind mount of `/media/bunker-admin/Internal/.../public-dumps/`. Per-IP `limit_conn 2` + `limit_rate 50m` in `nginx/conf.d/default.conf` keep one client (or a viral inbound link) from saturating the home upstream.
-
-The weekly cron (`0 2 * * 0` local) runs `scripts/make-public-dump.sh`, which produces a fresh timestamped dump on disk. The nginx `/datasets/` location is anonymous by design: it's the cheapest path for journalists, researchers, and civic-tech consumers. Auth-gated bulk export is a different, paid concern (the *Later — public dev API* horizon), not this one. Do not collapse the two.
-
-If a third-party mirror (Proton Drive, B2, R2, etc.) is added later, do it as a *manual operator step* or a separate uploader script — not as a coupled stage inside `make-public-dump.sh`. A failing mirror should never delay or fail the canonical self-host artifact.
+> **Note (2026-06-02):** the public dataset *distribution* surface — the redistributable `pg_dump --schema=public` artifact, the `/datasets/` nginx autoindex, the `read:bulk` bulk-export API endpoints, and the weekly `make-public-dump.sh` generator — was fully decommissioned when the project went single-user. The `public`/`private` schema split is retained purely as a PII-isolation discipline. The rest of the public dev API (search/socials/boundaries/politicians/postcodes/offices) stays live.
 
 ## Admin panel
 
@@ -140,12 +132,11 @@ The auth pipeline (login token → JWT → CSRF), the IdP-swap seam in `auth-tok
 
 ## Public developer API (`/api/public/v1/*`)
 
-Parallel third-party-facing API surface alongside the internal `/api/v1/*`. **27 endpoints across 13 tags** as of 2026-05-24 (phases 1a–1e plus 1f = socials + boundaries; 1g = politician contact + list + postcode geocoding). Bearer-token authenticated via API keys minted at `/account/api-keys` (HMAC-hashed at rest with `API_KEY_PEPPER`). Two orthogonal authorization axes: **tier** (free / dev $20/mo / pro $200/mo, gates rate limits + paid search) and **scope** (`read:public` implicit / `read:bulk` opt-in, gates bulk export). Permissive CORS (`origin: *`) — public surface, bearer-not-cookie auth.
+Parallel third-party-facing API surface alongside the internal `/api/v1/*`. **25 endpoints across 12 tags** (the 2 `read:bulk` bulk-export endpoints + the "Bulk export" tag were removed 2026-06-02 with the public-dump teardown). Bearer-token authenticated via API keys minted at `/account/api-keys` (HMAC-hashed at rest with `API_KEY_PEPPER`). Authorization axis: **tier** (free / dev $20/mo / pro $200/mo, gates rate limits + paid search). `read:public` is the only capability scope; the `requireScope` seam is kept for reintroducing scopes later. Permissive CORS (`origin: *`) — public surface, bearer-not-cookie auth.
 
 Key files:
 - `services/api/src/routes/public/index.ts` — plugin root; CORS + onRequest hook + Swagger. `/politicians/:id` lived inline here until 2026-05-24; now lives in `public/politicians.ts`.
 - `services/api/src/routes/public/search.ts` — 6 search endpoints, pro-tier-gated TEI semaphore via `app.inject` proxy to internal handlers.
-- `services/api/src/routes/public/exports.ts` — 2 bulk-export endpoints, `read:bulk`-scoped, file streams from `/srv/datasets` mount.
 - `services/api/src/routes/public/socials.ts` — 2 socials endpoints (handles + scraped posts per politician). Free-tier. Projects only public-safe columns from `politician_socials`; operator enrichment fields (`source`, `confidence`, `evidence_url`, `flagged_low_confidence`, `profile_metadata`, `posting_velocity_per_week`, `discovered_at`) stay internal.
 - `services/api/src/routes/public/boundaries.ts` — 3 boundary endpoints: list (with bbox filter), `lookup` (point-in-polygon, accepts `?lat=&lng=` OR `?postcode=`), and detail-with-GeoJSON. Free-tier. Lookup uses the full `boundary` for exactness; detail/list use `boundary_simple` (~555m tolerance) for transit-size economy. Detail URL is `/boundaries/:source_set/:slug` (two path params) to avoid URL-encoded slashes inside the Open North `constituency_id`. Exports `lookupBoundariesAtPoint(lng, lat, levels?)` for cross-plugin reuse from `postcodes.ts`.
 - `services/api/src/routes/public/politicians.ts` — list endpoint + extended detail. List has civic-app filter ergonomics (`?jurisdiction=AB&role=mla&status=sitting&constituency_id=&q=`); detail returns contact fields (`email`, `phone`, `fax`, `constituency_office_address`, `legislature_office_address`, `mailing_address` (always null in v1), `honorific` (regex-derived from name), `status` (`sitting | former`, no `deceased` tracking), `term_start_at`, `term_end_at`).
@@ -154,7 +145,7 @@ Key files:
 - `services/api/src/lib/postcode.ts` — `resolvePostcode()` helper + `PostcodeUpstreamError`. Used by `postcodes.ts` and `boundaries.ts`. Handles 6-char postcodes directly; FSAs (3-char) resolved by probing Open North with three fallback suffixes (`1A1`, `0A0`, `1B1`). Backed by the `public.postcode_cache` table (migration `0055`) with 30-day TTL + stale-while-revalidate semantics: serves stale on Open North 5xx (postcodes don't move; stale data is still correct), only evicts on confirmed 404. Caching is operationally defensible — postcode geocoding redistributed by Open North is not under active Canada Post enforcement (2012 Geolytica lawsuit was abandoned in 2016; no Canadian case law establishes postcodes as copyrightable). The cache is a query-result cache (same legal substance as `Cache-Control: max-age=86400`), not a redistribution of PCAD.
 - `services/api/src/middleware/api-key-auth.ts` — `requireApiKey` / `optionalApiKey`.
 - `services/api/src/middleware/api-tier-gate.ts` — `requireTier('dev'|'pro')`.
-- `services/api/src/middleware/api-scope-gate.ts` — `requireScope('read:bulk')`.
+- `services/api/src/middleware/api-scope-gate.ts` — `requireScope` capability-scope gate (currently only `read:public`; inert seam after the bulk-export teardown).
 - `services/api/src/middleware/api-rate-limit.ts` — per-tier rate-limit resolver.
 - `services/api/src/lib/api-key-token.ts` — `cpd_<env>_<random>_<checksum>` mint/verify.
 - `services/api/src/lib/tei-semaphore.ts` — `withPublicTeiSlot` admission control.

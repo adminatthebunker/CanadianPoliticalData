@@ -195,26 +195,12 @@ Read this before any non-trivial change to a listed area. The structure mirrors 
 **How to apply:** Always write `private.users`, `private.credit_ledger`, etc. in SQL — both in TypeScript route handlers and in Python workers. Never alias to a bare `users`. If you find an unqualified reference, fix it; don't widen `search_path` to make it work.
 
 ### Do not put new user-data tables in the `public` schema
-**Why:** The public dump (`cli/sovpro db public-dump` → `pg_dump --schema=public`) is the redistribution artifact. Anything in `public` is — by definition, no exceptions — safe to publish. A new table holding emails / sessions / payment metadata / user-submitted content in `public` is a privacy bug waiting to ship.
-**How to apply:** New migrations creating user-account, session, payment, or user-submitted-content tables write `CREATE TABLE private.X`, not `CREATE TABLE X`. The dump script's manifest guardrail catches one of the 10 known table-name patterns showing up in `public`, but it does not catch a *novel* PII table; the rule above is what catches that.
+**Why:** The `public` / `private` schema split is the structural privacy boundary — anything in `public` is, by definition and with no exceptions, safe to redistribute. A table holding emails / sessions / payment metadata / user-submitted content in `public` is a privacy bug waiting to ship.
+**How to apply:** New migrations creating user-account, session, payment, or user-submitted-content tables write `CREATE TABLE private.X`, not `CREATE TABLE X`. The qualification convention (`private.X` everywhere, never aliased) is the first line of defence; placing the table in `private` is what actually keeps it off the public side.
 
 ### Do not add a `user_id` / `created_by_user_id` column on a public-schema table
 **Why:** Same reason. Even if the FK target lives in `private`, the column itself in `public` carries the link to a person and would ship in the public dump.
 **How to apply:** If you need to associate a user with a public artifact, put the linking row in `private` (e.g. `private.user_actions(user_id, public_artifact_id)`) and join from there.
-
-## Public distribution
-
-### Do not remove `limit_conn` / `limit_rate` from the `/datasets/` location
-**Why:** This is the rate cliff between "anyone can grab the dump" and "the box's home upstream saturates and everything else lags." The 2-concurrent / 50 MB/s cap was set deliberately because there is no CDN in front; pulling the cap means the next viral Hacker News link makes the API and the docs site unresponsive too.
-**How to apply:** If the cap is genuinely too tight (a legitimate user complaint, not a hypothetical), measure sustained traffic via `/var/log/nginx/datasets.access.log` first and raise the rate, don't remove it. If you ever need to lift the cap entirely, add a CDN (Cloudflare / Bunny / similar) in front rather than pointing strangers at the home upstream raw.
-
-### Do not put `/datasets/` behind authentication
-**Why:** The whole point of this surface is anonymous bulk download — journalists, civic-tech orgs, foreign researchers, the next Wikipedia editor. Adding auth re-creates the same friction we built `/datasets/` to escape, and conflicts with the open-data brand. Auth-gated bulk export is a separate, paid product (public dev API horizon).
-**How to apply:** Keep `/datasets/` open + rate-limited. If a future "premium tier" ships, it gets a different URL (`/api/public/v1/bulk/...`) backed by API-key auth, not a flag on `/datasets/`.
-
-### Do not couple a third-party mirror upload into `make-public-dump.sh`
-**Why:** An earlier rclone+Proton Drive integration was reverted on 2026-05-04 after Proton's anti-abuse system soft-locked the account on first contact (their reverse-engineered backend trips fraud signals). Even with graceful-degrade gating, an in-script mirror creates an operator-confusion surface: a "succeeded" cron run that quietly ships a stale mirror is worse than no mirror at all. Mirrors are operator-driven now (manual upload).
-**How to apply:** If a future mirror needs automation, write it as a separate script invoked *after* `make-public-dump.sh` lands a verified artifact, with its own cron entry, its own logs, and its own failure mode. Do not re-couple the publish path to the mirror upload path.
 
 ## Cross-cutting
 

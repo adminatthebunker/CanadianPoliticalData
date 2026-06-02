@@ -47,10 +47,6 @@ So reports cost credits. Search doesn't.
 - **Saved searches and alerts** — we run the comparison job ourselves
   on a schedule; no external compute.
 - **Submitting corrections** — and you *earn* credits for accepted ones.
-- **The public dataset dump** — a weekly Postgres dump of the public
-  schema, served at
-  [`/datasets/`](https://canadianpoliticaldata.org/datasets/) for
-  anyone who wants to reuse the data.
 
 We will not put any of these behind a paywall. If something currently
 free becomes paid in the future, it will be because the cost shape

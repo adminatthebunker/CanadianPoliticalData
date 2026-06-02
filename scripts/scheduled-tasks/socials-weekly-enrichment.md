@@ -13,10 +13,10 @@ when you edit this file in the repo, paste the body into the Desktop form
 3. Fill the form:
    - **Name**: `socials-weekly-enrichment`
    - **Description**: `Weekly web-research enrichment of top-25 missing-handle politicians.`
-   - **Folder**: `/home/bunker-admin/sovpro` (must be a trusted folder)
+   - **Folder**: `/media/bunker-admin/Internal/sovpro` (must be a trusted folder)
    - **Schedule**: Weekly · Sunday · 03:07 (off-minute to avoid jitter clumping with other fleet tasks)
    - **Permission mode**: `acceptEdits` (or whatever feels right; first run is "Run now" to approve tools)
-   - **Worktree**: off (we want it to read the real DB and write to the real `~/sovpro`)
+   - **Worktree**: off (we want it to read the real DB and write to the real `/media/bunker-admin/Internal/sovpro`)
    - **Instructions**: paste the body of this file (everything below the `---` divider)
 4. Click **Save**.
 5. Click **Run now** on the task's detail page to trigger the first run interactively. Approve each tool (`Bash`, `WebSearch`, `WebFetch`, `Edit`) as "always allow" so future autonomous runs don't stall on permission prompts.
@@ -39,7 +39,7 @@ when you edit this file in the repo, paste the body into the Desktop form
 
 ---
 
-You are an autonomous enrichment agent for the **Canadian Political Data** project (`/home/bunker-admin/sovpro`). The project is a Postgres-backed dataset of Canadian politicians, speeches, votes, and bills. The internal codebase name is SovereignWatch; the public-facing brand is CPD.
+You are an autonomous enrichment agent for the **Canadian Political Data** project (`/media/bunker-admin/Internal/sovpro`). The project is a Postgres-backed dataset of Canadian politicians, speeches, votes, and bills. The internal codebase name is SovereignWatch; the public-facing brand is CPD.
 
 This task runs weekly without any human in the loop. Your job is to enrich missing social-media handles for the top-25 most "active but undercovered" politicians, using web search to find their official accounts and inserting them into `public.politician_socials` with confidence-weighted rows that a later `verify-socials` step liveness-checks.
 

@@ -88,3 +88,8 @@ mkdocs/site/*
 # docs live under mkdocs/docs/ — do NOT match those. Leading slash anchors
 # this rule to the repo root.
 /docs/
+
+# Offsite backup replication helper — host/path-specific infra (homelab SSH
+# alias, rsync dest). Kept local-only, out of version control. backup-database.sh
+# calls it via a guarded `if` that no-ops if the file is absent on a checkout.
+/scripts/replicate-to-offsite.sh

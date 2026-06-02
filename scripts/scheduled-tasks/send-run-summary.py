@@ -136,7 +136,7 @@ def main(argv: list[str]) -> int:
 
     # Source SMTP creds from the project .env (cron's environment
     # doesn't inherit anything from the user's interactive shell).
-    project_env = Path("/home/bunker-admin/sovpro/.env")
+    project_env = Path(__file__).resolve().parents[2] / ".env"
     load_env(project_env)
 
     if not smtp_configured():

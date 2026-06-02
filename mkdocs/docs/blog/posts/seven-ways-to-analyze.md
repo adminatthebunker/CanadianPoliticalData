@@ -248,9 +248,7 @@ table-name conventions and a dump-time guardrail; making it a real
 schema split means the boundary is enforced by Postgres, not by
 discipline. The `bills.meeting_id` cross-schema FK to municipal
 meetings is the only cross-boundary edge in the system, and it
-points the safe direction (public → public). [The downloads
-page](https://canadianpoliticaldata.org/datasets/) keeps working
-unchanged.
+points the safe direction (public → public).
 
 **A pricing page.** The blog has been quietly hand-waving "premium
 analyses cost credits" for two months. The new

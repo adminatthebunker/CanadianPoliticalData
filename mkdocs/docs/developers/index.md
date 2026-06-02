@@ -92,7 +92,7 @@ to the free tier.
 
 ## What's in v1.0
 
-27 endpoints across thirteen tags:
+25 endpoints across twelve tags:
 
 **Reference data** (any tier including anonymous):
 
@@ -179,20 +179,6 @@ concurrent + 6 queued = 8 slots total) — past that they 503 with
 See [Rate limiting](./rate-limiting.md#tei-semaphore-on-semantic-search)
 for details on both the per-tier bucket and the GPU semaphore.
 
-**Bulk export** (`read:bulk` scope required — orthogonal to tier):
-
-- **`GET /exports/dumps`** — list current full-dataset dump artifacts
-  (filename, size, modified-at, kind).
-- **`GET /exports/dumps/:filename`** — stream a specific dump file
-  (`pg_dump --schema=public` custom-format archive + integrity
-  checksum + manifest).
-
-Same files served anonymously at
-[`/datasets/`](https://canadianpoliticaldata.org/datasets/) — the
-API surface adds auth + per-key metering. See
-[Bulk export](./bulk-export.md) for the full guide including
-`pg_restore` instructions.
-
 ## Topics
 
 - **[Authentication](./authentication.md)** — token format, key
@@ -207,8 +193,6 @@ API surface adds auth + per-key metering. See
 - **[Politician socials](./socials.md)** — handles + scraped posts per politician.
 - **[Constituency boundaries](./boundaries.md)** — federal / provincial / municipal boundary list, point-in-polygon lookup (lat/lng or postcode), GeoJSON detail.
 - **[Postcodes](./postcodes.md)** — postcode (or FSA) → lat/lng + containing ridings; real-time Open North proxy.
-- **[Bulk export](./bulk-export.md)** — `read:bulk` scope,
-  `pg_dump` artifacts, restore guide.
 - **[Errors](./errors.md)** — 400 / 401 / 403 / 404 / 429 / 503
   catalog.
 

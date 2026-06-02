@@ -633,7 +633,7 @@ This section is the operator-side overview only; the auto-generated specs above 
 
 **Two orthogonal authorization axes:**
 - **Tier** (billing level): `free` / `dev` ($20/mo) / `pro` ($200/mo). Governs rate limits + access to expensive-by-default endpoints. Subscribe at `/account/billing`. Subscribing auto-promotes ALL of a user's existing keys to the new tier; cancellation keeps the higher tier until period end.
-- **Scope** (capability flags): `read:public` (implicit baseline on every key) / `read:bulk` (opt-in at create time). Governs access to opt-in surfaces like bulk export.
+- **Scope** (capability flags): `read:public` (implicit baseline on every key). Governs access to opt-in surfaces; today this is the only scope.
 
 **Rate limits (per hour, per key or per IP for anonymous).** Every authenticated key has TWO independent buckets — a general one and a semantic-search-only one. Bucket names are `apikey:<id>` and `apikey:<id>:search` in `@fastify/rate-limit`'s in-memory store; anonymous buckets are `ip:<x>` (no semantic bucket — semantic routes `requireApiKey`).
 
@@ -663,8 +663,6 @@ This section is the operator-side overview only; the auto-generated specs above 
 | `GET /search/speeches` | free/dev/pro (**semantic bucket**: 5/100/10K per hr) | read:public | Hybrid HNSW + BM25; TEI semaphore |
 | `GET /search/speeches/count` | free/dev/pro (**semantic bucket**) | read:public | Count-only sibling; TEI semaphore |
 | `GET /search/facets` | free/dev/pro (**semantic bucket**) | read:public | Aggregations over top-N; TEI semaphore |
-| `GET /exports/dumps` | any | **read:bulk** | List current `pg_dump --schema=public` artifacts |
-| `GET /exports/dumps/:filename` | any | **read:bulk** | Stream a specific dump file |
 | `GET /bills` | free | read:public | Federal + provincial legislation with filters; proxies `/api/v1/bills` |
 | `GET /bills/:id` | free | read:public | Single bill + denorm counts |
 | `GET /bills/:id/events` | free | read:public | Stage-transition history |
@@ -693,8 +691,6 @@ This section is the operator-side overview only; the auto-generated specs above 
 **Cache semantics:** Fresh row (< 30 days) → served from cache, no upstream call. Stale row + upstream succeeds → cache updated, served as `source=live`. Stale row + upstream 5xx → served as `source=cache_stale` (postcodes don't move; we just haven't double-checked lately). Confirmed 404 from upstream → cache row evicted; only return 503 if no cache row exists. The `source` field on every response and the `X-Cache-Source` header surface which path was taken.
 
 **`/boundaries/lookup` accepts `?postcode=` as an alternative to `?lat=&lng=`.** When postcode is passed it's resolved via `resolvePostcode()` and the centroid feeds the existing PIP. If both are passed, postcode wins. Same 503 semantics as `/postcodes/:postcode` when Open North is unreachable.
-
-**Bulk-export files.** The same `pg_dump --schema=public` archives nginx serves anonymously at [`/datasets/`](https://canadianpoliticaldata.org/datasets/). The api container mounts the same directory read-only at `/srv/datasets` (configured via `PUBLIC_DUMPS_DIR`); the `/exports/dumps` endpoints adds auth + per-key metering on top of the existing artifact pipeline. See [`docs/operations.md`](./operations.md) § Public developer API for env-var details.
 
 ## Health
 

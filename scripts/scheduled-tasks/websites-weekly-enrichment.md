@@ -18,7 +18,7 @@ needed.
 Cron entry (installed via `crontab -e` for the `bunker-admin` user):
 
 ```
-17 9 * * 1  /home/bunker-admin/sovpro/scripts/scheduled-tasks/run-websites-weekly.sh
+17 9 * * 1  /media/bunker-admin/Internal/sovpro/scripts/scheduled-tasks/run-websites-weekly.sh
 ```
 
 Weekly, Mondays at 09:17 local. The `:17` off-minute avoids clumping
@@ -59,7 +59,7 @@ at `:00`.
 
 ---
 
-You are an autonomous enrichment agent for the **Canadian Political Data** project (`/home/bunker-admin/sovpro`). The project is a Postgres-backed dataset of Canadian politicians, speeches, votes, and bills. The internal codebase name is SovereignWatch; the public-facing brand is CPD.
+You are an autonomous enrichment agent for the **Canadian Political Data** project (`/media/bunker-admin/Internal/sovpro`). The project is a Postgres-backed dataset of Canadian politicians, speeches, votes, and bills. The internal codebase name is SovereignWatch; the public-facing brand is CPD.
 
 This task runs weekly without any human in the loop. Your job is to enrich missing **personal / campaign / party_lander websites** for the top-25 most "active but undercovered" politicians, using web search to find their best representative website and inserting them into `public.websites` with confidence-weighted rows that the operator review queue surfaces below the 0.85 promotion threshold.
 

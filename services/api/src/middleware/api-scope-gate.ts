@@ -6,18 +6,18 @@ import { getApiKey } from "./api-key-auth.js";
  * requireApiKey populates request.apiKey.
  *
  * Distinct from requireTier: tiers are billing levels (free / dev /
- * pro), scopes are capability flags (read:public / read:bulk).
- * A free-tier key CAN have read:bulk scope (cheap-but-allowed bulk
- * download access without paying for higher request rate). A pro-tier
- * key WITHOUT read:bulk can hammer search but can't download dumps.
+ * pro), scopes are capability flags. read:public is currently the
+ * only scope (read:bulk was retired with the public-dump distribution
+ * surface on 2026-06-02); requireScope is kept as a no-cost seam for
+ * reintroducing capability scopes later.
  *
  * Returns 403 with an actionable body when the caller's scopes don't
  * include the required scope. Anonymous callers (no api key) see the
  * same 403 — they should have hit requireApiKey's 401 first.
  */
 
-export type ApiScope = "read:public" | "read:bulk";
-export const ALLOWED_SCOPES: readonly ApiScope[] = ["read:public", "read:bulk"];
+export type ApiScope = "read:public";
+export const ALLOWED_SCOPES: readonly ApiScope[] = ["read:public"];
 
 export function requireScope(scope: ApiScope) {
   return async function scopeGate(req: FastifyRequest, reply: FastifyReply) {

@@ -18,7 +18,7 @@
 
 set -euo pipefail
 
-SOVPRO_REPO="${SOVPRO_REPO:-/home/bunker-admin/sovpro}"
+SOVPRO_REPO="${SOVPRO_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 
 # Read a single KEY=VALUE entry from $SOVPRO_REPO/.env. Echoes the value
 # (last one wins on duplicate keys, matching docker-compose semantics);
@@ -253,6 +253,19 @@ if [ "$total" -gt "$BACKUP_RETENTION" ]; then
         rm -f  "$BACKUP_DEST/$unit.manifest.txt"
         rm -f  "$BACKUP_DEST/$unit.log"
     done
+fi
+
+# 8. Offsite replication — mirror the backup set to the homelab over
+# rsync+SSH. Gated + idempotent: the helper probes the remote host and
+# skips cleanly when it's unreachable, so a powered-off homelab is a
+# no-op, not a backup failure. Guarded by `if` so even a genuine rsync
+# error against a reachable host can't abort this run — the local dump
+# is already written and validated above.
+log "offsite replication step (gated; skips if homelab is down)"
+if "$SOVPRO_REPO/scripts/replicate-to-offsite.sh" "$BACKUP_DEST" >>"$LOG_FILE" 2>&1; then
+    log "offsite replication step complete"
+else
+    log "WARN: offsite replication reported an error (local backup unaffected)"
 fi
 
 TOTAL_ELAPSED=$(( $(date -u +%s) - START_EPOCH ))

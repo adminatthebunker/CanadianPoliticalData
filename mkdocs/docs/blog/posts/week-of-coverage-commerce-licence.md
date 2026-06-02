@@ -155,7 +155,7 @@ gaps** — Saskatchewan, then breaking through the WAFs that block PEI
 and Yukon — and pushing the federal historical backfill the rest of
 the way. After that, the public dataset download (currently flagged
 "coming soon" on the
-[contributors page](../../contributors/data-download.md)) gets
+[contributors page](../../contributors/index.md)) gets
 finalized once the user-data scrubbing review is done.
 
 This is the rhythm the project will hold for a while: provinces,

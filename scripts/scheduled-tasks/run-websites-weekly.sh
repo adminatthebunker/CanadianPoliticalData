@@ -16,7 +16,7 @@
 # gives us a single edit point.
 #
 # Cron entry (install via `crontab -e` for the bunker-admin user):
-#   17 9 * * 1  /home/bunker-admin/sovpro/scripts/scheduled-tasks/run-websites-weekly.sh
+#   17 9 * * 1  /media/bunker-admin/Internal/sovpro/scripts/scheduled-tasks/run-websites-weekly.sh
 #
 # Weekly, Mondays at 09:17 local. Off-minute on purpose (not :00) so it
 # doesn't clump with the rest of the fleet's hourly tasks at the top of
@@ -25,7 +25,7 @@
 
 set -euo pipefail
 
-PROJECT_DIR="/home/bunker-admin/sovpro"
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PROMPT_FILE="$PROJECT_DIR/scripts/scheduled-tasks/websites-weekly-enrichment.md"
 LOG_DIR="$PROJECT_DIR/docs/runbooks/websites-agent-logs"
 LOG_FILE="$LOG_DIR/$(date -u +%Y-%m-%dT%H%M%SZ).log"

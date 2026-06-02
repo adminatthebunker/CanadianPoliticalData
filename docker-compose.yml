@@ -22,7 +22,12 @@ services:
       POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
       TZ: UTC
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      # Postgres data lives on the Internal NVMe (separate physical disk
+      # from root) so it survives a root-drive OS reflash. Absolute bind —
+      # NOT a Docker named volume — see docs/runbooks for the relocation.
+      # The require-internal-mount.conf docker.service drop-in guarantees
+      # Docker won't start (and bind an empty dir) if the drive is absent.
+      - /media/bunker-admin/Internal/cpd-pgdata:/var/lib/postgresql/data
       - ./db/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
       - ./db/seed.sql:/docker-entrypoint-initdb.d/02-seed.sql:ro
     healthcheck:
@@ -108,16 +113,6 @@ services:
       REPORT_HNSW_EF_SEARCH: ${REPORT_HNSW_EF_SEARCH:-1000}
       REPORTS_RATE_LIMIT_DEFAULT_PER_DAY: ${REPORTS_RATE_LIMIT_DEFAULT_PER_DAY:-5}
       REPORTS_RATE_LIMIT_EXTENDED_PER_DAY: ${REPORTS_RATE_LIMIT_EXTENDED_PER_DAY:-20}
-      # Path inside the container where the public-dump artifacts are
-      # mounted (read-only). Same source directory nginx serves from
-      # /datasets/, exposed here for the read:bulk-scoped public-API
-      # download endpoints (services/api/src/routes/public/exports.ts).
-      PUBLIC_DUMPS_DIR: /srv/datasets
-    volumes:
-      # Same mount nginx uses (line ~466 below) — the /api/public/v1/
-      # exports/* endpoints serve these dump files behind read:bulk
-      # scope auth, in parallel with the anonymous /datasets/ surface.
-      - /media/bunker-admin/Internal/canadian-political-data-backups/public-dumps:/srv/datasets:ro
     restart: unless-stopped
     networks: [sw]
 
@@ -563,10 +558,6 @@ services:
       # Missing on a fresh checkout — the docs vhost will 404 cleanly until
       # the first build is run. See nginx/conf.d/docs.conf.
       - ./mkdocs/site:/var/www/docs:ro
-      # Public dataset downloads. Mounted RO; populated weekly by
-      # scripts/make-public-dump.sh on the host. See /datasets/ block in
-      # nginx/conf.d/default.conf for rate-limit + autoindex config.
-      - /media/bunker-admin/Internal/canadian-political-data-backups/public-dumps:/srv/datasets:ro
     depends_on: [api, frontend]
     restart: unless-stopped
     networks: [sw]
@@ -584,7 +575,8 @@ services:
     networks: [sw]
 
 volumes:
-  pgdata:
+  # pgdata removed 2026-06-02 — Postgres data moved to an absolute bind
+  # mount on the Internal NVMe (/media/bunker-admin/Internal/cpd-pgdata).
   # changedata:  # uncomment when re-enabling the change-detection service above
   kumadata:
   embedmodels:

@@ -27,18 +27,16 @@ There are two paths, depending on what you need:
 
     [:octicons-arrow-right-24: Local installation](local-install.md)
 
--   :material-database-arrow-down:{ .lg .middle } **Just the data** *(coming soon)*
+-   :material-database-arrow-down:{ .lg .middle } **Just the data**
 
     ---
 
-    A direct download of the dataset (Postgres dump) for researchers
-    who want to run their own SQL without standing up the full stack.
+    Want the dataset for your own SQL without standing up the full
+    stack? Run the scanner's ingestion pipeline locally to bootstrap a
+    fresh corpus from the same upstream sources — the local-install
+    path above covers it end to end.
 
-    Not yet published — see the page below for the planned shape and
-    timeline. Until then, the local-install path above bootstraps a
-    fresh corpus from the same upstream sources.
-
-    [:octicons-arrow-right-24: Dataset download](data-download.md)
+    [:octicons-arrow-right-24: Bootstrapping the dataset](local-install.md#bootstrapping-the-dataset)
 
 </div>
 
@@ -69,7 +67,8 @@ into a substantial branch.
 
 - For citing data you found through the site, link to the speech /
   bill / politician page directly. Each page URL is stable.
-- For bulk reuse via the dataset download, see the
-  [licence notes](data-download.md#licence).
+- For bulk reuse, the underlying records come from public legislative
+  sources under their respective open-government licences — see the
+  per-jurisdiction notes in the repo's `docs/data-sources.md`.
 - For UI screenshots in publications, no permission needed — credit
   *canadianpoliticaldata.org*.

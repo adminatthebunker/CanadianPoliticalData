@@ -129,7 +129,6 @@ Operational notes for the third-party-facing API surface that ships in dev-API p
 | `STRIPE_PRICE_ID_PLAN_PRO` | Stripe recurring price id for the $200/mo pro tier. | unset | For paid subscriptions only |
 | `PUBLIC_TEI_MAX_CONCURRENT` | Max simultaneous TEI embed requests on `/api/public/v1/search/*`. | `2` | No (default safe) |
 | `PUBLIC_TEI_MAX_QUEUE` | Max queued requests before refusing with 503. Total slots = concurrent + queue. | `6` | No (default safe) |
-| `PUBLIC_DUMPS_DIR` | Directory inside the api container where dump artifacts are mounted (read-only, parallel of nginx's `/srv/datasets`). | unset | Yes for `/api/public/v1/exports/*`; unset → 503 |
 
 Rotating `API_KEY_PEPPER` invalidates every issued API key in one move (parallel of rotating `JWT_SECRET` to revoke every session). Treat it like any other secret — set once, rotate only with intent.
 
@@ -138,16 +137,6 @@ Rotating `API_KEY_PEPPER` invalidates every issued API key in one move (parallel
 ```bash
 openssl rand -hex 32
 ```
-
-**Volume mount for the bulk-export endpoints** (already in `docker-compose.yml`; here for reference if you re-architect storage):
-
-```yaml
-api:
-  volumes:
-    - /media/bunker-admin/Internal/canadian-political-data-backups/public-dumps:/srv/datasets:ro
-```
-
-The same directory is read-only mounted into nginx for the anonymous `/datasets/` autoindex (`docker-compose.yml` ~line 466). The api-side mount adds programmatic + auth-gated access to the same files via `/api/public/v1/exports/*`.
 
 **Per-tier rate limits** (per-key per-hour, in `services/api/src/middleware/api-rate-limit.ts:13-17`):
 
@@ -167,14 +156,6 @@ UPDATE private.api_keys SET tier = 'pro' WHERE prefix = 'cpd_live_…';
 ```
 
 The change is picked up on the next request — no restart needed.
-
-**Manually adding a scope** (for testing `read:bulk` without going through the self-service flow):
-
-```sql
-UPDATE private.api_keys
-   SET scopes = ARRAY['read:public', 'read:bulk']::text[]
- WHERE prefix = 'cpd_live_…';
-```
 
 ### Agent-driven enrichment (paid LLM, no default schedule)
 
@@ -613,7 +594,6 @@ No migration needed. Cost-formula knobs persist across model swaps; revisit them
 
 OS-level cron entries (the operator's user crontab, `crontab -l`):
 - `0 0 * * *` — daily Postgres backup (`scripts/backup-database.sh`).
-- `0 2 * * 0` — Sunday weekly public dataset dump (`scripts/make-public-dump.sh`).
 - `7 9 * * *` — daily socials enrichment via headless Claude Code (`scripts/scheduled-tasks/run-socials-weekly.sh`). See § *Daily socials enrichment* above for the runbook.
 - `17 9 * * 1` — weekly websites enrichment via headless Claude Code (`scripts/scheduled-tasks/run-websites-weekly.sh`). See § *Weekly websites enrichment* above for the runbook.
 

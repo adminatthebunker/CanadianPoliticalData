@@ -13,7 +13,6 @@ import { optionalApiKey } from "../../middleware/api-key-auth.js";
 import { publicRateLimitConfig } from "../../middleware/api-rate-limit.js";
 import { config } from "../../config.js";
 import publicV1SearchRoutes from "./search.js";
-import publicV1ExportsRoutes from "./exports.js";
 import publicV1BillsRoutes from "./bills.js";
 import publicV1VotesRoutes from "./votes.js";
 import publicV1CommitteesRoutes from "./committees.js";
@@ -189,11 +188,6 @@ export default async function publicV1Routes(app: FastifyInstance) {
   // metadata. Pro-tier routes inside add their own requireApiKey +
   // requireTier('pro') preHandlers.
   await app.register(publicV1SearchRoutes);
-
-  // Phase 1e: bulk-export endpoints over the public-dump artifacts.
-  // requireApiKey + requireScope('read:bulk') gate; same auth seam
-  // as the search routes but orthogonal axis (scope vs tier).
-  await app.register(publicV1ExportsRoutes);
 
   // Bills / votes / committee-meetings — free-tier, requireApiKey
   // only. Proxies to /api/v1/bills, /api/v1/votes, and

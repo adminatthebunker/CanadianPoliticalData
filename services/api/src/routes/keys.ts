@@ -34,10 +34,9 @@ const createBody = z.object({
   expires_in_days: z.coerce.number().int().min(1).max(3650).optional(),
   // Capability scopes the key carries. Defaults to ['read:public']
   // (every API key implicitly carries read:public — the public
-  // dataset surface). Opt in to additional scopes (e.g. read:bulk
-  // for /api/public/v1/exports/*) at create time.
+  // dataset surface). read:public is currently the only scope.
   scopes: z
-    .array(z.enum(["read:public", "read:bulk"] as const))
+    .array(z.enum(["read:public"] as const))
     .min(1)
     .optional(),
 });
@@ -128,7 +127,7 @@ export default async function keysRoutes(app: FastifyInstance) {
       // every key carries. The opt-in scopes are added on top.
       const finalScopes = Array.from(
         new Set(["read:public" as const, ...(scopes ?? [])]),
-      ).filter((s): s is "read:public" | "read:bulk" =>
+      ).filter((s): s is "read:public" =>
         (ALLOWED_SCOPES as readonly string[]).includes(s),
       );
 

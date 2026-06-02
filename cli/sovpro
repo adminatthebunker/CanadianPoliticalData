@@ -187,12 +187,6 @@ cmd_db() {
             $COMPOSE exec -T db pg_dump -U sw sovereignwatch | gzip > "$out"
             ok "saved $out"
             ;;
-        public-dump)
-            # Redistributable dump of the `public` schema only — no users,
-            # payments, sessions, corrections, reports. See
-            # scripts/make-public-dump.sh for the safety guardrails.
-            "$REPO_ROOT/scripts/make-public-dump.sh" "${@:2}"
-            ;;
         restore)
             [ -n "${2:-}" ] || die "Usage: sovpro db restore <path>"
             [ -f "$2" ] || die "File not found: $2"
@@ -205,11 +199,15 @@ cmd_db() {
             printf "Type 'yes' to continue: "; read -r ans
             [ "$ans" = "yes" ] || { warn "aborted"; return 1; }
             $COMPOSE down
-            docker volume rm sovpro_pgdata 2>/dev/null || true
+            # pgdata is an absolute bind mount on the Internal NVMe, not a
+            # named volume — clear its contents as root inside a throwaway
+            # container (the data dir is owned by uid 999, so no host sudo).
+            docker run --rm -v /media/bunker-admin/Internal/cpd-pgdata:/data busybox \
+                sh -c 'rm -rf /data/..?* /data/.[!.]* /data/* 2>/dev/null || true'
             $COMPOSE up -d db
             ok "Database reset"
             ;;
-        *) die "Usage: sovpro db {psql|backup|public-dump|restore|reset}" ;;
+        *) die "Usage: sovpro db {psql|backup|restore|reset}" ;;
     esac
 }
 

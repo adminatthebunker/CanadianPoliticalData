@@ -34,7 +34,6 @@ The project is **not apolitical**. It's rooted in democratic values, civic trans
 | See current coverage and known gaps | **[/coverage](https://canadianpoliticaldata.ca/coverage)** |
 | Read end-user / contributor docs and the blog | **[docs.canadianpoliticaldata.ca](https://docs.canadianpoliticaldata.ca/)** |
 | **Build on top of the dataset programmatically** | **[/developers](https://docs.canadianpoliticaldata.ca/developers/)** |
-| Download the full dataset (Postgres dump) | [/datasets/](https://canadianpoliticaldata.ca/datasets/) (anonymous) or [`/api/public/v1/exports/dumps`](https://docs.canadianpoliticaldata.ca/developers/bulk-export/) (authenticated) |
 | Understand a specific jurisdiction's data sources | [`docs/research/`](docs/research/) |
 | Run it locally | [Quick Start](#quick-start) below |
 
@@ -45,7 +44,6 @@ A bearer-token-authenticated public API surface lives at **`/api/public/v1/*`** 
 - **Reference data** (any tier, any scope): `/coverage`, `/jurisdiction-sources`, `/politicians/:id`
 - **Search auxiliaries** (any tier, any scope, no GPU): `/search/sessions`, `/search/chunks/:id`, `/search/meta`
 - **Semantic search** (PRO tier only — TEI-embedded; shared concurrency semaphore): `/search/speeches`, `/search/speeches/count`, `/search/facets`
-- **Bulk export** (`read:bulk` scope required, any tier): `/exports/dumps`, `/exports/dumps/:filename`
 
 Three pricing tiers — Free (60 req/hr), Developer ($20/mo, 1,000 req/hr), Pro ($200/mo, 10,000 req/hr) — manageable at [`/account/billing`](https://canadianpoliticaldata.ca/account/billing). Subscriptions auto-promote all of a user's existing API keys to the new tier.
 
