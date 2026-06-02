@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { pool, query, queryOne } from "../db.js";
@@ -1695,7 +1696,8 @@ export default async function adminRoutes(app: FastifyInstance) {
     const whereSql = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
     const rows = await query(
       `SELECT id, email, display_name, is_admin, rate_limit_tier,
-              stripe_customer_id, created_at, last_login_at
+              stripe_customer_id, created_at, last_login_at,
+              current_plan, plan_status
          FROM private.users
          ${whereSql}
          ORDER BY created_at DESC
@@ -1711,17 +1713,28 @@ export default async function adminRoutes(app: FastifyInstance) {
 
     const user = await queryOne(
       `SELECT id, email, display_name, is_admin, rate_limit_tier,
-              stripe_customer_id, created_at, last_login_at
+              stripe_customer_id, created_at, last_login_at,
+              current_plan, plan_status, stripe_subscription_id,
+              plan_renews_at, cancel_at_period_end, plan_updated_at
          FROM private.users WHERE id = $1`,
       [id],
     );
     if (!user) return reply.notFound();
 
-    const [balance, history] = await Promise.all([
+    const [balance, history, events] = await Promise.all([
       getBalance(id),
       listLedgerEntries(id, 100),
+      query(
+        `SELECT id, event_type, from_plan, to_plan, stripe_subscription_id,
+                metadata, created_at
+           FROM private.subscription_events
+          WHERE user_id = $1
+          ORDER BY created_at DESC
+          LIMIT 10`,
+        [id],
+      ),
     ]);
-    return { user, balance, ledger: history };
+    return { user, balance, ledger: history, subscription_events: events };
   });
 
   app.post("/users/:id/grant-credits", async (req, reply) => {
@@ -1769,6 +1782,138 @@ export default async function adminRoutes(app: FastifyInstance) {
 
     const balance = await getBalance(id);
     return reply.send({ ledger_entry_id: ledgerId, balance });
+  });
+
+  // Admin-initiated plan grant (comp / free upgrade). Mirrors the
+  // Stripe-webhook handleSubscriptionEvent transactional shape: flip
+  // current_plan + plan_status on the user, flip api_keys.tier on
+  // every non-revoked key (the runtime source of truth for the
+  // rate-limit middleware), and INSERT a subscription_events audit
+  // row tagged event_type='admin_grant'. The synthesized
+  // stripe_event_id ('admin:<uuid>') keeps the UNIQUE index honest
+  // and never collides with real Stripe ids ('evt_*').
+  //
+  // Blocks when the user has an active Stripe subscription — the
+  // next webhook would silently overwrite the admin grant otherwise.
+  // Cancel the sub via Stripe first, then re-issue the grant.
+  app.post("/users/:id/set-plan", async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!/^[0-9a-f-]{36}$/i.test(id)) return reply.notFound();
+
+    const parsed = z
+      .object({
+        plan: z.enum(["free", "dev", "pro"]),
+        reason: z.string().trim().min(3).max(500),
+      })
+      .safeParse(req.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ error: "invalid body", details: parsed.error.flatten() });
+    }
+
+    const target = await queryOne<{
+      id: string;
+      current_plan: string;
+      plan_status: string;
+      stripe_subscription_id: string | null;
+    }>(
+      `SELECT id, current_plan, plan_status, stripe_subscription_id
+         FROM private.users WHERE id = $1`,
+      [id],
+    );
+    if (!target) return reply.notFound();
+
+    if (target.current_plan === parsed.data.plan) {
+      return reply.send({
+        user_id: id,
+        plan: target.current_plan,
+        plan_status: target.plan_status,
+        no_op: true,
+      });
+    }
+
+    if (target.stripe_subscription_id && target.plan_status === "active") {
+      return reply.code(409).send({
+        error: "user has an active stripe subscription; cancel via stripe first",
+      });
+    }
+
+    const actingAdminEmail = getAdminEmail(req) ?? null;
+    if (!actingAdminEmail) return reply.code(403).send({ error: "admin identity lost" });
+    const actingAdmin = await queryOne<{ id: string }>(
+      `SELECT id FROM private.users WHERE email = $1`,
+      [actingAdminEmail],
+    );
+    if (!actingAdmin) return reply.code(403).send({ error: "admin row missing" });
+
+    const newStatus = parsed.data.plan === "free" ? "inactive" : "active";
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      await client.query(
+        `UPDATE private.users
+            SET current_plan         = $2,
+                plan_status          = $3,
+                plan_updated_at      = now(),
+                plan_renews_at       = NULL,
+                cancel_at_period_end = false
+          WHERE id = $1`,
+        [id, parsed.data.plan, newStatus],
+      );
+
+      await client.query(
+        `UPDATE private.api_keys
+            SET tier = $2,
+                updated_at = now()
+          WHERE user_id = $1 AND revoked_at IS NULL AND tier != $2`,
+        [id, parsed.data.plan],
+      );
+
+      await client.query(
+        `INSERT INTO private.subscription_events
+              (user_id, stripe_event_id, event_type,
+               stripe_subscription_id, from_plan, to_plan, metadata)
+            VALUES ($1, $2, 'admin_grant', NULL, $3, $4, $5::jsonb)`,
+        [
+          id,
+          `admin:${randomUUID()}`,
+          target.current_plan,
+          parsed.data.plan,
+          JSON.stringify({
+            source: "admin_grant",
+            reason: parsed.data.reason,
+            granted_by_admin_id: actingAdmin.id,
+            granted_by_email: actingAdminEmail,
+          }),
+        ],
+      );
+
+      await client.query("COMMIT");
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    req.log.info(
+      {
+        target_user_id: id,
+        admin: actingAdminEmail,
+        from_plan: target.current_plan,
+        to_plan: parsed.data.plan,
+        reason: parsed.data.reason,
+      },
+      "[admin] plan changed",
+    );
+
+    return reply.send({
+      user_id: id,
+      from_plan: target.current_plan,
+      to_plan: parsed.data.plan,
+      plan_status: newStatus,
+    });
   });
 
   app.patch("/users/:id", async (req, reply) => {

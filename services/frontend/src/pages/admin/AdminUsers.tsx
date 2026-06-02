@@ -15,6 +15,8 @@ import "../../styles/admin.css";
  */
 
 type RateLimitTier = "default" | "extended" | "unlimited" | "suspended";
+type Plan = "free" | "dev" | "pro";
+type PlanStatus = "inactive" | "active" | "past_due" | "canceled";
 
 interface UserRow {
   id: string;
@@ -25,6 +27,13 @@ interface UserRow {
   stripe_customer_id: string | null;
   created_at: string;
   last_login_at: string | null;
+  current_plan: Plan;
+  plan_status: PlanStatus;
+  // Detail-only fields — null on list rows
+  stripe_subscription_id?: string | null;
+  plan_renews_at?: string | null;
+  cancel_at_period_end?: boolean;
+  plan_updated_at?: string | null;
 }
 
 interface LedgerEntry {
@@ -43,10 +52,21 @@ interface LedgerEntry {
   created_at: string;
 }
 
+interface SubscriptionEvent {
+  id: string;
+  event_type: "created" | "updated" | "canceled" | "past_due" | "reactivated" | "admin_grant";
+  from_plan: string | null;
+  to_plan: string | null;
+  stripe_subscription_id: string | null;
+  metadata: Record<string, unknown> | null;
+  created_at: string;
+}
+
 interface UserDetail {
   user: UserRow;
   balance: number;
   ledger: LedgerEntry[];
+  subscription_events: SubscriptionEvent[];
 }
 
 interface RateLimitRequest {
@@ -169,6 +189,55 @@ export default function AdminUsers() {
     }
   }, [selectedId, loadDetail]);
 
+  // ── Set plan (comp / free upgrade) ─────────────────────────
+  const [planTarget, setPlanTarget] = useState<Plan | "">("");
+  const [planReason, setPlanReason] = useState("");
+  const [planSaving, setPlanSaving] = useState(false);
+  const [planMsg, setPlanMsg] = useState<string | null>(null);
+  const [planErr, setPlanErr] = useState<string | null>(null);
+
+  // Re-seed the plan select when a new user is selected.
+  useEffect(() => {
+    setPlanTarget(detail?.user.current_plan ?? "");
+    setPlanMsg(null);
+    setPlanErr(null);
+  }, [detail?.user.id, detail?.user.current_plan]);
+
+  const onSetPlan = useCallback(async (e: FormEvent) => {
+    e.preventDefault();
+    if (!selectedId || !planTarget) return;
+    if (planReason.trim().length < 3) {
+      setPlanErr("Reason is required.");
+      return;
+    }
+    setPlanSaving(true);
+    setPlanMsg(null);
+    setPlanErr(null);
+    try {
+      const res = await adminFetch<{
+        from_plan?: string;
+        to_plan?: string;
+        plan?: string;
+        no_op?: boolean;
+      }>(`/users/${selectedId}/set-plan`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ plan: planTarget, reason: planReason.trim() }),
+      });
+      if (res.no_op) {
+        setPlanMsg(`Already on plan ${res.plan ?? planTarget}.`);
+      } else {
+        setPlanMsg(`Plan changed: ${res.from_plan} → ${res.to_plan}.`);
+        setPlanReason("");
+      }
+      await loadDetail(selectedId);
+    } catch (e) {
+      setPlanErr(e instanceof Error ? e.message : "Plan change failed.");
+    } finally {
+      setPlanSaving(false);
+    }
+  }, [selectedId, planTarget, planReason, loadDetail]);
+
   // ── Rate-limit request queue ───────────────────────────────
   const requestsState = useAdminFetch<RateRequestsResp>("/rate-limit-requests?status=pending&limit=20");
 
@@ -220,7 +289,8 @@ export default function AdminUsers() {
           <thead>
             <tr>
               <th>Email</th>
-              <th>Tier</th>
+              <th>Plan</th>
+              <th>Rate-limit</th>
               <th>Admin?</th>
               <th>Created</th>
               <th></th>
@@ -230,6 +300,12 @@ export default function AdminUsers() {
             {(usersState.data?.users ?? []).map((u) => (
               <tr key={u.id} className={selectedId === u.id ? "admin__row--selected" : ""}>
                 <td>{u.email}</td>
+                <td>
+                  {u.current_plan}
+                  {u.plan_status !== "active" && u.plan_status !== "inactive" && (
+                    <span style={{ opacity: 0.6 }}> ({u.plan_status})</span>
+                  )}
+                </td>
                 <td>{u.rate_limit_tier}</td>
                 <td>{u.is_admin ? "yes" : ""}</td>
                 <td>{new Date(u.created_at).toLocaleDateString()}</td>
@@ -241,7 +317,7 @@ export default function AdminUsers() {
               </tr>
             ))}
             {!usersState.loading && (usersState.data?.users ?? []).length === 0 && (
-              <tr><td colSpan={5}>No matches.</td></tr>
+              <tr><td colSpan={6}>No matches.</td></tr>
             )}
           </tbody>
         </table>
@@ -271,9 +347,83 @@ export default function AdminUsers() {
                     <option value="suspended">suspended</option>
                   </select>
                 </dd>
+                <dt>Plan</dt>
+                <dd>
+                  <strong>{detail.user.current_plan}</strong>
+                  {" · "}
+                  <span>{detail.user.plan_status}</span>
+                  {detail.user.cancel_at_period_end && detail.user.plan_renews_at && (
+                    <span style={{ opacity: 0.7 }}>
+                      {" "}(cancels at {new Date(detail.user.plan_renews_at).toLocaleDateString()})
+                    </span>
+                  )}
+                  {detail.user.stripe_subscription_id && (
+                    <div style={{ opacity: 0.6, fontSize: "0.85em" }}>
+                      sub: <code>{detail.user.stripe_subscription_id}</code>
+                    </div>
+                  )}
+                </dd>
+                {detail.user.plan_updated_at && (
+                  <>
+                    <dt>Plan updated</dt>
+                    <dd>{new Date(detail.user.plan_updated_at).toLocaleString()}</dd>
+                  </>
+                )}
                 <dt>Stripe customer</dt>
                 <dd>{detail.user.stripe_customer_id ?? "—"}</dd>
+                <dt>Last login</dt>
+                <dd>
+                  {detail.user.last_login_at
+                    ? new Date(detail.user.last_login_at).toLocaleString()
+                    : "—"}
+                </dd>
+                <dt>Account created</dt>
+                <dd>{new Date(detail.user.created_at).toLocaleString()}</dd>
               </dl>
+
+              <h4>Set plan (comp / free upgrade)</h4>
+              <p style={{ opacity: 0.7, fontSize: "0.9em", marginTop: 0 }}>
+                Flips <code>current_plan</code> + every non-revoked API key&apos;s tier.
+                Blocked when the user has an active Stripe subscription.
+              </p>
+              <form onSubmit={onSetPlan} className="admin__form">
+                <label>
+                  <span>Plan</span>
+                  <select
+                    value={planTarget}
+                    onChange={(e) => setPlanTarget(e.target.value as Plan)}
+                    disabled={planSaving}
+                  >
+                    <option value="free">free</option>
+                    <option value="dev">dev ($20/mo equivalent)</option>
+                    <option value="pro">pro ($200/mo equivalent)</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Reason (audit trail)</span>
+                  <textarea
+                    value={planReason}
+                    onChange={(e) => setPlanReason(e.target.value)}
+                    minLength={3}
+                    maxLength={500}
+                    rows={2}
+                    placeholder="e.g. Journalist comp — election coverage"
+                    required
+                  />
+                </label>
+                {planErr && <p className="admin__error" role="alert">{planErr}</p>}
+                {planMsg && <p className="admin__ok" role="status">{planMsg}</p>}
+                <button
+                  type="submit"
+                  disabled={planSaving || planTarget === detail.user.current_plan}
+                >
+                  {planSaving
+                    ? "Saving…"
+                    : planTarget === detail.user.current_plan
+                      ? `Already on ${detail.user.current_plan}`
+                      : `Set plan to ${planTarget}`}
+                </button>
+              </form>
 
               <h4>Grant credits (comp)</h4>
               <form onSubmit={onGrant} className="admin__form">
@@ -335,6 +485,47 @@ export default function AdminUsers() {
                     ))}
                   </tbody>
                 </table>
+              )}
+
+              {detail.subscription_events.length > 0 && (
+                <>
+                  <h4>Recent subscription events</h4>
+                  <table className="admin__table">
+                    <thead>
+                      <tr>
+                        <th>Date</th>
+                        <th>Event</th>
+                        <th>From → To</th>
+                        <th>Source</th>
+                        <th>Reason</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {detail.subscription_events.map((ev) => {
+                        const meta = (ev.metadata ?? {}) as Record<string, unknown>;
+                        const source = typeof meta.source === "string"
+                          ? meta.source
+                          : "stripe";
+                        const reason = typeof meta.reason === "string"
+                          ? meta.reason
+                          : (typeof meta.granted_by_email === "string"
+                              ? String(meta.granted_by_email)
+                              : "");
+                        return (
+                          <tr key={ev.id}>
+                            <td>{new Date(ev.created_at).toLocaleString()}</td>
+                            <td>{ev.event_type}</td>
+                            <td>
+                              {ev.from_plan ?? "—"} → {ev.to_plan ?? "—"}
+                            </td>
+                            <td>{source}</td>
+                            <td>{reason}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </>
               )}
             </>
           )}
