@@ -3137,10 +3137,16 @@ def cmd_ingest_federal_hansard(
 @click.option("--include-in-camera", is_flag=True, default=False,
               help="Also enumerate in_camera=true meetings (rare — they almost "
                    "never have evidence published, so usually no rows land).")
+@click.option("--all-sessions", is_flag=True, default=False,
+              help="Historical backfill: walk every federal session in "
+                   "legislative_sessions (P39+, the openparliament committee-"
+                   "evidence floor), deriving date bounds per session. Ignored "
+                   "when --parliament/--session are given; --since/--until/"
+                   "--since-days are ignored in this mode.")
 @click.pass_context
 def cmd_ingest_federal_committees(
     ctx: click.Context, parliament, session, since, since_days, until,
-    limit_meetings, limit_speeches, include_in_camera,
+    limit_meetings, limit_speeches, include_in_camera, all_sessions,
 ) -> None:
     """Ingest federal House of Commons committee evidence (transcripts).
 
@@ -3171,6 +3177,55 @@ def cmd_ingest_federal_committees(
 
     async def _wrap(db: Database) -> None:
         nonlocal parliament, session, effective_since, effective_until
+
+        # Historical-backfill walker: one ingest_committees() pass per federal
+        # session row, each with its own federal_session_bounds()-derived date
+        # window (same 896k-mis-tagging guardrail as the single-session path).
+        # Mirrors ingest-federal-bills --all-sessions.
+        if all_sessions and parliament is None and session is None:
+            rows = await db.fetch(
+                """
+                SELECT parliament_number, session_number
+                  FROM legislative_sessions
+                 WHERE level='federal' AND province_territory IS NULL
+                 ORDER BY parliament_number, session_number
+                """
+            )
+            targets = [(r["parliament_number"], r["session_number"]) for r in rows]
+            total_inserted = total_meetings = 0
+            for p, s in targets:
+                try:
+                    w_since, w_until = federal_session_bounds(p, s)
+                except ValueError as exc:
+                    console.print(f"[yellow]skipping P{p}-S{s}: {exc}[/yellow]")
+                    continue
+                console.print(f"[dim]P{p}-S{s}: {w_since} → {w_until}[/dim]")
+                stats = await _ingest_committees(
+                    db,
+                    parliament=p,
+                    session=s,
+                    since=w_since,
+                    until=w_until,
+                    limit_meetings=limit_meetings,
+                    limit_speeches=limit_speeches,
+                    include_in_camera=include_in_camera,
+                )
+                total_inserted += stats.speeches_inserted
+                total_meetings += stats.meetings_scanned
+                console.print(
+                    f"[green]P{p}-S{s}[/green]: "
+                    f"meetings={stats.meetings_scanned} "
+                    f"inserted={stats.speeches_inserted} "
+                    f"updated={stats.speeches_updated} "
+                    f"unresolved_slug={stats.speeches_unresolved}"
+                )
+            console.print(
+                f"[green]ingest-federal-committees --all-sessions[/green]: "
+                f"sessions={len(targets)} meetings={total_meetings} "
+                f"inserted={total_inserted}"
+            )
+            return
+
         if parliament is None or session is None:
             parliament, session = await current_session(db, level="federal")
             console.print(

@@ -92,6 +92,18 @@ STANDING_COMMITTEES: dict[str, str] = {
     "dem": "Special Committee on Democratic and Electoral Reform",
     "pac": "Select Standing Committee on Public Accounts",
     "health": "Select Standing Committee on Health",
+    # Discovered 2026-07-27 via the pcms REST surface on api.lims.leg.bc.ca
+    # (see seed _about) — committees active in the 43rd Parliament that the
+    # 2026-05-19 site-search probe missed. Names verified from transcript
+    # title pages. LAMC (Legislative Assembly Management Committee) is
+    # deliberately excluded: administrative housekeeping, and its HDMS path
+    # (/Committees/43rd-LAMC) doesn't follow the {parl}{sess}/{code} grammar.
+    "pbpmb": "Select Standing Committee on Private Bills and Private Members' Bills",
+    "iva": "Special Committee to Review Provisions of the Insurance (Vehicle) Act",
+    "pc": "Special Committee on Police Complaints",
+    "hrcr": "Special Committee to Review Provisions of the Human Rights Code",
+    "lta": "Special Committee to Review the Lobbyists Transparency Act",
+    "pida": "Special Committee to Review the Public Interest Disclosure Act",
 }
 
 # Concluded-mandate committees. Not watched by the freshness canary — they
@@ -272,9 +284,10 @@ async def resolve_member_to_politician(
                       OR lower(p.first_name) LIKE lower($2) || ' %'
                       OR lower(p.first_name) LIKE lower($2) || '.%'
                    )
-                   AND replace(replace(replace(replace(lower(pt.constituency),
-                       '–','-'), '—','-'), '‐','-'), '−','-')
-                       = $3
+                   AND replace(replace(replace(replace(replace(
+                       lower(regexp_replace(pt.constituency_id, '^.*/', '')),
+                       '–','-'), '—','-'), '‐','-'), '−','-'), ' ', '-')
+                       = replace($3, ' ', '-')
                 """,
                 last_name, first_token, constituency_norm,
             )
@@ -438,6 +451,16 @@ def _meeting_ref_from_url(
     code = code_m.group("code").lower()
     filename = code_m.group("filename")
 
+    # The URL path embeds parliament + session ("43rd2nd") — treat it as
+    # authoritative, same doctrine as the committee code above. This lets a
+    # single seed file carry meetings from multiple sessions; the top-level
+    # parliament/session args are only a fallback for malformed paths.
+    parl_digits = re.match(r"\d+", code_m.group("parl"))
+    sess_digits = re.match(r"\d+", code_m.group("sess"))
+    if parl_digits and sess_digits:
+        parliament = int(parl_digits.group())
+        session = int(sess_digits.group())
+
     try:
         url_meta = parse_mod.parse_committee_url_meta("/" + filename)
     except ValueError as exc:
@@ -551,22 +574,21 @@ async def ingest_committees(
         )
         return stats
 
-    # If the operator passed different parliament/session than the seed
-    # carries, log it loudly — the canonical URL embeds the value, so a
-    # mismatch silently writes rows under the wrong session.
-    seed_parl = refs[0].parliament
-    seed_sess = refs[0].session
-    if (seed_parl, seed_sess) != (parliament, session):
-        log.warning(
-            "bc_committees: seed parliament/session (%d/%d) != args "
-            "(%d/%d); ingesting under SEED values",
-            seed_parl, seed_sess, parliament, session,
+    # Refs carry their own parliament/session (derived from each URL's
+    # {parl}{sess} path segment), so a single seed can span sessions.
+    # ensure_session per distinct pair, cached.
+    ref_sessions = sorted({(r.parliament, r.session) for r in refs})
+    if len(ref_sessions) > 1:
+        log.info(
+            "bc_committees: seed spans %d sessions: %s",
+            len(ref_sessions),
+            ", ".join(f"{p}-{s}" for p, s in ref_sessions),
         )
-        parliament, session = seed_parl, seed_sess
-
-    session_id = await ensure_session(
-        db, parliament=parliament, session=session,
-    )
+    session_id_cache: dict[tuple[int, int], object] = {}
+    for p, s in ref_sessions:
+        session_id_cache[(p, s)] = await ensure_session(
+            db, parliament=p, session=s,
+        )
     # Per-committee cache for the restricted speaker lookup. Built lazily
     # per ref AFTER the meeting's Membership-block ingest so any
     # net-new rows are visible. Keyed by committee_name only — BC
@@ -714,7 +736,7 @@ async def ingest_committees(
 
                 outcome = await _upsert_speech(
                     db,
-                    session_id=session_id,
+                    session_id=session_id_cache[(ref.parliament, ref.session)],
                     ref=ref,  # type: ignore[arg-type] — duck-typed
                     parsed=ps,
                     politician=politician,

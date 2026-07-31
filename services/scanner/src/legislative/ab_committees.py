@@ -260,7 +260,8 @@ async def resolve_attendees_to_politicians(
                       OR lower(p.first_name) LIKE lower($2) || ' %'
                       OR lower(p.first_name) LIKE lower($2) || '.%'
                    )
-                   AND lower(pt.constituency) = lower($3)
+                   AND replace(lower(regexp_replace(pt.constituency_id, '^.*/', '')), ' ', '-')
+                       = replace(lower($3), ' ', '-')
                 """,
                 att.last_name, first_token, att.constituency,
             )
@@ -352,7 +353,18 @@ async def fetch_committee_meetings_for_acronym(
         seen.add(href)
         d = datetime.strptime(m.group("date"), "%Y%m%d").date()
         hhmm = m.group("hhmm")
-        t = time(int(hhmm[:2]), int(hhmm[2:]))
+        try:
+            t = time(int(hhmm[:2]), int(hhmm[2:]))
+        except ValueError:
+            # Upstream filenames occasionally carry a non-clock hhmm token
+            # (seen on RS L30-S1: crashed the whole listing). The time is
+            # ordering metadata only — midnight-default beats losing the
+            # committee-session.
+            log.warning(
+                "ab_committees: invalid hhmm %r in %s — defaulting 00:00",
+                hhmm, href,
+            )
+            t = time(0, 0)
         out.append(
             CommitteeMeetingRef(
                 url=href,

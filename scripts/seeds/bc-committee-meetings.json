@@ -38,7 +38,21 @@
     "FUTURE: 43rd-2nd session opened 2026-02-24. Special Committee on the",
     "Insurance (Vehicle) Act (slug `iva`) struck 2026-04-22; first transcripts",
     "expected fall 2026. When 43rd-2nd transcripts start landing, the seed",
-    "file's single (parliament, session) pin will need a restructure."
+    "file's single (parliament, session) pin will need a restructure.",
+    "",
+    "UPDATE 2026-07-27: a structured listing endpoint NOW EXISTS. The dyn.leg.bc.ca",
+    "React app (iframed into leg.bc.ca committee pages) reads",
+    "  GET https://api.lims.leg.bc.ca/pcms/committees/meetings?filter=previous",
+    "which returns {meetings:[...], hansardTranscripts:[{filePath,fileName,...}], pageInfo}.",
+    "Paginate backward with &enCursor=<pageInfo.endCursor> (50/page, date-desc).",
+    "Transcript URL = https://lims.leg.bc.ca/hdms/file{filePath}/{fileName}.",
+    "Refresh workflow: pull that endpoint, append new Blues URLs here, re-run",
+    "ingest-bc-committees. The 'published' flag is display-only — unpublished",
+    "Blues fetch fine. LAMC is excluded (administrative committee; odd",
+    "/Committees/43rd-LAMC path outside the {parl}{sess}/{code} grammar).",
+    "Session is derived from each URL's path segment since 2026-07-27, so this",
+    "file may mix 43rd1st/43rd2nd URLs freely; top-level parliament/session",
+    "below are only a fallback for malformed URLs."
   ],
   "parliament": 43,
   "session": 1,
@@ -51,26 +65,141 @@
         "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/fgs/20250610pm-Finance-Cranbrook-Blues.htm",
         "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/fgs/20250616am-Finance-Victoria-Blues.htm",
         "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/fgs/20250617am-Finance-Victoria-Blues.htm",
-        "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/fgs/20250618am-Finance-Victoria-Blues.htm"
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/fgs/20250618am-Finance-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/fgs/20251121am-Finance-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/fgs/20251128am-Finance-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/fgs/20251210am-Finance-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/fgs/20260123pm-Finance-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/fgs/20260209am-Finance-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/fgs/20260225am-Finance-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/fgs/20260424am-Finance-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/fgs/20260508am-Finance-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/fgs/20260520am-Finance-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/fgs/20260526am-Finance-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/fgs/20260601am-Finance-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/fgs/20260602pm-Finance-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/fgs/20260603am-Finance-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/fgs/20260604am-Finance-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/fgs/20260605am-Finance-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/fgs/20260608am-Finance-Vancouver-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/fgs/20260609am-Finance-Burnaby-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/fgs/20260615am-Finance-Kelowna-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/fgs/20260615pm-Finance-Castlegar-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/fgs/20260616am-Finance-Cranbrook-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/fgs/20260616pm-Finance-Kamloops-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/fgs/20260617am-Finance-PrinceGeorge-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/fgs/20260617pm-Finance-DawsonCreek-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/fgs/20260618am-Finance-Smithers-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/fgs/20260618pm-Finance-Mission-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/fgs/20260619am-Finance-Nanaimo-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/fgs/20260713am-Finance-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/fgs/20260714am-Finance-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/fgs/20260715am-Finance-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/fgs/20260722am-Finance-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/fgs/20260723am-Finance-Victoria-Blues.htm"
       ]
     },
     "cay": {
       "transcript_urls": [
         "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/cay/20250528am-ChildrenYouth-Victoria-Blues.htm",
-        "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/cay/20251119am-ChildrenYouth-Victoria-Blues.htm"
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/cay/20251119am-ChildrenYouth-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/cay/20260309am-ChildrenYouth-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/cay/20260311am-ChildrenYouth-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/cay/20260429am-ChildrenYouth-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/cay/20260527am-ChildrenYouth-Victoria-Blues.htm"
       ]
     },
     "dem": {
       "transcript_urls": [
         "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/dem/20250710am-DemElecReform-Kelowna-Blues.htm",
         "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/dem/20250714am-DemElecReform-Victoria-Blues.htm",
-        "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/dem/20250716am-DemElecReform-Victoria-Blues.htm"
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/dem/20250716am-DemElecReform-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/dem/20251107am-DemElecReform-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/dem/20251117am-DemElecReform-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/dem/20260126pm-DemElecReform-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/dem/20260225am-DemElecReform-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/dem/20260313am-DemElecReform-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/dem/20260415am-DemElecReform-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/dem/20260417am-DemElecReform-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/dem/20260424am-DemElecReform-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/dem/20260501am-DemElecReform-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/dem/20260506am-DemElecReform-Victoria-Blues.htm"
       ]
     },
     "pac": {
       "transcript_urls": [
         "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/pac/20250430am-PublicAccounts-Victoria-Blues.htm",
-        "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/pac/20251128am-PublicAccounts-Victoria-Blues.htm"
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/pac/20251119am-PublicAccounts-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/pac/20251128am-PublicAccounts-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/pac/20260304am-PublicAccounts-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/pac/20260422am-PublicAccounts-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/pac/20260520am-PublicAccounts-Victoria-Blues.htm"
+      ]
+    },
+    "iva": {
+      "transcript_urls": [
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/iva/20260226am-IVAReview-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/iva/20260402am-IVAReview-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/iva/20260508am-IVAReview-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/iva/20260720am-IVAReview-Victoria-Blues.htm"
+      ]
+    },
+    "lta": {
+      "transcript_urls": [
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/lta/20251029am-LTAReview-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/lta/20251205am-LTAReview-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/lta/20251210am-LTAReview-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/lta/20260210am-LTAReview-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/lta/20260306am-LTAReview-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/lta/20260401am-LTAReview-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/lta/20260416am-LTAReview-Victoria-Blues.htm"
+      ]
+    },
+    "pbpmb": {
+      "transcript_urls": [
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/pbpmb/20251119am-PrivateBills-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/pbpmb/20251126am-PrivateBills-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/pbpmb/20260202am-PrivateBills-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/pbpmb/20260223am-PrivateBills-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/pbpmb/20260225am-PrivateBills-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/pbpmb/20260304am-PrivateBills-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/pbpmb/20260311am-PrivateBills-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/pbpmb/20260401am-PrivateBills-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/pbpmb/20260415am-PrivateBills-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/pbpmb/20260422am-PrivateBills-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/pbpmb/20260429am-PrivateBills-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/pbpmb/20260506am-PrivateBills-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/pbpmb/20260519am-PrivateBills-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/pbpmb/20260520am-PrivateBills-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/pbpmb/20260527am-PrivateBills-Victoria-Blues.htm"
+      ]
+    },
+    "pc": {
+      "transcript_urls": [
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/pc/20251203am-PoliceComplaints-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/pc/20260127pm-PoliceComplaints-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/pc/20260225am-PoliceComplaints-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/pc/20260415am-PoliceComplaints-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/pc/20260429am-PoliceComplaints-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/pc/20260603pm-PoliceComplaints-Victoria-Blues.htm"
+      ]
+    },
+    "hrcr": {
+      "transcript_urls": [
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/hrcr/20251126am-HRCReview-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/hrcr/20260116pm-HRCReview-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/hrcr/20260203am-HRCReview-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/hrcr/20260323am-HRCReview-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/hrcr/20260401am-HRCReview-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd2nd/hrcr/20260421am-HRCReview-Victoria-Blues.htm"
+      ]
+    },
+    "pida": {
+      "transcript_urls": [
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/pida/20251031am-PIDAReview-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/pida/20251208am-PIDAReview-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/pida/20260115am-PIDAReview-Victoria-Blues.htm",
+        "https://lims.leg.bc.ca/hdms/file/Committees/43rd1st/pida/20260126am-PIDAReview-Victoria-Blues.htm"
       ]
     }
   }

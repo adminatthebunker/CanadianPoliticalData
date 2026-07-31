@@ -83,6 +83,8 @@ COMMANDS: dict[str, dict[str, Any]] = {
              "help": "Cap on TOTAL speeches ingested this run."},
             {"name": "include_in_camera", "type": "bool", "required": False,
              "help": "Also enumerate in_camera meetings (rare; almost never have evidence)."},
+            {"name": "all_sessions", "type": "bool", "required": False,
+             "help": "Historical backfill: walk every federal session in legislative_sessions with per-session date bounds. Ignores parliament/session/since/until."},
         ],
     },
     "ingest-ab-hansard": {

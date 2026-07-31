@@ -61,6 +61,7 @@ const COMMAND_CATALOG = [
       { name: "limit_meetings", type: "int", required: false, help: "Cap on meeting documents fetched." },
       { name: "limit_speeches", type: "int", required: false, help: "Cap on TOTAL speeches ingested." },
       { name: "include_in_camera", type: "bool", required: false, help: "Also enumerate in-camera meetings (rare)." },
+      { name: "all_sessions", type: "bool", required: false, help: "Historical backfill: walk every federal session with per-session date bounds. Ignores parliament/session/since/until." },
     ],
   },
   { key: "ingest-ab-hansard", category: "hansard",
