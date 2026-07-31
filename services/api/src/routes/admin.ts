@@ -111,6 +111,15 @@ const COMMAND_CATALOG = [
       { name: "always_email", type: "bool", required: false, help: "Send email even when no committees are stale (audit cadence)." },
     ],
   },
+  { key: "ingest-bc-vp-votes", category: "hansard",
+    description: "Ingest BC recorded divisions from Votes & Proceedings (pdms, P35/1992+): Yeas/Nays division tables into `votes` + `vote_positions` with date-windowed surname resolution. Coexists with the Hansard-regex extract-bc-votes.",
+    args: [
+      { name: "parliament", type: "int", required: false, help: "Restrict to one BC parliament number (e.g. 42). Default: all P35+." },
+      { name: "since", type: "date", required: false, help: "Only process sittings on/after this date." },
+      { name: "since_days", type: "int", required: false, help: "Forward-incremental: clamp --since to today - N days." },
+      { name: "limit_docs", type: "int", required: false, help: "Cap on V&P documents fetched this run." },
+    ],
+  },
   { key: "ingest-bc-committee-membership", category: "enrichment",
     description: "Sync BC committee membership from the pcms API into politician_committees. Exact FK resolution via politicians.lims_member_id; soft-closes pcms-sourced rows for members who left. Enables the committee-restricted speaker lookup in ingest-bc-committees.",
     args: [

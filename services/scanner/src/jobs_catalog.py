@@ -177,6 +177,21 @@ COMMANDS: dict[str, dict[str, Any]] = {
              "help": "Send email even when no committees are stale (audit cadence)."},
         ],
     },
+    "ingest-bc-vp-votes": {
+        "description": "Ingest BC recorded divisions from Votes & Proceedings (lims.leg.bc.ca/pdms/votes-and-proceedings, P35/1992+). Parses Yeas/Nays division tables into `votes` (source_system='votes-bc-vp') + `vote_positions` with date-windowed surname resolution. Coexists with the Hansard-regex extract-bc-votes; distinct source_system.",
+        "cli": "ingest-bc-vp-votes",
+        "category": "hansard",
+        "args": [
+            {"name": "parliament", "type": "int", "required": False,
+             "help": "Restrict to one BC parliament number (e.g. 42). Default: all P35+."},
+            {"name": "since", "type": "date", "required": False,
+             "help": "Only process sittings on/after this ISO date."},
+            {"name": "since_days", "type": "int", "required": False,
+             "help": "Forward-incremental: clamp --since to today - N days (e.g. 14 for daily schedules)."},
+            {"name": "limit_docs", "type": "int", "required": False,
+             "help": "Cap on V&P documents fetched this run."},
+        ],
+    },
     "ingest-bc-committee-membership": {
         "description": "Sync current-parliament BC committee membership from the pcms API (api.lims.leg.bc.ca/pcms/committees/membership) into politician_committees. Exact FK resolution via politicians.lims_member_id; soft-closes pcms-sourced rows for members who left. Enables the committee-restricted speaker lookup (witness-rejection) in ingest-bc-committees.",
         "cli": "ingest-bc-committee-membership",

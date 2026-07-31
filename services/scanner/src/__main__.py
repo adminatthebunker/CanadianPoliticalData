@@ -3551,6 +3551,58 @@ def cmd_ingest_bc_committees(
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 
 
+@cli.command("ingest-bc-vp-votes")
+@click.option("--parliament", "parliaments", type=int, multiple=True,
+              help="Restrict to specific BC parliament number(s) (e.g. 42). "
+                   "Repeatable. Default: all P35+ (the digital floor).")
+@click.option("--since", type=str, default=None,
+              help="Only process sittings on/after this ISO date.")
+@click.option("--since-days", type=int, default=None,
+              help="Forward-incremental: clamp --since to today - N days.")
+@click.option("--limit-docs", type=int, default=None,
+              help="Cap on V&P documents fetched (smoke-test friendly).")
+@click.pass_context
+def cmd_ingest_bc_vp_votes(
+    ctx: click.Context, parliaments, since, since_days, limit_docs,
+) -> None:
+    """Ingest BC recorded divisions from Votes & Proceedings (pdms).
+
+    Walks lims.leg.bc.ca/pdms/votes-and-proceedings/{parl}{sess} listings
+    (P35/1992 → present, the digital floor), fetches each sitting's V&P
+    document, parses recorded-division tables (Yeas/Nays with member
+    surnames), and lands `votes` (source_system='votes-bc-vp') +
+    `vote_positions` with date-windowed surname resolution. Idempotent.
+
+    Coexists with extract-bc-votes (Hansard-regex, consensus-shape);
+    distinct source_system keeps the two auditable.
+    """
+    from .legislative.bc_vp_votes import ingest_bc_vp_votes
+    from .legislative._forward import parse_iso_date, clamp_since_with_days
+
+    effective_since = clamp_since_with_days(parse_iso_date(since), since_days)
+
+    async def _wrap(db: Database) -> None:
+        stats = await ingest_bc_vp_votes(
+            db,
+            parliaments=list(parliaments) or None,
+            since=effective_since,
+            limit_docs=limit_docs,
+        )
+        d = stats.as_dict()
+        console.print(
+            f"[green]ingest-bc-vp-votes[/green]: "
+            f"sessions={d['sessions']} docs={d['docs_fetched']} "
+            f"with_divisions={d['docs_with_divisions']} "
+            f"votes_inserted={d['votes_inserted']} "
+            f"votes_updated={d['votes_updated']} "
+            f"positions={d['positions']} "
+            f"resolved={d['positions_resolved']} "
+            f"bills_linked={d['bills_linked']} "
+            f"fetch_failures={d['fetch_failures']}"
+        )
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
 @cli.command("ingest-bc-committee-membership")
 @click.option("--parliament", type=int, default=None,
               help="Historical mode: BC parliament number (e.g. 42) — lands "
