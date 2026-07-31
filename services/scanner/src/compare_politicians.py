@@ -159,18 +159,38 @@ async def apply_changes(
         )
 
     # If any change is a term boundary, close open terms and start a new one.
+    # GUARD (2026-07-31): only rotate when an open term actually existed.
+    # Open North rosters go stale after elections — departed politicians
+    # stay listed for months — so a boundary-shaped diff against a
+    # politician whose terms are all closed is NOT evidence of
+    # re-election; opening a term here fabricates a sitting seat. Two
+    # documented incidents: 2026-04-14 (NL provincial — recreated open
+    # terms for MHAs who lost the Oct 2025 election, incl. one whose
+    # recount was court-denied) and 2026-06-07 (QC municipal — recreated
+    # open terms for councillors defeated Nov 2025, one deceased 2019).
+    # A genuinely returning politician needs the jurisdiction's native
+    # roster ingest (or the operator) to reopen their record.
     has_boundary = any(c["change_type"] in _TERM_BOUNDARY_TYPES for c in changes)
     if has_boundary and incoming is not None and set_def is not None:
-        await db.execute(
+        closed = await db.fetch(
             """
             UPDATE politician_terms
                SET ended_at = now()
              WHERE politician_id = $1
                AND ended_at IS NULL
+            RETURNING id
             """,
             politician_id,
         )
-        await _insert_term_from_rep(db, politician_id, incoming, set_def)
+        if closed:
+            await _insert_term_from_rep(db, politician_id, incoming, set_def)
+        else:
+            log.info(
+                "apply_changes: term-boundary change for %s but no open "
+                "term to rotate — NOT opening one from Open North data "
+                "(stale-roster guard)",
+                politician_id,
+            )
 
 
 async def _insert_term_from_rep(
