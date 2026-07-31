@@ -62,6 +62,17 @@ BC_PARLIAMENT_DATES: dict[int, tuple[date, date]] = {
     32: (date(1979,  5, 10), date(1983,  5,  5)),
     33: (date(1983,  5,  5), date(1986, 10, 22)),
     34: (date(1986, 10, 22), date(1991, 10, 17)),
+    # P35-P38 added 2026-07-31: LIMS allMemberParliaments has holes in
+    # these parliaments (74-78 edges for 75-79 seats; e.g. Gingell/
+    # Hurd/Brewin carry only P35 edges, Reitsma is absent entirely) —
+    # Wikipedia per-parliament lists are the gap-filler, with the
+    # overlap guard in _upsert_term keeping LIMS-covered members from
+    # growing duplicate terms. Election-day to election-day, matching
+    # the convention above.
+    35: (date(1991, 10, 17), date(1996,  5, 28)),
+    36: (date(1996,  5, 28), date(2001,  5, 16)),
+    37: (date(2001,  5, 16), date(2005,  5, 17)),
+    38: (date(2005,  5, 17), date(2009,  5, 12)),
 }
 
 DEFAULT_PARLIAMENTS: tuple[int, ...] = (29, 30, 31, 32, 33, 34)
@@ -474,6 +485,24 @@ async def _upsert_term(
         politician_id, source,
     )
     if existing is not None:
+        stats.terms_skipped_existing += 1
+        return
+
+    # Overlap guard (2026-07-31): for P35+ most members already carry a
+    # LIMS-sourced term for the same parliament — this pass exists to
+    # fill LIMS's holes, not to double-cover. Skip when ANY provincial
+    # term substantially overlaps this parliament's window.
+    overlapping = await db.fetchrow(
+        """
+        SELECT 1 FROM politician_terms
+         WHERE politician_id = $1::uuid
+           AND level = 'provincial'
+           AND started_at < $3
+           AND (ended_at IS NULL OR ended_at > $2)
+        """,
+        politician_id, started_at, ended_at,
+    )
+    if overlapping is not None:
         stats.terms_skipped_existing += 1
         return
 
