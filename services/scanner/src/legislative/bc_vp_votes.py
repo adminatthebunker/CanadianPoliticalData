@@ -406,13 +406,21 @@ async def ingest_bc_vp_votes(
                     continue
                 stats.docs_with_divisions += 1
 
-                # Roster keyed per parliament (terms are parliament-
-                # granular for BC).
-                rkey = f"p{s['parliament_number']}"
-                roster = roster_cache.get(rkey)
-                if roster is None and sitting_date:
-                    roster = await Roster.load(db, sitting_date)
-                    roster_cache[rkey] = roster
+                # Roster cached per SITTING DATE — not per parliament.
+                # (A per-parliament cache keyed off the first-encountered
+                # sitting was loaded at whatever date the unsorted V&P
+                # listing happened to yield first; when that date fell
+                # before the LIMS term-start convention date, the cached
+                # roster silently excluded most of the parliament for
+                # every later sitting. Observed live 2026-07-31: 912
+                # unresolved P36 positions for members with valid terms.)
+                roster = None
+                if sitting_date:
+                    rkey = sitting_date.isoformat()
+                    roster = roster_cache.get(rkey)
+                    if roster is None:
+                        roster = await Roster.load(db, sitting_date)
+                        roster_cache[rkey] = roster
 
                 occurred_at = (
                     datetime.combine(
