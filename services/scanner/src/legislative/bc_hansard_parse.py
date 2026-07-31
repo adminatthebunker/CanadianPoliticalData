@@ -103,10 +103,13 @@ class UrlMeta:
 # ShortName is the committee's filename token (e.g. "Finance", "ChildrenYouth",
 # "DemElecReform"). Location is the meeting city or "Virtual" for remote
 # sittings. Both are captured for raw payload provenance.
+# Location token is OPTIONAL: 2013-2016-era Finals drop it
+# ("20131218am-Finance-n28.htm"). The lazy location group only engages
+# when skipping it can't satisfy the kind anchor.
 _COMMITTEE_FILENAME_RE = re.compile(
     r"/(?P<date>\d{8})(?P<half>am|pm)-"
-    r"(?P<short>[A-Za-z]+)-"
-    r"(?P<location>[A-Za-z][A-Za-z0-9_-]*)"
+    r"(?P<short>[A-Za-z]+)"
+    r"(?:-(?P<location>[A-Za-z0-9][A-Za-z0-9_-]*?))?"  # "100MileHouse" starts with a digit
     r"-(?P<kind>Blues|n(?P<issue>\d+))"
     r"\.html?$",
     re.IGNORECASE,
@@ -132,7 +135,7 @@ def parse_committee_url_meta(url: str) -> "CommitteeUrlMeta":
         half=m.group("half").lower(),
         variant=variant,
         short_name=m.group("short"),
-        location=m.group("location"),
+        location=m.group("location") or None,
         issue=int(issue) if issue else None,
     )
 
@@ -143,7 +146,7 @@ class CommitteeUrlMeta:
     half: str  # 'am' | 'pm'
     variant: str  # 'blues' | 'final'
     short_name: str  # filename token: "Finance", "ChildrenYouth"
-    location: str    # "Nelson", "Victoria", "Virtual"
+    location: Optional[str]  # "Nelson", "Victoria", "Virtual"; None in 2013-16 era filenames
     issue: Optional[int] = None
 
     @property
@@ -995,9 +998,17 @@ def _legacy_role_from_attribution(att: str) -> Optional[str]:
     return None
 
 
-def extract_speeches(html_text: str, url: str) -> ParseResult:
-    """Parse one BC Hansard sitting (Blues / Final / Legacy) into ParsedSpeech list."""
-    meta = parse_url_meta(url)
+def extract_speeches(
+    html_text: str, url: str, url_meta: object = None,
+) -> ParseResult:
+    """Parse one BC Hansard sitting (Blues / Final / Legacy) into ParsedSpeech list.
+
+    `url_meta` lets a caller supply a pre-parsed meta (duck-typed —
+    CommitteeUrlMeta works: same variant/half/issue/sitting_date/
+    default_hhmm surface) for URLs the floor filename grammar doesn't
+    recognise, e.g. location-less committee Finals.
+    """
+    meta = url_meta or parse_url_meta(url)
     if meta.variant == "legacy" or detect_era(html_text) == "legacy":
         speeches, section_hits, ss, se, speaker = _extract_legacy(html_text, meta)
         return ParseResult(
@@ -1192,6 +1203,232 @@ def extract_speeches(html_text: str, url: str) -> ParseResult:
 # `python -m src.legislative.bc_hansard_parse <path-or-url>` prints
 # parsed speeches to stdout — use against saved fixtures to iterate
 # regex without DB or network.
+# ── Committee Era-A extractor (36th–38th Parliaments, 1996 → 2008) ──
+# Pre-2009 committee transcripts carry NO CSS classes (verified across
+# one sample per year, 1996–2008). Two sub-variants share one opener
+# grammar:
+#   1996–2000: uppercase tags, UNCLOSED <P> paragraphs —
+#              `<P>\n<B>F. Gingell:</B> text…` (no </p> anywhere), so
+#              any `.*?</p>` body capture is wrong; turns are the slices
+#              between openers.
+#   2001–2008: lowercase tags, closed <p>, ~11 &nbsp; of indentation
+#              BEFORE the <b> — `<p>&nbsp;…&nbsp;<b>B. Schmidt:</b>` —
+#              which is why the floor `_LEGACY_OPENER_RE` (indent
+#              absorbed inside <b>) never fires on these files.
+# Both bundle the meeting MINUTES ahead of the verbatim section: bold
+# labels (`<b>Present:</b>`, `<b>Unavoidably Absent:</b>`) and numbered
+# resolutions (`<b>1.</b>`) look like openers and must be filtered.
+# Attributions may wrap mid-name ("B.\nSchmidt:") and carry role parens
+# ("B. Lekstrom (Chair):", "K. Ryan-Lloyd (Committee Clerk):").
+# Timestamps are bare bracketed `[0840]` markers at ~5-min intervals.
+
+_CMTE_A_OPENER_RE = re.compile(
+    r"<p(?P<attrs>[^>]*)>"
+    r"(?:\s|&nbsp;|\xa0)*"
+    r"<b[^>]*>"
+    r"(?:\s|&nbsp;|\xa0)*"
+    r"(?P<attribution>[^<]{1,120}?):"
+    r"(?:\s|&nbsp;|\xa0)*</b>",
+    re.IGNORECASE,
+)
+
+# Minutes-section labels that end in a colon inside <b> — never speakers.
+_CMTE_A_LABEL_BLOCKLIST = frozenset({
+    "present", "unavoidably absent", "others present", "also present",
+    "officials present", "members present", "committee members present",
+    "in attendance", "attending", "absent", "agenda", "witnesses",
+    "guests", "staff", "resolved", "note", "attachment", "appendix",
+})
+
+# Role-only attributions that ARE real turns in committee transcripts.
+_CMTE_A_ROLE_ONLY = frozenset({
+    "the chair", "chair", "deputy chair", "the deputy chair",
+    "acting chair", "chairperson", "the chairperson",
+    "the clerk", "clerk", "committee clerk", "the committee clerk",
+    "clerk of committees",
+})
+
+# Witness full-name shape: 2-5 capitalised tokens, no digits. Kept
+# deliberately loose — the blocklist + numeric guards run first, and a
+# rare false opener costs one junk speech row, while a missed opener
+# silently glues a witness's words onto the previous speaker.
+_CMTE_A_FULLNAME_RE = re.compile(
+    r"^(?:[A-Z][\w'.\-]*\s+){1,4}[A-Z][\w'.\-]*$"
+)
+
+_CMTE_A_ROLE_PARENS_RE = re.compile(r"\s*\((?P<role>[^)]{2,40})\)\s*$")
+_CMTE_A_TS_RE = re.compile(r"\[(?P<hhmm>\d{4})\]")
+_CMTE_A_MET_RE = re.compile(
+    r"committee\s+met\s+at\s+(?P<h>\d{1,2}):(?P<m>\d{2})\s*(?P<ampm>[ap])\.?m",
+    re.IGNORECASE,
+)
+_CMTE_A_ADJOURN_RE = re.compile(
+    r"(?:The\s+)?committee\s+(?:adjourned|rose)\s+at\s+"
+    r"(?P<h>\d{1,2}):(?P<m>\d{2})\s*(?P<ampm>[ap])\.?m",
+    re.IGNORECASE,
+)
+_CMTE_A_IN_CHAIR_RE = re.compile(
+    r"\[\s*(?P<name>[A-Z][\w'.\- ]{1,40}?)\s+in\s+the\s+chair\.?\s*\]",
+)
+
+
+def _cmte_a_hhmm(h: str, m: str, ampm: str) -> time:
+    hh, mm = int(h), int(m)
+    if ampm.lower() == "p" and hh < 12:
+        hh += 12
+    elif ampm.lower() == "a" and hh == 12:
+        hh = 0
+    return time(hh, mm)
+
+
+def _cmte_a_attribution_ok(att: str) -> bool:
+    s = _normalize_attribution(att)
+    if not s:
+        return False
+    low = s.lower()
+    if low in _CMTE_A_LABEL_BLOCKLIST:
+        return False
+    if re.fullmatch(r"\d+\.?", s):          # minutes item numbers "1."
+        return False
+    if re.search(r"\d", s):                  # dates, times, vote tallies
+        return False
+    if low in _CMTE_A_ROLE_ONLY:
+        return True
+    base = _CMTE_A_ROLE_PARENS_RE.sub("", s)
+    if _LEGACY_HONORIFIC_PREFIX_RE.match(base):
+        return True
+    if _LEGACY_INITIAL_LAST_PREFIX_RE.match(base):
+        return True
+    if _CMTE_A_FULLNAME_RE.match(base):      # witness full names
+        return True
+    return False
+
+
+def _extract_committee_era_a(
+    html_text: str, meta: "CommitteeUrlMeta",
+) -> tuple[
+    list[ParsedSpeech], dict[str, int], Optional[time], Optional[time], Optional[str],
+]:
+    """Slice-between-openers walk for class-less 1996–2008 committee HTML."""
+    speeches: list[ParsedSpeech] = []
+    section_hits: dict[str, int] = {}
+    sitting_start: Optional[time] = None
+    sitting_end: Optional[time] = None
+    chair_name: Optional[str] = None
+
+    openers: list[tuple[int, int, str]] = []
+    for m in _CMTE_A_OPENER_RE.finditer(html_text):
+        att = m.group("attribution") or ""
+        if not _cmte_a_attribution_ok(att):
+            continue
+        openers.append((m.start(), m.end(), _normalize_attribution(att)))
+    if not openers:
+        return speeches, section_hits, sitting_start, sitting_end, chair_name
+
+    # Pre-opener region: sitting start + "[X in the chair.]".
+    pre_text = _strip_tags(html_text[: openers[0][0]])
+    mm = _CMTE_A_MET_RE.search(pre_text)
+    if mm:
+        sitting_start = _cmte_a_hhmm(mm.group("h"), mm.group("m"), mm.group("ampm"))
+    cm = _CMTE_A_IN_CHAIR_RE.search(pre_text)
+    if cm:
+        chair_name = cm.group("name").strip()
+
+    # Timestamp offsets for current-time tracking.
+    ts_marks = [
+        (m.start(), _cmte_a_hhmm(m.group("hhmm")[:2], m.group("hhmm")[2:], "a"))
+        for m in _CMTE_A_TS_RE.finditer(html_text)
+    ]
+    # [0840]-style marks carry no am/pm; infer pm for hours 1-6 when the
+    # sitting is a pm half (Hansard prints 24h-free "[1305]" for pm
+    # already, so only 12h-looking values need the shift).
+    def _ts_at(offset: int) -> Optional[time]:
+        latest: Optional[time] = None
+        for off, t in ts_marks:
+            if off > offset:
+                break
+            latest = t
+        if latest and meta.half == "pm" and 1 <= latest.hour <= 6:
+            latest = time(latest.hour + 12, latest.minute)
+        return latest
+
+    for i, (start, end, attribution) in enumerate(openers):
+        body_end = openers[i + 1][0] if i + 1 < len(openers) else len(html_text)
+        slice_html = html_text[end:body_end]
+
+        # Truncate the final turn at adjournment (footer junk follows).
+        am = _CMTE_A_ADJOURN_RE.search(slice_html)
+        if am:
+            sitting_end = _cmte_a_hhmm(am.group("h"), am.group("m"), am.group("ampm"))
+            if i + 1 == len(openers):
+                slice_html = slice_html[: am.start()]
+
+        cm2 = _CMTE_A_IN_CHAIR_RE.search(slice_html)
+        if cm2 and not chair_name:
+            chair_name = cm2.group("name").strip()
+
+        text = _strip_tags(_CMTE_A_TS_RE.sub(" ", slice_html)).strip()
+        if not text:
+            continue
+
+        role = None
+        name = attribution
+        rp = _CMTE_A_ROLE_PARENS_RE.search(attribution)
+        if rp:
+            role = rp.group("role").strip()
+            name = _CMTE_A_ROLE_PARENS_RE.sub("", attribution).strip()
+        elif name.lower() in _CMTE_A_ROLE_ONLY:
+            role = name
+
+        t = _ts_at(start) or sitting_start or meta.default_hhmm
+        speeches.append(ParsedSpeech(
+            sequence=len(speeches) + 1,
+            speaker_name_raw=name,
+            speaker_role=role,
+            speech_type="committee",
+            spoken_at=_localise(meta.sitting_date, t),
+            text=text,
+            language="en",
+            source_anchor=None,
+            content_hash=_content_hash(text),
+            raw={
+                "variant": meta.variant,
+                "section": None,
+                "subject": None,
+                "issue": meta.issue,
+                "half": meta.half,
+                "markup_era": "committee-era-a",
+            },
+        ))
+
+    return speeches, section_hits, sitting_start, sitting_end, chair_name
+
+
+def extract_committee_speeches(html_text: str, url: str) -> ParseResult:
+    """Committee-transcript entry point: era-dispatching extract.
+
+    Class-bearing files (2009+) delegate to the standard extractor with
+    the committee URL meta pre-parsed (the floor filename grammar
+    rejects location-less committee Finals). Class-less files route to
+    the Era-A extractor.
+    """
+    meta = parse_committee_url_meta(url)
+    if _MODERN_DETECT_RE.search(html_text):
+        return extract_speeches(html_text, url, url_meta=meta)
+    speeches, section_hits, ss, se, chair = _extract_committee_era_a(
+        html_text, meta,
+    )
+    return ParseResult(
+        url=url,
+        url_meta=meta,  # type: ignore[arg-type] — duck-typed
+        speeches=speeches,
+        sitting_start=ss,
+        sitting_end=se,
+        section_hits=section_hits,
+        sitting_speaker_name=chair,
+    )
+
+
 if __name__ == "__main__":  # pragma: no cover
     import sys
 

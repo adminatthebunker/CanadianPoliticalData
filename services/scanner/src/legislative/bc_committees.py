@@ -52,7 +52,7 @@ import logging
 import os
 import re
 from dataclasses import dataclass, field
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -312,7 +312,7 @@ async def resolve_member_to_politician(
 
 
 async def load_bc_committee_speaker_lookup(
-    db: Database, *, committee_name: str,
+    db: Database, *, committee_name: str, as_of: Optional[date] = None,
 ) -> tuple[SpeakerLookup, bool]:
     """BC analog of ab_committees.load_committee_speaker_lookup.
 
@@ -327,21 +327,51 @@ async def load_bc_committee_speaker_lookup(
     Implementation mirrors `bc_hansard.load_bc_speaker_lookup`'s three-
     index structure (by_full_name / by_initial_last / by_surname) so the
     BC SpeakerLookup.resolve() works unchanged.
+
+    `as_of` makes the lookup date-aware for historical backfills: ONLY
+    dated rows (both started_at and ended_at set — the historical
+    pcms membership ingest writes these at parliament granularity)
+    whose window covers the meeting date qualify. Open rows are
+    deliberately EXCLUDED in this mode: their started_at is ingest
+    time, not true membership start, and current members must not
+    leak into decades-old meetings. Without as_of, only open rows
+    (current members) qualify — the current-parliament behavior.
     """
-    rows = await db.fetch(
-        """
-        SELECT p.id::text       AS id,
-               p.name, p.first_name, p.last_name,
-               p.lims_member_id
-          FROM politicians p
-          JOIN politician_committees pc ON pc.politician_id = p.id
-         WHERE p.level = 'provincial'
-           AND p.province_territory = 'BC'
-           AND pc.committee_name = $1
-           AND pc.ended_at IS NULL
-        """,
-        committee_name,
-    )
+    if as_of is not None:
+        rows = await db.fetch(
+            """
+            SELECT DISTINCT
+                   p.id::text       AS id,
+                   p.name, p.first_name, p.last_name,
+                   p.lims_member_id
+              FROM politicians p
+              JOIN politician_committees pc ON pc.politician_id = p.id
+             WHERE p.level = 'provincial'
+               AND p.province_territory = 'BC'
+               AND pc.committee_name = $1
+               AND pc.started_at IS NOT NULL
+               AND pc.ended_at   IS NOT NULL
+               AND pc.started_at <= $2
+               AND pc.ended_at   >= $2
+            """,
+            committee_name,
+            datetime.combine(as_of, time(12, 0), tzinfo=timezone.utc),
+        )
+    else:
+        rows = await db.fetch(
+            """
+            SELECT p.id::text       AS id,
+                   p.name, p.first_name, p.last_name,
+                   p.lims_member_id
+              FROM politicians p
+              JOIN politician_committees pc ON pc.politician_id = p.id
+             WHERE p.level = 'provincial'
+               AND p.province_territory = 'BC'
+               AND pc.committee_name = $1
+               AND pc.ended_at IS NULL
+            """,
+            committee_name,
+        )
     if not rows:
         return (await load_bc_speaker_lookup(db)), False
 
@@ -598,10 +628,15 @@ def _iter_membership_slots(entry: dict) -> list[tuple[dict, str]]:
 
 async def _resolve_by_lims_or_name(
     db: Database, node: dict, stats: MembershipIngestStats,
+    *, allow_name_fallback: bool = True,
 ) -> Optional[str]:
     """member node → politician.id. LIMS-id exact join first; name-based
     fallback second. NEVER the image caption — those disagree with
-    memberByMemberId on real rows (observed: 'Shah' vs caption 'Shaw')."""
+    memberByMemberId on real rows (observed: 'Shah' vs caption 'Shaw').
+
+    Historical callers disable the name fallback: it filters on
+    is_active=true, which former MLAs fail — a wrong same-name active
+    match would be worse than an unresolved row."""
     member = node.get("memberByMemberId") or {}
     lims_id = member.get("id")
     if isinstance(lims_id, int):
@@ -618,7 +653,7 @@ async def _resolve_by_lims_or_name(
             return row["id"]
 
     name = f"{member.get('firstName') or ''} {member.get('lastName') or ''}".strip()
-    if name:
+    if name and allow_name_fallback:
         pid = await resolve_member_to_politician(db, name, "")
         if pid is not None:
             stats.resolved_by_name += 1
@@ -632,32 +667,106 @@ async def _resolve_by_lims_or_name(
     return None
 
 
+def _parliament_token(n: int) -> str:
+    """36 → '36th', 41 → '41st', 42 → '42nd', 43 → '43rd'."""
+    if 4 <= n % 100 <= 20:
+        suffix = "th"
+    else:
+        suffix = {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+    return f"{n}{suffix}"
+
+
+async def _parliament_date_range(
+    db: Database, parliament: int,
+) -> tuple[Optional[datetime], Optional[datetime]]:
+    """(start, end) of a BC parliament from legislative_sessions.
+    End is None while the parliament is current (open last session)."""
+    row = await db.fetchrow(
+        """
+        SELECT min(start_date) AS started,
+               CASE WHEN bool_or(end_date IS NULL) THEN NULL
+                    ELSE max(end_date) END AS ended
+          FROM legislative_sessions
+         WHERE level = 'provincial' AND province_territory = 'BC'
+           AND parliament_number = $1
+        """,
+        parliament,
+    )
+    if row is None or row["started"] is None:
+        return None, None
+    started = datetime.combine(row["started"], time(0, 0))
+    ended = (
+        datetime.combine(row["ended"], time(23, 59)) if row["ended"] else None
+    )
+    return started, ended
+
+
 async def ingest_bc_committee_membership(
     db: Database,
     client: Optional[httpx.AsyncClient] = None,
+    parliament: Optional[int] = None,
 ) -> MembershipIngestStats:
-    """Sync current-parliament BC committee membership from the pcms API
-    into politician_committees.
+    """Sync BC committee membership from the pcms API into
+    politician_committees.
 
-    Open rows (ended_at IS NULL) are upserted per (politician,
-    committee); pcms-sourced open rows whose politician dropped off the
-    upstream roster are soft-closed (ended_at=now()). Rows from other
-    sources (e.g. 'hansard-bc' substitute detection from transcript
-    Membership blocks) are never closed here — substitutes attend
-    without being formal members and live their own lifecycle.
+    Current parliament (parliament=None): open rows (ended_at IS NULL)
+    are upserted per (politician, committee); pcms-sourced open rows
+    whose politician dropped off the upstream roster are soft-closed
+    (ended_at=now()). Rows from other sources (e.g. 'hansard-bc'
+    substitute detection from transcript Membership blocks) are never
+    closed here — substitutes attend without being formal members and
+    live their own lifecycle.
+
+    Historical (parliament=N, e.g. 42): fetches
+    /pcms/committees/{N}{ord}/membership and lands DATED rows —
+    started_at/ended_at from the parliament's session range in
+    legislative_sessions — for the date-aware restricted speaker
+    lookup used by the historical transcript backfill. Idempotent on
+    (politician, committee, source, started_at); no soft-close pass.
     """
     stats = MembershipIngestStats()
+    historical = parliament is not None
+    parl_started: Optional[datetime] = None
+    parl_ended: Optional[datetime] = None
 
     async def _run(c: httpx.AsyncClient) -> None:
-        r = await _get_with_retry(c, PCMS_MEMBERSHIP_URL)
+        nonlocal parl_started, parl_ended
+        if historical:
+            parl_started, parl_ended = await _parliament_date_range(
+                db, parliament,
+            )
+            if parl_started is None:
+                log.warning(
+                    "bc committee membership: no legislative_sessions rows "
+                    "for BC parliament %d — dated rows would be unbounded; "
+                    "aborting",
+                    parliament,
+                )
+                return
+            url = (
+                "https://api.lims.leg.bc.ca/pcms/committees/"
+                f"{_parliament_token(parliament)}/membership"
+            )
+        else:
+            url = PCMS_MEMBERSHIP_URL
+        r = await _get_with_retry(c, url)
         r.raise_for_status()
         doc = r.json()
 
         cur = doc.get("currentParliament") or {}
         log.info(
-            "bc committee membership: parliament %s%s session %s%s",
+            "bc committee membership: %s (feed parliament %s%s session %s%s)",
+            f"historical {_parliament_token(parliament)}" if historical
+            else "current",
             cur.get("parliamentNumber"), cur.get("parliamentAnnotation") or "",
             cur.get("sessionNumber"), cur.get("sessionAnnotation") or "",
+        )
+
+        started_utc = (
+            parl_started.replace(tzinfo=timezone.utc) if parl_started else None
+        )
+        ended_utc = (
+            parl_ended.replace(tzinfo=timezone.utc) if parl_ended else None
         )
 
         for group in ("standing", "special", "statutory"):
@@ -671,10 +780,46 @@ async def ingest_bc_committee_membership(
                 fresh_ids: list[str] = []
                 for node, role in _iter_membership_slots(entry):
                     stats.members_seen += 1
-                    pid = await _resolve_by_lims_or_name(db, node, stats)
+                    pid = await _resolve_by_lims_or_name(
+                        db, node, stats,
+                        allow_name_fallback=not historical,
+                    )
                     if pid is None:
                         continue
                     fresh_ids.append(pid)
+                    if historical:
+                        existing = await db.fetchrow(
+                            """
+                            SELECT id, role FROM politician_committees
+                             WHERE politician_id = $1
+                               AND committee_name = $2
+                               AND source = $3
+                               AND started_at = $4
+                             LIMIT 1
+                            """,
+                            pid, committee_name, PCMS_SOURCE, started_utc,
+                        )
+                        if existing is not None:
+                            if existing["role"] != role:
+                                await db.execute(
+                                    "UPDATE politician_committees "
+                                    "SET role = $2 WHERE id = $1",
+                                    existing["id"], role,
+                                )
+                                stats.rows_updated += 1
+                            continue
+                        await db.execute(
+                            """
+                            INSERT INTO politician_committees
+                                (politician_id, committee_name, role, level,
+                                 started_at, ended_at, source)
+                            VALUES ($1, $2, $3, 'provincial', $4, $5, $6)
+                            """,
+                            pid, committee_name, role,
+                            started_utc, ended_utc, PCMS_SOURCE,
+                        )
+                        stats.rows_inserted += 1
+                        continue
                     is_new = await upsert_committee(
                         db,
                         politician_id=pid,
@@ -688,6 +833,8 @@ async def ingest_bc_committee_membership(
                     else:
                         stats.rows_updated += 1
 
+                if historical:
+                    continue
                 # Soft-close pcms-sourced rows for members no longer on
                 # the upstream roster (the roster-hygiene discipline —
                 # open-ended rows otherwise accumulate forever).
@@ -703,6 +850,7 @@ async def ingest_bc_committee_membership(
                        AND pc.level = 'provincial'
                        AND pc.source = $2
                        AND pc.ended_at IS NULL
+                       AND pc.started_at IS NOT NULL
                        AND NOT (pc.politician_id = ANY($3::uuid[]))
                     RETURNING pc.politician_id
                     """,
@@ -849,6 +997,12 @@ async def discover_meeting_refs(
             # {parl}{sess}/{code} grammar. Skip quietly so every daily
             # run doesn't warn about an intentional exclusion.
             if "-LAMC" in file_path:
+                stats.skipped_unparseable += 1
+                continue
+            # Minutes-only documents ride in the hansardTranscripts
+            # feed with a -MIN suffix (some without an am/pm half).
+            # They're meeting minutes, not verbatim transcripts.
+            if re.search(r"-MIN\.html?$", file_name, re.IGNORECASE):
                 stats.skipped_unparseable += 1
                 continue
             attr = t.get("committeeTranscriptAttributeByFileId") or {}
@@ -1009,6 +1163,18 @@ async def ingest_committees(
     # Chamber-wide lookup, loaded lazily the first time a restricted
     # committee needs the visiting-MLA exact-full-name fallback.
     chamber_lookup: Optional[SpeakerLookup] = None
+    # Current BC parliament: its meetings resolve against OPEN
+    # membership rows (as_of=None); earlier parliaments resolve against
+    # dated rows via as_of=meeting-date (see the lookup's docstring for
+    # why the two row families must not mix).
+    cur_parl_row = await db.fetchrow(
+        """
+        SELECT max(parliament_number) AS n FROM legislative_sessions
+         WHERE level = 'provincial' AND province_territory = 'BC'
+           AND end_date IS NULL
+        """,
+    )
+    current_parliament = cur_parl_row["n"] if cur_parl_row else None
 
     if limit_meetings:
         refs = refs[-limit_meetings:]  # newest N
@@ -1046,7 +1212,7 @@ async def ingest_committees(
                 continue
 
             try:
-                result = parse_mod.extract_speeches(page_html, url)
+                result = parse_mod.extract_committee_speeches(page_html, url)
             except Exception as exc:
                 log.warning("meeting %s: parse failed: %s", url, exc)
                 stats.parse_errors += 1
@@ -1107,12 +1273,20 @@ async def ingest_committees(
             # ingest (so net-new rows from this transcript's Membership
             # block are visible). Falls back to the chamber-wide lookup
             # when the committee has 0 membership rows (is_restricted=False).
-            cached = restricted_cache.get(ref.committee_name)
+            # Cache key includes the parliament: membership rows are
+            # dated at parliament granularity, so any meeting date
+            # within one parliament yields the same member set.
+            cache_key = f"{ref.committee_name}|{ref.parliament}"
+            cached = restricted_cache.get(cache_key)
             if cached is None:
-                cached = await load_bc_committee_speaker_lookup(
-                    db, committee_name=ref.committee_name,
+                as_of = (
+                    None if ref.parliament == current_parliament
+                    else ref.sitting_date
                 )
-                restricted_cache[ref.committee_name] = cached
+                cached = await load_bc_committee_speaker_lookup(
+                    db, committee_name=ref.committee_name, as_of=as_of,
+                )
+                restricted_cache[cache_key] = cached
             lookup, is_restricted = cached
             if is_restricted and chamber_lookup is None:
                 chamber_lookup = await load_bc_speaker_lookup(db)

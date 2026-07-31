@@ -3552,11 +3552,18 @@ def cmd_ingest_bc_committees(
 
 
 @cli.command("ingest-bc-committee-membership")
+@click.option("--parliament", type=int, default=None,
+              help="Historical mode: BC parliament number (e.g. 42) — lands "
+                   "DATED politician_committees rows bounded by that "
+                   "parliament's session range, for the date-aware restricted "
+                   "lookup used by the transcript backfill. Default: current "
+                   "parliament (open rows + soft-close).")
 @click.pass_context
-def cmd_ingest_bc_committee_membership(ctx: click.Context) -> None:
-    """Sync current-parliament BC committee membership (pcms API → politician_committees).
+def cmd_ingest_bc_committee_membership(ctx: click.Context, parliament) -> None:
+    """Sync BC committee membership (pcms API → politician_committees).
 
-    Fetches api.lims.leg.bc.ca/pcms/committees/membership and upserts one
+    Fetches api.lims.leg.bc.ca/pcms/committees/membership (or the
+    /{parliament}/membership variant with --parliament) and upserts one
     politician_committees row per (member, committee) with role Chair /
     Deputy Chair / Convener / Member. Resolution is an exact FK join on
     politicians.lims_member_id (the API's memberByMemberId.id is the same
@@ -3568,7 +3575,7 @@ def cmd_ingest_bc_committee_membership(ctx: click.Context) -> None:
     from .legislative.bc_committees import ingest_bc_committee_membership
 
     async def _wrap(db: Database) -> None:
-        stats = await ingest_bc_committee_membership(db)
+        stats = await ingest_bc_committee_membership(db, parliament=parliament)
         colour = "yellow" if stats.unresolved else "green"
         console.print(
             f"[{colour}]ingest-bc-committee-membership[/{colour}]: "

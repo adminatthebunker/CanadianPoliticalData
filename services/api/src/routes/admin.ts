@@ -112,8 +112,10 @@ const COMMAND_CATALOG = [
     ],
   },
   { key: "ingest-bc-committee-membership", category: "enrichment",
-    description: "Sync current-parliament BC committee membership from the pcms API into politician_committees. Exact FK resolution via politicians.lims_member_id; soft-closes pcms-sourced rows for members who left. Enables the committee-restricted speaker lookup in ingest-bc-committees.",
-    args: [],
+    description: "Sync BC committee membership from the pcms API into politician_committees. Exact FK resolution via politicians.lims_member_id; soft-closes pcms-sourced rows for members who left. Enables the committee-restricted speaker lookup in ingest-bc-committees.",
+    args: [
+      { name: "parliament", type: "int", required: false, help: "Historical mode: BC parliament number (e.g. 42) — lands dated rows for the backfill's date-aware lookup." },
+    ],
   },
   { key: "ingest-bc-committees", category: "hansard",
     description: "Pull BC standing-committee transcripts (HTML from lims.leg.bc.ca/hdms/file/Committees) into `speeches` with speech_type='committee'. Discovery walks the pcms REST API on api.lims.leg.bc.ca (every meeting back to 1996); use_seed reverts to the legacy seed file.",
