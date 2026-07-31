@@ -3542,10 +3542,42 @@ def cmd_ingest_bc_committees(
             f"role_only={stats.speeches_role_only} "
             f"ambiguous={stats.speeches_ambiguous} "
             f"unresolved={stats.speeches_unresolved} "
+            f"visiting_mla={stats.speeches_visiting_mla} "
             f"members_parsed={stats.members_parsed} "
             f"members_resolved={stats.members_resolved} "
             f"members_inserted={stats.members_inserted} "
             f"members_updated={stats.members_updated}"
+        )
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
+@cli.command("ingest-bc-committee-membership")
+@click.pass_context
+def cmd_ingest_bc_committee_membership(ctx: click.Context) -> None:
+    """Sync current-parliament BC committee membership (pcms API → politician_committees).
+
+    Fetches api.lims.leg.bc.ca/pcms/committees/membership and upserts one
+    politician_committees row per (member, committee) with role Chair /
+    Deputy Chair / Convener / Member. Resolution is an exact FK join on
+    politicians.lims_member_id (the API's memberByMemberId.id is the same
+    identifier space); name-based fallback only when the local row lacks
+    a LIMS id. pcms-sourced open rows whose member dropped off the
+    upstream roster are soft-closed. Enables the committee-restricted
+    speaker lookup in ingest-bc-committees (witness-rejection).
+    """
+    from .legislative.bc_committees import ingest_bc_committee_membership
+
+    async def _wrap(db: Database) -> None:
+        stats = await ingest_bc_committee_membership(db)
+        colour = "yellow" if stats.unresolved else "green"
+        console.print(
+            f"[{colour}]ingest-bc-committee-membership[/{colour}]: "
+            f"committees={stats.committees_seen} members={stats.members_seen} "
+            f"resolved_by_lims_id={stats.resolved_by_lims_id} "
+            f"resolved_by_name={stats.resolved_by_name} "
+            f"unresolved={stats.unresolved} "
+            f"inserted={stats.rows_inserted} updated={stats.rows_updated} "
+            f"closed={stats.rows_closed}"
         )
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 

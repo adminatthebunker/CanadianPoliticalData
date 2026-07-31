@@ -27,17 +27,22 @@ scripts/seeds/bc-committee-meetings.json still loads via `--use-seed`
 for offline re-ingest or as a manual fallback. The ingester is
 idempotent on canonical_url either way.
 
-## Speaker resolution: chamber-wide fallback
+## Speaker resolution: committee-restricted with a visiting-MLA rescue
 
-BC has zero `politician_committees` membership rows today, so the AB-style
-"committee-restricted lookup that correctly rejects witnesses" pattern
-can't be replicated. Falls back to `bc_hansard.load_bc_speaker_lookup`
-(chamber-wide). Consequences documented in the runbook:
-  - Higher false-positive risk: a non-MLA witness named "Smith" will
-    surname-match to an MLA "Smith" if one exists.
-  - Expected MLA-FK rate ~85-90%, looking higher than AB's 31% but with
-    witness bleed.
-  - Full fix lands when BC `politician_committees` membership ingest lands.
+Since 2026-07-30 `ingest-bc-committee-membership` syncs current-parliament
+membership from the pcms API into `politician_committees` (exact FK via
+politicians.lims_member_id), so `load_bc_committee_speaker_lookup`
+restricts resolution to actual committee members — the AB-style
+witness-rejection pattern. Three tiers:
+  1. Committee member (restricted lookup)          → confidence 1.0
+  2. Visiting MLA — bill sponsor / substitute —
+     chamber-wide EXACT full-name match only       → confidence 0.9
+  3. Neither → unattributed (witnesses stay NULL — correct)
+Tier 2 exists because visitors aren't members (observed: Sheldon Clare
+presenting Bill M237 to IVA); exact-full-name keeps the surname-collision
+hole closed. Chamber-wide fallback remains only for committees with zero
+membership rows (historical parliaments until the phase-3 backfill lands
+dated membership).
 """
 from __future__ import annotations
 
@@ -67,6 +72,7 @@ from .bc_hansard import (
     SpeakerLookup,
     _get_with_retry,
     _norm,
+    _strip_honorifics,
     _parl_slug,
     _sess_slug,
     _upsert_speech,
@@ -196,6 +202,7 @@ class IngestCommitteeStats:
     speeches_role_only: int = 0
     speeches_ambiguous: int = 0
     speeches_unresolved: int = 0
+    speeches_visiting_mla: int = 0  # rescued by chamber-wide exact-full-name fallback
     skipped_empty: int = 0
     fetch_failures: int = 0
     parse_errors: int = 0
@@ -535,6 +542,193 @@ def build_meeting_refs_from_seed(
     return refs
 
 
+# ── pcms API membership ingest ───────────────────────────────────────
+# GET /pcms/committees/membership returns every current-parliament
+# committee grouped standing/special/statutory, each with chair/deputy
+# (or a pre-election convener) + rank-and-file members. The load-bearing
+# detail: memberByMemberId.id IS the LIMS member id — the same
+# identifier space as politicians.lims_member_id — so resolution is an
+# exact FK join with a name-based fallback only for politicians whose
+# lims_member_id is missing locally. Historical parliaments are also
+# reachable (/pcms/committees/{parl}/membership and
+# /{abbrev}/{parl}/members?session= — session param REQUIRED, omitting
+# it returns an empty 200); dated historical rows land with the
+# phase-3 backfill, which needs a date-aware restricted lookup anyway.
+
+PCMS_MEMBERSHIP_URL = "https://api.lims.leg.bc.ca/pcms/committees/membership"
+PCMS_SOURCE = "pcms-api"
+
+
+@dataclass
+class MembershipIngestStats:
+    committees_seen: int = 0
+    members_seen: int = 0
+    resolved_by_lims_id: int = 0
+    resolved_by_name: int = 0
+    unresolved: int = 0
+    rows_inserted: int = 0
+    rows_updated: int = 0
+    rows_closed: int = 0
+
+
+def _iter_membership_slots(entry: dict) -> list[tuple[dict, str]]:
+    """Yield (member_node, role) pairs for one committee entry.
+
+    Role slots are mutually exclusive upstream: chair+deputy OR a single
+    convener (placeholder before a chair is elected); all optional.
+    committeeMembers EXCLUDES whoever fills a role slot.
+    """
+    out: list[tuple[dict, str]] = []
+    if entry.get("committeeChair"):
+        out.append((entry["committeeChair"], "Chair"))
+    if entry.get("committeeDeputyChair"):
+        out.append((entry["committeeDeputyChair"], "Deputy Chair"))
+    if entry.get("committeeConvener"):
+        out.append((entry["committeeConvener"], "Convener"))
+    members = (
+        (entry.get("committeeMembers") or {})
+        .get("allMemberParliaments", {})
+        .get("nodes")
+        or []
+    )
+    for node in members:
+        out.append((node, "Member"))
+    return out
+
+
+async def _resolve_by_lims_or_name(
+    db: Database, node: dict, stats: MembershipIngestStats,
+) -> Optional[str]:
+    """member node → politician.id. LIMS-id exact join first; name-based
+    fallback second. NEVER the image caption — those disagree with
+    memberByMemberId on real rows (observed: 'Shah' vs caption 'Shaw')."""
+    member = node.get("memberByMemberId") or {}
+    lims_id = member.get("id")
+    if isinstance(lims_id, int):
+        row = await db.fetchrow(
+            """
+            SELECT id::text AS id FROM politicians
+             WHERE level = 'provincial' AND province_territory = 'BC'
+               AND lims_member_id = $1
+            """,
+            lims_id,
+        )
+        if row is not None:
+            stats.resolved_by_lims_id += 1
+            return row["id"]
+
+    name = f"{member.get('firstName') or ''} {member.get('lastName') or ''}".strip()
+    if name:
+        pid = await resolve_member_to_politician(db, name, "")
+        if pid is not None:
+            stats.resolved_by_name += 1
+            return pid
+
+    log.warning(
+        "bc committee membership: unresolved member lims_id=%s name=%r",
+        lims_id, name,
+    )
+    stats.unresolved += 1
+    return None
+
+
+async def ingest_bc_committee_membership(
+    db: Database,
+    client: Optional[httpx.AsyncClient] = None,
+) -> MembershipIngestStats:
+    """Sync current-parliament BC committee membership from the pcms API
+    into politician_committees.
+
+    Open rows (ended_at IS NULL) are upserted per (politician,
+    committee); pcms-sourced open rows whose politician dropped off the
+    upstream roster are soft-closed (ended_at=now()). Rows from other
+    sources (e.g. 'hansard-bc' substitute detection from transcript
+    Membership blocks) are never closed here — substitutes attend
+    without being formal members and live their own lifecycle.
+    """
+    stats = MembershipIngestStats()
+
+    async def _run(c: httpx.AsyncClient) -> None:
+        r = await _get_with_retry(c, PCMS_MEMBERSHIP_URL)
+        r.raise_for_status()
+        doc = r.json()
+
+        cur = doc.get("currentParliament") or {}
+        log.info(
+            "bc committee membership: parliament %s%s session %s%s",
+            cur.get("parliamentNumber"), cur.get("parliamentAnnotation") or "",
+            cur.get("sessionNumber"), cur.get("sessionAnnotation") or "",
+        )
+
+        for group in ("standing", "special", "statutory"):
+            for entry in doc.get(group) or []:
+                committee = entry.get("committeeByCommitteeId") or {}
+                committee_name = committee.get("name")
+                if not committee_name:
+                    continue
+                stats.committees_seen += 1
+
+                fresh_ids: list[str] = []
+                for node, role in _iter_membership_slots(entry):
+                    stats.members_seen += 1
+                    pid = await _resolve_by_lims_or_name(db, node, stats)
+                    if pid is None:
+                        continue
+                    fresh_ids.append(pid)
+                    is_new = await upsert_committee(
+                        db,
+                        politician_id=pid,
+                        committee_name=committee_name,
+                        role=role,
+                        level="provincial",
+                        source=PCMS_SOURCE,
+                    )
+                    if is_new:
+                        stats.rows_inserted += 1
+                    else:
+                        stats.rows_updated += 1
+
+                # Soft-close pcms-sourced rows for members no longer on
+                # the upstream roster (the roster-hygiene discipline —
+                # open-ended rows otherwise accumulate forever).
+                closed = await db.fetch(
+                    """
+                    UPDATE politician_committees pc
+                       SET ended_at = now()
+                      FROM politicians p
+                     WHERE p.id = pc.politician_id
+                       AND p.level = 'provincial'
+                       AND p.province_territory = 'BC'
+                       AND pc.committee_name = $1
+                       AND pc.level = 'provincial'
+                       AND pc.source = $2
+                       AND pc.ended_at IS NULL
+                       AND NOT (pc.politician_id = ANY($3::uuid[]))
+                    RETURNING pc.politician_id
+                    """,
+                    committee_name, PCMS_SOURCE, fresh_ids,
+                )
+                stats.rows_closed += len(closed)
+
+    if client is not None:
+        await _run(client)
+    else:
+        async with httpx.AsyncClient(
+            timeout=REQUEST_TIMEOUT, headers=HEADERS, follow_redirects=True,
+        ) as c:
+            await _run(c)
+
+    log.info(
+        "bc committee membership: committees=%d members=%d "
+        "lims_id=%d name=%d unresolved=%d "
+        "inserted=%d updated=%d closed=%d",
+        stats.committees_seen, stats.members_seen,
+        stats.resolved_by_lims_id, stats.resolved_by_name, stats.unresolved,
+        stats.rows_inserted, stats.rows_updated, stats.rows_closed,
+    )
+    return stats
+
+
 # ── pcms API discovery ───────────────────────────────────────────────
 # The dyn.leg.bc.ca committee SPA reads a REST surface on
 # api.lims.leg.bc.ca (mapped 2026-07-30 — see docs/research/
@@ -812,6 +1006,9 @@ async def ingest_committees(
     # "most-recent transcript ingested"). load_bc_committee_speaker_lookup
     # internally falls back to chamber-wide when 0 membership rows exist.
     restricted_cache: dict[str, tuple[SpeakerLookup, bool]] = {}
+    # Chamber-wide lookup, loaded lazily the first time a restricted
+    # committee needs the visiting-MLA exact-full-name fallback.
+    chamber_lookup: Optional[SpeakerLookup] = None
 
     if limit_meetings:
         refs = refs[-limit_meetings:]  # newest N
@@ -917,6 +1114,8 @@ async def ingest_committees(
                 )
                 restricted_cache[ref.committee_name] = cached
             lookup, is_restricted = cached
+            if is_restricted and chamber_lookup is None:
+                chamber_lookup = await load_bc_speaker_lookup(db)
 
             for ps in result.speeches:
                 if (limit_speeches
@@ -934,7 +1133,31 @@ async def ingest_committees(
                     ps.speaker_name_raw,
                     sitting_speaker_name=result.sitting_speaker_name,
                 )
-                if status == "resolved":
+                if (
+                    is_restricted
+                    and chamber_lookup is not None
+                    and status in ("unresolved", "ambiguous")
+                ):
+                    # Visiting MLAs — bill sponsors presenting to a
+                    # committee, substitutes — aren't members and get
+                    # rejected by the restricted lookup (observed live:
+                    # Sheldon Clare presenting Bill M237 to IVA,
+                    # 2026-07-20). Rescue via chamber-wide EXACT
+                    # full-name match only: committee Blues announce
+                    # visitors by full name, while the witness/MLA
+                    # collisions the restriction exists to block are
+                    # surname-level. A witness sharing an MLA's exact
+                    # full name stays a residual (accepted) risk.
+                    key = _norm(_strip_honorifics(ps.speaker_name_raw))
+                    hits = chamber_lookup.by_full_name.get(key) or []
+                    if len(hits) == 1:
+                        politician = hits[0]
+                        status = "visiting"
+
+                if status == "visiting":
+                    stats.speeches_visiting_mla += 1
+                    confidence = 0.9
+                elif status == "resolved":
                     stats.speeches_resolved += 1
                     confidence = 1.0
                 elif status == "presiding":
@@ -980,6 +1203,7 @@ async def ingest_committees(
         "(inserted=%d updated=%d skipped_empty=%d fetch_failures=%d "
         "parse_errors=%d) "
         "resolved=%d presiding=%d role_only=%d ambiguous=%d unresolved=%d "
+        "visiting_mla=%d "
         "members_parsed=%d members_resolved=%d members_inserted=%d members_updated=%d",
         stats.meetings_scanned,
         stats.speeches_seen,
@@ -993,6 +1217,7 @@ async def ingest_committees(
         stats.speeches_role_only,
         stats.speeches_ambiguous,
         stats.speeches_unresolved,
+        stats.speeches_visiting_mla,
         stats.members_parsed,
         stats.members_resolved,
         stats.members_inserted,

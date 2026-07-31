@@ -177,6 +177,12 @@ COMMANDS: dict[str, dict[str, Any]] = {
              "help": "Send email even when no committees are stale (audit cadence)."},
         ],
     },
+    "ingest-bc-committee-membership": {
+        "description": "Sync current-parliament BC committee membership from the pcms API (api.lims.leg.bc.ca/pcms/committees/membership) into politician_committees. Exact FK resolution via politicians.lims_member_id; soft-closes pcms-sourced rows for members who left. Enables the committee-restricted speaker lookup (witness-rejection) in ingest-bc-committees.",
+        "cli": "ingest-bc-committee-membership",
+        "category": "enrichment",
+        "args": [],
+    },
     "ingest-bc-committees": {
         "description": "Pull BC standing-committee transcripts (HTML from lims.leg.bc.ca/hdms/file/Committees) into `speeches` with speech_type='committee'. Discovery walks the pcms REST API on api.lims.leg.bc.ca (every meeting back to 1996); --use-seed reverts to the legacy scripts/seeds/bc-committee-meetings.json.",
         "cli": "ingest-bc-committees",
