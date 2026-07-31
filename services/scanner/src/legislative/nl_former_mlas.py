@@ -136,8 +136,9 @@ async def ingest_nl_former_mlas(db: Database) -> Stats:
                 SELECT id FROM politicians
                  WHERE level='provincial' AND province_territory='NL'
                    AND lower(unaccent(split_part(first_name, ' ', 1)))
-                       = lower(unaccent($1))
+                       = lower(unaccent(split_part($1, ' ', 1)))
                    AND lower(unaccent(last_name)) = lower(unaccent($2))
+                 ORDER BY is_active DESC, created_at ASC
                  LIMIT 1
                 """,
                 entry.first_name, entry.last_name,
@@ -159,6 +160,7 @@ async def ingest_nl_former_mlas(db: Database) -> Stats:
                          is_active, source_id, social_urls, extras)
                     VALUES ($1, $2, $3, 'provincial', 'NL',
                             false, $4, '{}'::jsonb, '{}'::jsonb)
+                    ON CONFLICT (source_id) DO UPDATE SET updated_at = now()
                     RETURNING id
                     """,
                     entry.full_name, entry.first_name, entry.last_name,

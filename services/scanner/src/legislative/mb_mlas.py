@@ -178,6 +178,16 @@ async def _insert_new(db: Database, row: MBMlaRow) -> str:
     )
     if existing:
         return str(existing)
+    # The assembly slug is the canonical MB member ID: if a row already owns
+    # it, that row IS this person even when name-matching came back ambiguous
+    # (e.g. duplicate rows splitting "Dela Cruz" differently). Inserting would
+    # violate idx_politicians_mb_assembly_slug.
+    slug_owner = await db.fetchval(
+        "SELECT id FROM politicians WHERE province_territory = 'MB' AND mb_assembly_slug = $1",
+        row.surname_slug,
+    )
+    if slug_owner:
+        return str(slug_owner)
     new_id = await db.fetchval(
         """
         INSERT INTO politicians (
