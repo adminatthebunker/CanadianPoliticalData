@@ -77,6 +77,40 @@ BC_PARLIAMENT_DATES: dict[int, tuple[date, date]] = {
 
 DEFAULT_PARLIAMENTS: tuple[int, ...] = (29, 30, 31, 32, 33, 34)
 
+# Common English/Canadian nickname → formal-name folds for the name-
+# merge fallback. One direction only (nickname → formal); the reverse
+# lookup happens implicitly because existing_by_name is keyed on the
+# stored (formal) names.
+_NICKNAME_FOLDS: dict[str, str] = {
+    "mike": "michael", "doug": "douglas", "art": "arthur",
+    "bill": "william", "bob": "robert", "rob": "robert",
+    "dave": "david", "dan": "daniel", "jim": "james",
+    "joe": "joseph", "tom": "thomas", "dick": "richard",
+    "rick": "richard", "rich": "richard", "ted": "edward",
+    "ed": "edward", "fred": "frederick", "len": "leonard",
+    "ken": "kenneth", "ron": "ronald", "don": "donald",
+    "steve": "steven", "greg": "gregory", "pat": "patricia",
+    "sue": "susan", "liz": "elizabeth", "beth": "elizabeth",
+    "kathy": "kathleen", "cathy": "catherine", "jenny": "jennifer",
+    "penny": "penelope", "sandy": "alexander", "alex": "alexander",
+    "tony": "anthony", "andy": "andrew", "chris": "christopher",
+    "nick": "nicholas", "sam": "samuel", "gord": "gordon",
+    "gerry": "gerald", "jerry": "gerald", "terry": "terrence",
+    "wally": "walter", "walt": "walter", "gus": "angus",
+    "norm": "norman", "stan": "stanley", "vic": "victor",
+    "ray": "raymond", "roy": "royce", "al": "albert",
+    "bert": "albert", "herb": "herbert", "frank": "francis",
+    "gene": "eugene", "phil": "philip", "vern": "vernon",
+    "larry": "lawrence", "barb": "barbara", "deb": "deborah",
+    "debbie": "deborah", "marg": "margaret", "peggy": "margaret",
+    "maggie": "margaret", "becky": "rebecca", "vicki": "victoria",
+    "judy": "judith", "trish": "patricia", "christy": "christina",
+}
+
+
+def _fold_nickname(token: str) -> Optional[str]:
+    return _NICKNAME_FOLDS.get(token)
+
 
 # ── Models ──────────────────────────────────────────────────────────
 
@@ -415,8 +449,32 @@ async def _upsert_politician(
 
     # 2. Name-merge against existing roster (LIMS-keyed modern MLAs whose
     #    career extended pre-P35). Stamp source_id on the existing row.
+    #    2026-07-31: exact full-name matching proved too brittle for the
+    #    P35-38 gap-fill — Wikipedia prints "Mike Farnworth"/"Doug
+    #    Symons"/"Art Charbonneau" where LIMS has Michael/Douglas/
+    #    Arthur (17 duplicate rows created, reverted same day). Fold
+    #    common nicknames and fall back to unique-surname + first-
+    #    initial before concluding a member is new.
     full_norm = _norm(f"{m.first_name} {m.last_name}")
     nm_hit = existing_by_name.get(full_norm) if full_norm else None
+    if nm_hit is None and m.first_name:
+        folded = _fold_nickname(_norm(m.first_name).split(" ")[0])
+        if folded:
+            nm_hit = existing_by_name.get(
+                _norm(f"{folded} {m.last_name}")
+            )
+    if nm_hit is None and m.first_name and m.last_name:
+        last_n = _norm(m.last_name)
+        first_i = _norm(m.first_name)[:1]
+        surname_hits = [
+            v for k, v in existing_by_name.items()
+            if k.endswith(" " + last_n) or k == last_n
+        ]
+        # Unique surname holder whose first initial agrees → same person.
+        if len({h["id"] for h in surname_hits}) == 1 and surname_hits:
+            cand = surname_hits[0]
+            if _norm(cand.get("first_name") or "")[:1] == first_i:
+                nm_hit = cand
     if nm_hit is not None:
         await db.execute(
             """
