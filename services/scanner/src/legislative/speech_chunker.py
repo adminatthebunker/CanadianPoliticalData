@@ -37,6 +37,7 @@ ridings. Re-evaluate after first retrieval tuning pass.
 from __future__ import annotations
 
 import logging
+import os
 import re
 from dataclasses import dataclass
 from typing import Any, Optional
@@ -48,6 +49,12 @@ log = logging.getLogger(__name__)
 CHUNK_TARGET_TOKENS = 480
 CHUNK_OVERLAP_TOKENS = 50
 MIN_CHUNK_TOKENS = 8
+# Speeches per pending-queue fetch in chunk_pending. Bounded so the
+# full-text fetch stays well under the pool's command_timeout=60 at any
+# backlog size (a fetch-all of the 2.7M-speech committee backfill timed
+# out on 2026-07-27). ~20K speeches ≈ 2m19s end-to-end per pass, fetch
+# itself is seconds.
+CHUNK_DB_FETCH_BATCH = int(os.environ.get("CHUNK_DB_FETCH_BATCH", "20000"))
 # XLMR tokenizers average ~3.5 chars/token on mixed EN/FR corpora.
 CHARS_PER_TOKEN = 3.5
 
@@ -268,7 +275,16 @@ async def chunk_pending(
     daily cron to drain the corpus-wide unchunked backlog.
     """
     stats = ChunkStats()
-    where_clauses = ["c.id IS NULL"]
+    # Mirror split_into_chunks' tiny-turn skip (MIN_CHUNK_TOKENS=8 at
+    # CHARS_PER_TOKEN=3.5 → keep iff trimmed length >= 27 chars) in SQL so
+    # the ~440K procedural "Agreed." turns aren't re-fetched and re-skipped
+    # in Python on every run. Python's round() half-even at exactly 7.5
+    # tokens (26.25 chars) can't occur on integer lengths, so >= 27 is an
+    # exact mirror, not an approximation.
+    where_clauses = [
+        "c.id IS NULL",
+        "length(btrim(s.text)) >= 27",
+    ]
     params: list = []
     if source_system is not None:
         params.append(source_system)
@@ -276,63 +292,87 @@ async def chunk_pending(
     if speech_type is not None:
         params.append(speech_type)
         where_clauses.append(f"s.speech_type = ${len(params)}")
-    query = f"""
-        SELECT s.id, s.text, s.language, s.politician_id, s.level,
-               s.province_territory, s.spoken_at, s.session_id,
-               s.party_at_time
-        FROM speeches s
-        LEFT JOIN speech_chunks c ON c.speech_id = s.id
-        WHERE {' AND '.join(where_clauses)}
-        ORDER BY s.spoken_at DESC NULLS LAST, s.id
-    """
-    if limit_speeches:
-        query += f" LIMIT {int(limit_speeches)}"
-
-    rows = await db.fetch(query, *params)
-    for row in rows:
-        stats.speeches_seen += 1
-        chunks = split_into_chunks(row["text"] or "")
-        if not chunks:
-            stats.speeches_skipped += 1
-            continue
-        tsconfig = _tsconfig_for(row["language"] or "en")
-        async with db.pool.acquire() as conn:
-            async with conn.transaction():
-                for idx, ch in enumerate(chunks):
-                    await conn.execute(
-                        """
-                        INSERT INTO speech_chunks (
-                            speech_id, chunk_index, text, token_count,
-                            char_start, char_end, language,
-                            politician_id, party_at_time, level,
-                            province_territory, spoken_at, session_id,
-                            embedding, tsv, tsv_config
-                        ) VALUES (
-                            $1, $2, $3, $4,
-                            $5, $6, $7,
-                            $8, $9, $10,
-                            $11, $12, $13,
-                            NULL, to_tsvector($14::regconfig, $3), $14
+    # Stream the pending queue in DB-side batches. A single fetch-all of a
+    # multi-million-row backlog (full speech texts) exceeds the pool's
+    # command_timeout=60 — hit 2026-07-27 on the 2.7M-speech committee
+    # backfill. Chunked speeches drop out of the anti-join, so refetching
+    # naturally advances; speeches the splitter skips are excluded
+    # explicitly so a skip can't be refetched in a loop. (The >= 27 SQL
+    # floor should make skips impossible, but the exclusion costs nothing
+    # and keeps the loop terminating if the two filters ever drift.)
+    skipped_ids: list = []
+    while True:
+        fetch_n = CHUNK_DB_FETCH_BATCH
+        if limit_speeches:
+            remaining = int(limit_speeches) - stats.speeches_seen
+            if remaining <= 0:
+                break
+            fetch_n = min(fetch_n, remaining)
+        batch_where = list(where_clauses)
+        batch_params = list(params)
+        if skipped_ids:
+            batch_params.append(skipped_ids)
+            batch_where.append(f"NOT (s.id = ANY(${len(batch_params)}))")
+        query = f"""
+            SELECT s.id, s.text, s.language, s.politician_id, s.level,
+                   s.province_territory, s.spoken_at, s.session_id,
+                   s.party_at_time
+            FROM speeches s
+            LEFT JOIN speech_chunks c ON c.speech_id = s.id
+            WHERE {' AND '.join(batch_where)}
+            ORDER BY s.spoken_at DESC NULLS LAST, s.id
+            LIMIT {fetch_n}
+        """
+        rows = await db.fetch(query, *batch_params)
+        if not rows:
+            break
+        for row in rows:
+            stats.speeches_seen += 1
+            chunks = split_into_chunks(row["text"] or "")
+            if not chunks:
+                stats.speeches_skipped += 1
+                skipped_ids.append(row["id"])
+                continue
+            tsconfig = _tsconfig_for(row["language"] or "en")
+            async with db.pool.acquire() as conn:
+                async with conn.transaction():
+                    for idx, ch in enumerate(chunks):
+                        await conn.execute(
+                            """
+                            INSERT INTO speech_chunks (
+                                speech_id, chunk_index, text, token_count,
+                                char_start, char_end, language,
+                                politician_id, party_at_time, level,
+                                province_territory, spoken_at, session_id,
+                                embedding, tsv, tsv_config
+                            ) VALUES (
+                                $1, $2, $3, $4,
+                                $5, $6, $7,
+                                $8, $9, $10,
+                                $11, $12, $13,
+                                NULL, to_tsvector($14::regconfig, $3), $14
+                            )
+                            ON CONFLICT (speech_id, chunk_index) DO NOTHING
+                            """,
+                            row["id"],
+                            idx,
+                            ch.text,
+                            ch.token_count,
+                            ch.char_start,
+                            ch.char_end,
+                            row["language"],
+                            row["politician_id"],
+                            row["party_at_time"],
+                            row["level"],
+                            row["province_territory"],
+                            row["spoken_at"],
+                            row["session_id"],
+                            tsconfig,
                         )
-                        ON CONFLICT (speech_id, chunk_index) DO NOTHING
-                        """,
-                        row["id"],
-                        idx,
-                        ch.text,
-                        ch.token_count,
-                        ch.char_start,
-                        ch.char_end,
-                        row["language"],
-                        row["politician_id"],
-                        row["party_at_time"],
-                        row["level"],
-                        row["province_territory"],
-                        row["spoken_at"],
-                        row["session_id"],
-                        tsconfig,
-                    )
-                    stats.chunks_inserted += 1
-        stats.speeches_chunked += 1
+                        stats.chunks_inserted += 1
+            stats.speeches_chunked += 1
+        if len(rows) < fetch_n:
+            break
 
     log.info(
         "chunk-speeches: seen=%d chunked=%d skipped=%d chunks=%d",

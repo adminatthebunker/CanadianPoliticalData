@@ -83,6 +83,12 @@ EMBED_MAX_CONSECUTIVE_FAILURES = int(
 EMBED_PREFLIGHT_DEVICE_LATENCY_MS = int(
     os.environ.get("EMBED_PREFLIGHT_DEVICE_LATENCY_MS", "1500")
 )
+# Rows per pending-queue fetch. A single fetch-all of a multi-million-row
+# backlog exceeds the pool's command_timeout=60 (hit 2026-07-28/29 nightly
+# against the 2.8M committee-backfill backlog); bounded fetches stay fast
+# at any backlog size. At ~50 chunks/sec embed throughput, 50K rows is
+# ~16 min of GPU work per fetch — fetch overhead is noise.
+EMBED_DB_FETCH_BATCH = int(os.environ.get("EMBED_DB_FETCH_BATCH", "50000"))
 
 REQUEST_HEADERS = {
     "User-Agent": "SovereignWatchScanner/1.0",
@@ -210,23 +216,10 @@ async def embed_pending(
         batch_size: texts per /embed call.
     """
     stats = EmbedStats()
-    q = """
-        SELECT id, text
-        FROM speech_chunks
-        WHERE embedding IS NULL
-        ORDER BY spoken_at DESC NULLS LAST, id
-    """
-    if limit_chunks:
-        q += f" LIMIT {int(limit_chunks)}"
-    rows = await db.fetch(q)
-    stats.chunks_seen = len(rows)
-    if not rows:
-        log.info("embed-speech-chunks: nothing to do")
-        return stats
-
     log.info(
-        "embed-speech-chunks: %d chunks to embed (batch=%d → %s, model=%s)",
-        stats.chunks_seen, batch_size, EMBED_URL, EMBED_MODEL_TAG,
+        "embed-speech-chunks: streaming pending queue (db_fetch=%d, "
+        "batch=%d → %s, model=%s)",
+        EMBED_DB_FETCH_BATCH, batch_size, EMBED_URL, EMBED_MODEL_TAG,
     )
 
     async with httpx.AsyncClient(
@@ -234,72 +227,111 @@ async def embed_pending(
     ) as client:
         await _preflight_device_check(client)
         consecutive_failures = 0
-        for start in range(0, len(rows), batch_size):
-            batch = rows[start : start + batch_size]
-            texts = [r["text"] or " " for r in batch]
-            try:
-                vecs, elapsed_ms = await _embed_batch_with_retry(
-                    client, texts, stats=stats, offset=start,
-                )
-            except Exception as exc:
-                stats.errors += 1
-                consecutive_failures += 1
-                log.warning(
-                    "embed batch failed at offset %d after %d attempts: %s "
-                    "(consecutive_failures=%d/%d)",
-                    start, EMBED_RETRY_MAX_ATTEMPTS, exc,
-                    consecutive_failures, EMBED_MAX_CONSECUTIVE_FAILURES,
-                )
-                if consecutive_failures >= EMBED_MAX_CONSECUTIVE_FAILURES:
-                    log.error(
-                        "embed-speech-chunks: aborting after %d consecutive "
-                        "batch failures — TEI looks dead. Remaining %d chunks "
-                        "stay NULL for next run.",
-                        consecutive_failures, len(rows) - start,
-                    )
-                    stats.aborted_consecutive_failures = True
+        # Embedded rows drop out of the `embedding IS NULL` predicate, so
+        # refetching naturally advances through the queue. Rows whose batch
+        # failed post-retry stay NULL — exclude them explicitly so one
+        # poisoned batch can't be refetched in a loop.
+        failed_ids: list = []
+        aborted = False
+        while not aborted:
+            fetch_n = EMBED_DB_FETCH_BATCH
+            if limit_chunks:
+                remaining = int(limit_chunks) - stats.chunks_seen
+                if remaining <= 0:
                     break
-                continue
-            if len(vecs) != len(batch):
-                log.warning(
-                    "embed response mismatch: asked %d got %d; skipping batch",
-                    len(batch), len(vecs),
-                )
-                stats.errors += 1
-                consecutive_failures += 1
-                continue
-            consecutive_failures = 0
-
-            stats.batches += 1
-            stats.total_elapsed_ms += elapsed_ms
-
-            # Batched write via UNNEST — one UPDATE per batch instead of
-            # len(batch) separate UPDATEs. This is the throughput unlock
-            # that took end-to-end from 4.7 c/s (legacy per-row path) to
-            # 50.9 c/s, with the GPU becoming the actual bottleneck.
-            ids = [row["id"] for row in batch]
-            vec_literals = [_vec_literal(v) for v in vecs]
-
-            await db.execute(
-                """
-                UPDATE speech_chunks AS sc
-                   SET embedding       = v.emb::vector,
-                       embedding_model = $3,
-                       embedded_at     = now()
-                  FROM UNNEST($1::uuid[], $2::text[]) AS v(id, emb)
-                 WHERE sc.id = v.id
-                """,
-                ids,
-                vec_literals,
-                EMBED_MODEL_TAG,
-            )
-
-            stats.chunks_embedded += len(batch)
+                fetch_n = min(fetch_n, remaining)
+            q = """
+                SELECT id, text
+                FROM speech_chunks
+                WHERE embedding IS NULL
+            """
+            if failed_ids:
+                q += " AND NOT (id = ANY($1))"
+            q += f"""
+                ORDER BY spoken_at DESC NULLS LAST, id
+                LIMIT {fetch_n}
+            """
+            rows = await db.fetch(q, *([failed_ids] if failed_ids else []))
+            if not rows:
+                if stats.chunks_seen == 0:
+                    log.info("embed-speech-chunks: nothing to do")
+                break
+            stats.chunks_seen += len(rows)
             log.info(
-                "batch %d: %d chunks in %d ms (server) — total %d/%d",
-                stats.batches, len(batch), elapsed_ms,
-                stats.chunks_embedded, stats.chunks_seen,
+                "embed-speech-chunks: fetched %d pending (cumulative %d)",
+                len(rows), stats.chunks_seen,
             )
+            for start in range(0, len(rows), batch_size):
+                batch = rows[start : start + batch_size]
+                texts = [r["text"] or " " for r in batch]
+                try:
+                    vecs, elapsed_ms = await _embed_batch_with_retry(
+                        client, texts, stats=stats, offset=start,
+                    )
+                except Exception as exc:
+                    stats.errors += 1
+                    consecutive_failures += 1
+                    failed_ids.extend(r["id"] for r in batch)
+                    log.warning(
+                        "embed batch failed at offset %d after %d attempts: %s "
+                        "(consecutive_failures=%d/%d)",
+                        start, EMBED_RETRY_MAX_ATTEMPTS, exc,
+                        consecutive_failures, EMBED_MAX_CONSECUTIVE_FAILURES,
+                    )
+                    if consecutive_failures >= EMBED_MAX_CONSECUTIVE_FAILURES:
+                        log.error(
+                            "embed-speech-chunks: aborting after %d consecutive "
+                            "batch failures — TEI looks dead. Remaining %d chunks "
+                            "stay NULL for next run.",
+                            consecutive_failures, len(rows) - start,
+                        )
+                        stats.aborted_consecutive_failures = True
+                        aborted = True
+                        break
+                    continue
+                if len(vecs) != len(batch):
+                    log.warning(
+                        "embed response mismatch: asked %d got %d; skipping batch",
+                        len(batch), len(vecs),
+                    )
+                    stats.errors += 1
+                    consecutive_failures += 1
+                    failed_ids.extend(r["id"] for r in batch)
+                    continue
+                consecutive_failures = 0
+
+                stats.batches += 1
+                stats.total_elapsed_ms += elapsed_ms
+
+                # Batched write via UNNEST — one UPDATE per batch instead of
+                # len(batch) separate UPDATEs. This is the throughput unlock
+                # that took end-to-end from 4.7 c/s (legacy per-row path) to
+                # 50.9 c/s, with the GPU becoming the actual bottleneck.
+                ids = [row["id"] for row in batch]
+                vec_literals = [_vec_literal(v) for v in vecs]
+
+                await db.execute(
+                    """
+                    UPDATE speech_chunks AS sc
+                       SET embedding       = v.emb::vector,
+                           embedding_model = $3,
+                           embedded_at     = now()
+                      FROM UNNEST($1::uuid[], $2::text[]) AS v(id, emb)
+                     WHERE sc.id = v.id
+                    """,
+                    ids,
+                    vec_literals,
+                    EMBED_MODEL_TAG,
+                )
+
+                stats.chunks_embedded += len(batch)
+                log.info(
+                    "batch %d: %d chunks in %d ms (server) — total %d/%d",
+                    stats.batches, len(batch), elapsed_ms,
+                    stats.chunks_embedded, stats.chunks_seen,
+                )
+            if len(rows) < fetch_n:
+                break
 
     log.info(
         "embed-speech-chunks done: seen=%d embedded=%d batches=%d errors=%d "
