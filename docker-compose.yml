@@ -16,6 +16,10 @@ services:
       dockerfile: Dockerfile
     image: sovpro-db:latest
     container_name: sw-db
+    # Parallel maintenance (HNSW index builds) allocates dynamic shared
+    # memory segments in /dev/shm; Docker's 64MB default aborts them with
+    # "could not resize shared memory segment ... No space left on device".
+    shm_size: 8gb
     environment:
       POSTGRES_DB: sovereignwatch
       POSTGRES_USER: sw
