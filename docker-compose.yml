@@ -19,7 +19,12 @@ services:
     # Parallel maintenance (HNSW index builds) allocates dynamic shared
     # memory segments in /dev/shm; Docker's 64MB default aborts them with
     # "could not resize shared memory segment ... No space left on device".
-    shm_size: 8gb
+    # Sized to hold the FULL in-memory HNSW graph during parallel builds
+    # (~4.3KB/vector at 1024-dim m=16 → ~36GB at 8.2M vectors): once the
+    # graph exceeds maintenance_work_mem the build falls to disk-bound
+    # insertion at ~1/8th speed, so keep this ≥ maintenance_work_mem + 2GB
+    # headroom while the corpus fits. Host has 61GB.
+    shm_size: 40gb
     environment:
       POSTGRES_DB: sovereignwatch
       POSTGRES_USER: sw
