@@ -12,13 +12,20 @@ committees. The two divergences are:
   2. URL path: floor lives at /hdms/file/Debates/{parl}{sess}/, committee
      at /hdms/file/Committees/{parl}{sess}/{code}/.
 
-## Discovery: operator-curated seed file
+## Discovery: pcms REST API (seed file retained as fallback)
 
-BC has no structured listing endpoint for standing-committee transcripts
-(probed exhaustively 2026-05-19 — see scripts/seeds/bc-committee-meetings.json
-for the rationale). v1 reads a JSON seed: a hand-maintained list of known
-transcript URLs per (committee_code, parliament, session). The ingester is
-idempotent on canonical_url, so re-running over the same seed is safe.
+Since 2026-07-30 discovery is automatic: `discover_meeting_refs` walks
+`api.lims.leg.bc.ca/pcms/committees/meetings?filter=previous` (the REST
+surface behind the dyn.leg.bc.ca committee SPA, mapped in
+docs/research/british-columbia.md § Committee Activity) and yields the
+same transcript URLs the seed file used to carry — every meeting back to
+1996-07-16. The 2026-05-19 "no structured listing endpoint" conclusion
+was true for the surfaces probed then (HDMS listings, LIMS GraphQL,
+Drupal JSON); the pcms namespace was found later by mining the SPA
+bundle. The legacy operator-curated seed at
+scripts/seeds/bc-committee-meetings.json still loads via `--use-seed`
+for offline re-ingest or as a manual fallback. The ingester is
+idempotent on canonical_url either way.
 
 ## Speaker resolution: chamber-wide fallback
 
@@ -446,7 +453,7 @@ def _meeting_ref_from_url(
     the filename. Returns None on parse failure (caller logs and skips)."""
     code_m = _URL_COMMITTEE_CODE_RE.search(url)
     if not code_m:
-        log.warning("seed url %s: cannot extract committee code", url)
+        log.warning("transcript url %s: cannot extract committee code", url)
         return None
     code = code_m.group("code").lower()
     filename = code_m.group("filename")
@@ -464,7 +471,7 @@ def _meeting_ref_from_url(
     try:
         url_meta = parse_mod.parse_committee_url_meta("/" + filename)
     except ValueError as exc:
-        log.warning("seed url %s: filename parse failed: %s", url, exc)
+        log.warning("transcript url %s: filename parse failed: %s", url, exc)
         return None
 
     name = STANDING_COMMITTEES.get(
@@ -528,6 +535,195 @@ def build_meeting_refs_from_seed(
     return refs
 
 
+# ── pcms API discovery ───────────────────────────────────────────────
+# The dyn.leg.bc.ca committee SPA reads a REST surface on
+# api.lims.leg.bc.ca (mapped 2026-07-30 — see docs/research/
+# british-columbia.md § Committee Activity). The meetings feed replaces
+# the operator-curated seed file: it lists every committee meeting back
+# to 1996-07-16 (50/page, startTime DESC) with the meeting's transcripts
+# in a sibling `hansardTranscripts[]` array. Transcript URL =
+# HDMS_FILE_BASE + filePath + "/" + fileName — the same URL grammar the
+# seed file carried, so discovered URLs flow through the existing
+# _meeting_ref_from_url machinery unchanged.
+#
+# Pagination gotchas (all verified live):
+#   - `enCursor` is base64 of ["start_time_desc", ["<ISO>", <meeting id>]]
+#     — craftable, so a deep walk can resume from a date watermark.
+#   - transcript `publishTime` is NULL for all pre-2010 files; the
+#     meeting's `startTime` is the only safe date watermark.
+#   - meetings with no transcripts exist (in-camera deliberations) and
+#     are skipped silently.
+#   - LAMC transcripts live under /Committees/43rd-LAMC — outside the
+#     {parl}{sess}/{code} grammar — and fail _URL_COMMITTEE_CODE_RE,
+#     which excludes them exactly as the seed convention did.
+
+PCMS_MEETINGS_URL = "https://api.lims.leg.bc.ca/pcms/committees/meetings"
+HDMS_FILE_BASE = "https://lims.leg.bc.ca/hdms/file"
+
+
+@dataclass
+class DiscoveryStats:
+    pages_fetched: int = 0
+    meetings_seen: int = 0
+    transcripts_seen: int = 0
+    refs_built: int = 0
+    skipped_unparseable: int = 0
+    oldest_meeting_seen: Optional[date] = None
+
+
+def _parse_pcms_start_time(value: object) -> Optional[datetime]:
+    """pcms timestamps are naive local ISO ('2026-07-29T10:00:00')."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+async def discover_meeting_refs(
+    client: httpx.AsyncClient,
+    *,
+    since: Optional[date] = None,
+    until: Optional[date] = None,
+    committees_filter: Optional[list[str]] = None,
+    max_pages: Optional[int] = None,
+) -> tuple[list[CommitteeMeetingRef], DiscoveryStats]:
+    """Walk the pcms meetings feed newest-first and build meeting refs.
+
+    Stops when the page's oldest meeting predates `since` (the feed is
+    startTime DESC, so every later page is older still) or when
+    `max_pages` is exhausted. Blues + Final transcripts for the same
+    (parl, sess, code, date, half) merge into ONE ref with both URL
+    slots filled, so a Final upgrade lands as an update on the same
+    canonical_url rather than a duplicate meeting.
+    """
+    stats = DiscoveryStats()
+    code_filter: Optional[set[str]] = None
+    if committees_filter:
+        code_filter = {c.lower() for c in committees_filter}
+
+    # (parliament, session, code, date, half) → merged ref
+    merged: dict[tuple[int, int, str, date, str], CommitteeMeetingRef] = {}
+    cursor: Optional[str] = None
+
+    while True:
+        if max_pages is not None and stats.pages_fetched >= max_pages:
+            break
+        url = f"{PCMS_MEETINGS_URL}?filter=previous"
+        if cursor:
+            url += f"&enCursor={cursor}"
+        r = await _get_with_retry(client, url)
+        r.raise_for_status()
+        doc = r.json()
+        stats.pages_fetched += 1
+
+        meetings = doc.get("meetings") or []
+        transcripts = doc.get("hansardTranscripts") or []
+        page_info = doc.get("pageInfo") or {}
+        stats.meetings_seen += len(meetings)
+        stats.transcripts_seen += len(transcripts)
+
+        # Meeting id → (startTime, official committee-period name). The
+        # transcript→meeting join is page-local (verified: every
+        # committeeMeetingId on a page resolves within that page).
+        meeting_index: dict[int, tuple[Optional[datetime], Optional[str]]] = {}
+        oldest_on_page: Optional[datetime] = None
+        for m in meetings:
+            started = _parse_pcms_start_time(m.get("startTime"))
+            period = m.get("committeePeriodByCommitteePeriodId") or {}
+            name = period.get("name") or None
+            if isinstance(m.get("id"), int):
+                meeting_index[m["id"]] = (started, name)
+            if started and (oldest_on_page is None or started < oldest_on_page):
+                oldest_on_page = started
+        if oldest_on_page and (
+            stats.oldest_meeting_seen is None
+            or oldest_on_page.date() < stats.oldest_meeting_seen
+        ):
+            stats.oldest_meeting_seen = oldest_on_page.date()
+
+        for t in transcripts:
+            file_path = t.get("filePath") or ""
+            file_name = t.get("fileName") or ""
+            if not file_path or not file_name:
+                stats.skipped_unparseable += 1
+                continue
+            # LAMC (Legislative Assembly Management Committee) is
+            # deliberately out of scope — administrative housekeeping,
+            # and its /Committees/{parl}-LAMC path is outside the
+            # {parl}{sess}/{code} grammar. Skip quietly so every daily
+            # run doesn't warn about an intentional exclusion.
+            if "-LAMC" in file_path:
+                stats.skipped_unparseable += 1
+                continue
+            attr = t.get("committeeTranscriptAttributeByFileId") or {}
+            meeting_id = attr.get("committeeMeetingId")
+            started, api_name = meeting_index.get(meeting_id, (None, None))
+
+            url = f"{HDMS_FILE_BASE}{file_path}/{file_name}"
+            ref = _meeting_ref_from_url(url, 0, 0)
+            if ref is None:
+                # LAMC + any future off-grammar paths land here.
+                stats.skipped_unparseable += 1
+                continue
+            if code_filter is not None and ref.committee_code not in code_filter:
+                continue
+            if since and ref.sitting_date < since:
+                continue
+            if until and ref.sitting_date > until:
+                continue
+            # The committee-period name from the API is the official
+            # full name ("Select Standing Committee on ...") — richer
+            # than the STANDING_COMMITTEES fallback and correct for
+            # historical codes the static catalog doesn't know.
+            if api_name:
+                ref.committee_name = api_name
+
+            key = (
+                ref.parliament, ref.session, ref.committee_code,
+                ref.sitting_date, ref.half,
+            )
+            existing = merged.get(key)
+            if existing is None:
+                merged[key] = ref
+                stats.refs_built += 1
+            else:
+                # Merge Blues/Final variants of the same meeting half.
+                if ref.final_url and not existing.final_url:
+                    existing.final_url = ref.final_url
+                    existing.final_filename = ref.final_filename
+                    existing.published = True
+                if ref.blues_url and not existing.blues_url:
+                    existing.blues_url = ref.blues_url
+                    existing.blues_filename = ref.blues_filename
+                if ref.issue_number and not existing.issue_number:
+                    existing.issue_number = ref.issue_number
+
+        has_next = bool(page_info.get("hasNextPage"))
+        cursor = page_info.get("endCursor") or None
+        if not has_next or not cursor:
+            break
+        # The feed is date-desc: once the whole page predates `since`,
+        # every remaining page does too.
+        if since and oldest_on_page and oldest_on_page.date() < since:
+            break
+        await asyncio.sleep(REQUEST_DELAY_SECONDS)
+
+    refs = sorted(
+        merged.values(),
+        key=lambda r: (r.sitting_date, r.half, r.committee_code),
+    )
+    log.info(
+        "pcms discovery: %d pages → %d meetings / %d transcripts → "
+        "%d refs (skipped_unparseable=%d, oldest_seen=%s)",
+        stats.pages_fetched, stats.meetings_seen, stats.transcripts_seen,
+        stats.refs_built, stats.skipped_unparseable,
+        stats.oldest_meeting_seen,
+    )
+    return refs, stats
+
+
 # ── Orchestrator ────────────────────────────────────────────────────
 
 
@@ -542,35 +738,55 @@ async def ingest_committees(
     limit_speeches: Optional[int] = None,
     committees: Optional[list[str]] = None,
     seed_path: Optional[Path] = None,
+    use_seed: bool = False,
+    max_pages: Optional[int] = None,
 ) -> IngestCommitteeStats:
     """Fetch + parse + upsert BC standing-committee transcripts.
 
     Args:
         parliament / session: target session. Used for ensure_session row;
-            actual meeting refs come from the seed file's parliament/session
-            block (overwritten with the args if different — operator's
-            choice).
+            actual meeting refs carry their own parliament/session derived
+            from each transcript URL's {parl}{sess} path segment.
         since / until: optional inclusive date window on meeting_date.
+            `since` also bounds pcms pagination — the walk stops at the
+            first page fully older than it.
         limit_meetings: cap on meetings processed (newest-N when limiting).
         limit_speeches: cap on total inserted+updated speeches.
-        committees: comma-separated committee-code filter (default = all
-            in the seed file).
-        seed_path: override scripts/seeds/bc-committee-meetings.json.
+        committees: comma-separated committee-code filter.
+        seed_path: seed JSON path (only read when use_seed=True).
+        use_seed: read the legacy operator-curated seed file instead of
+            discovering meetings from the pcms API. Kept for offline
+            re-ingest and as a manual fallback if the API surface moves.
+        max_pages: cap on pcms pages walked during discovery (50
+            meetings/page date-desc; None = walk until `since` or floor).
     """
     stats = IngestCommitteeStats()
     seed_path = seed_path or DEFAULT_SEED_PATH
 
-    refs = build_meeting_refs_from_seed(
-        seed_path,
-        committees_filter=committees,
-        since=since,
-        until=until,
-    )
+    if use_seed:
+        refs = build_meeting_refs_from_seed(
+            seed_path,
+            committees_filter=committees,
+            since=since,
+            until=until,
+        )
+    else:
+        async with httpx.AsyncClient(
+            timeout=REQUEST_TIMEOUT, headers=HEADERS, follow_redirects=True,
+        ) as discovery_client:
+            refs, _disc = await discover_meeting_refs(
+                discovery_client,
+                since=since,
+                until=until,
+                committees_filter=committees,
+                max_pages=max_pages,
+            )
     if not refs:
         log.warning(
-            "bc_committees: seed produced 0 meetings (path=%s parliament=%d "
-            "session=%d committees=%s since=%s until=%s)",
-            seed_path, parliament, session, committees, since, until,
+            "bc_committees: %s produced 0 meetings (parliament=%d "
+            "session=%d committees=%s since=%s until=%s max_pages=%s)",
+            f"seed {seed_path}" if use_seed else "pcms discovery",
+            parliament, session, committees, since, until, max_pages,
         )
         return stats
 
@@ -602,10 +818,10 @@ async def ingest_committees(
 
     log.info(
         "bc_committees: processing %d meetings (parliament=%d session=%d, "
-        "committees=%s, seed=%s)",
+        "committees=%s, source=%s)",
         len(refs), parliament, session,
         committees or "ALL",
-        seed_path,
+        f"seed:{seed_path}" if use_seed else "pcms-api",
     )
 
     async with httpx.AsyncClient(

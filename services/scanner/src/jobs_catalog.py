@@ -165,7 +165,7 @@ COMMANDS: dict[str, dict[str, Any]] = {
         ],
     },
     "check-bc-committees-freshness": {
-        "description": "Dead-canary: per BC standing committee, report days since last meeting in our DB. Prints table to stdout and emails admin when any committee crosses the threshold (default 21 days). BC committees lack an auto-discovery API; this surfaces a stale seed file at scripts/seeds/bc-committee-meetings.json before it becomes a silent ingest gap.",
+        "description": "SUPERSEDED 2026-07-30: ingest-bc-committees now auto-discovers meetings from the pcms API, so a stale seed file can no longer cause a silent ingest gap; the weekly schedule was disabled. Kept for manual audits: per BC standing committee, report days since last meeting in our DB (emails admin when any crosses the threshold, default 21 days).",
         "cli": "check-bc-committees-freshness",
         "category": "maintenance",
         "args": [
@@ -178,7 +178,7 @@ COMMANDS: dict[str, dict[str, Any]] = {
         ],
     },
     "ingest-bc-committees": {
-        "description": "Pull BC standing-committee transcripts (HTML from lims.leg.bc.ca/hdms/file/Committees) into `speeches` with speech_type='committee'. Discovery driven by scripts/seeds/bc-committee-meetings.json (BC has no structured listing API; see module docstring).",
+        "description": "Pull BC standing-committee transcripts (HTML from lims.leg.bc.ca/hdms/file/Committees) into `speeches` with speech_type='committee'. Discovery walks the pcms REST API on api.lims.leg.bc.ca (every meeting back to 1996); --use-seed reverts to the legacy scripts/seeds/bc-committee-meetings.json.",
         "cli": "ingest-bc-committees",
         "category": "hansard",
         "args": [
@@ -197,9 +197,13 @@ COMMANDS: dict[str, dict[str, Any]] = {
             {"name": "limit_speeches", "type": "int", "required": False,
              "help": "Cap on TOTAL speeches ingested this run."},
             {"name": "committees", "type": "str", "required": False,
-             "help": "Optional comma-separated committee codes (e.g. 'fgs,cay'). Default: all in seed file."},
+             "help": "Optional comma-separated committee codes (e.g. 'fgs,cay'). Default: all discovered."},
             {"name": "seed_file", "type": "str", "required": False,
-             "help": "Override seed JSON path. Default: scripts/seeds/bc-committee-meetings.json."},
+             "help": "Seed JSON path (used with use_seed). Default: scripts/seeds/bc-committee-meetings.json."},
+            {"name": "use_seed", "type": "bool", "required": False,
+             "help": "Read the legacy seed file instead of discovering meetings from the pcms API."},
+            {"name": "max_pages", "type": "int", "required": False,
+             "help": "Cap pcms discovery pages (50 meetings/page date-desc; ~66 pages reach the 1996 floor)."},
         ],
     },
     "ingest-bc-hansard": {

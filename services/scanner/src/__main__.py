@@ -3456,28 +3456,35 @@ def cmd_ingest_ab_committees(
               help="Optional comma-separated committee codes (e.g. 'fgs,cay'). "
                    "Default: all in seed file.")
 @click.option("--seed-file", "seed_file", type=str, default=None,
-              help="Override seed JSON path. Default: scripts/seeds/"
-                   "bc-committee-meetings.json")
+              help="Seed JSON path (used with --use-seed). Default: "
+                   "scripts/seeds/bc-committee-meetings.json")
+@click.option("--use-seed", "use_seed", is_flag=True, default=False,
+              help="Read the legacy operator-curated seed file instead of "
+                   "discovering meetings from the pcms API.")
+@click.option("--max-pages", "max_pages", type=int, default=None,
+              help="Cap pcms discovery pages (50 meetings/page, date-desc; "
+                   "~66 pages reach the 1996 floor). Default: walk until "
+                   "--since or the floor.")
 @click.pass_context
 def cmd_ingest_bc_committees(
     ctx: click.Context, parliament, session, since, since_days, until,
-    limit_meetings, limit_speeches, committees, seed_file,
+    limit_meetings, limit_speeches, committees, seed_file, use_seed,
+    max_pages,
 ) -> None:
     """Ingest BC standing-committee transcripts (HTML from lims.leg.bc.ca/hdms/file/Committees).
 
-    Lands rows in `speeches` with `speech_type='committee'`. v1 uses an
-    operator-curated seed file (scripts/seeds/bc-committee-meetings.json)
-    for transcript-URL discovery because BC has no structured listing API
-    for standing-committee meetings — see the module docstring for the
-    probe rationale.
+    Lands rows in `speeches` with `speech_type='committee'`. Meeting
+    discovery walks the pcms REST API on api.lims.leg.bc.ca (every
+    meeting back to 1996; see docs/research/british-columbia.md
+    § Committee Activity). --use-seed switches back to the legacy
+    operator-curated seed file at scripts/seeds/bc-committee-meetings.json.
 
-    Speaker resolution falls back to chamber-wide BC lookup since
-    `politician_committees` has no BC rows; witness over-attribution is
-    a known v1 limitation that lands when membership ingest lands.
+    Speaker resolution is committee-restricted where politician_committees
+    rows exist, chamber-wide fallback otherwise.
 
     When --parliament/--session are omitted, resolves the current BC
-    session from legislative_sessions. The seed file's own parliament/
-    session block wins on mismatch (with a warning).
+    session from legislative_sessions; each transcript URL's own
+    {parl}{sess} path segment wins per-meeting.
     """
     from pathlib import Path as _Path
     from .legislative.bc_committees import (
@@ -3520,6 +3527,8 @@ def cmd_ingest_bc_committees(
             limit_speeches=limit_speeches,
             committees=committees_list,
             seed_path=seed_path,
+            use_seed=use_seed,
+            max_pages=max_pages,
         )
         console.print(
             f"[green]ingest-bc-committees[/green]: "
