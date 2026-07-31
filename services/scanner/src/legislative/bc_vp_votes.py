@@ -205,7 +205,11 @@ def _norm_name(s: str) -> str:
     s = unicodedata.normalize("NFKD", s or "")
     s = "".join(c for c in s if not unicodedata.combining(c))
     s = s.replace("’", "'").replace("`", "'")
-    return _WS_RE.sub(" ", s.lower()).strip()
+    s = s.lower()
+    # "B.Jones" / "K.Jones" print with no space after the initial —
+    # insert one so the initial-token splitter can see it.
+    s = re.sub(r"\.(?=[a-z])", ". ", s)
+    return _WS_RE.sub(" ", s).strip()
 
 
 # One to three initials in one token: "r", "r.", "g.f.", "j.d".
