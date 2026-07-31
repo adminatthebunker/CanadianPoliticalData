@@ -614,7 +614,9 @@ Trade-off: plain SQL gzipped is **single-threaded on restore**. On the live 124 
 
 ### Path B — fast parallel snapshot (use for the live DB)
 
-`pg_dump` directory format with parallel workers and no compression. Output: one file per table, restorable via `pg_restore -j N` for parallel data load + index build. This is what you want for a full DB backup you might actually need to restore in a hurry.
+`pg_dump` directory format with parallel workers and **per-segment zstd compression** (`--compress=zstd:N`, PG16+). Output: one compressed file per table, restorable via `pg_restore -j N` for parallel data load + index build — pg_restore decompresses transparently, so this is still what you want for a full DB backup you might actually need to restore in a hurry.
+
+> **Why compressed (changed 2026-07-31):** the original no-compression design staged ~390 GB per night once the DB passed 250 GB, and the transient two-staging-dirs peak during compaction filled the 1.8 TB Internal NVMe on 2026-07-31 — killing that night's backup *and* a concurrent ingest with `DiskFullError`. Compressed staging is ~45 GB/night; restore cost is a few extra CPU-minutes of decompression, parallelised across `-j` workers.
 
 **Storage layout:**
 
@@ -631,7 +633,7 @@ The runbook below is wrapped by `scripts/backup-database.sh` and runs daily from
 30 4 * * * /home/bunker-admin/sovpro/scripts/backup-database.sh >/dev/null 2>&1
 ```
 
-The script flock-guards itself, writes a per-run log next to the dump (`sovereignwatch-<TS>.log`), validates the new dump with `pg_restore --list` before touching any older one, then **demotes prior uncompressed dumps to `.tar.zst` (zstd -19)** and prunes anything beyond `BACKUP_RETENTION` (default 7) total units. Latest dump always stays uncompressed and restore-ready; older history is compressed to fit the internal drive.
+The script flock-guards itself, writes a per-run log next to the dump (`sovereignwatch-<TS>.log`), validates the new dump with `pg_restore --list` before touching any older one, then **demotes prior directory dumps to `.tar.zst`** and prunes anything beyond `BACKUP_RETENTION` (default 7) total units. Latest dump always stays as a directory dump, directly restore-ready; older history is bundled into single-file archives for tidy replication.
 
 Override knobs via env vars: `BACKUP_DEST`, `BACKUP_RETENTION`, `BACKUP_COMPRESS_LEVEL`, `BACKUP_PARALLEL_JOBS`, `SOVPRO_REPO`. To restore a compacted backup, `tar -I zstd -xf sovereignwatch-<TS>.tar.zst` first, then follow the directory-format restore steps below.
 
@@ -662,7 +664,7 @@ DEST="/media/bunker-admin/Internal/canadian-political-data-backups"
 docker exec sw-db pg_dumpall -U sw --globals-only \
   > "$DEST/sovereignwatch-$TS.globals.sql"
 
-# 3. Main dump — parallel directory format, no compression, via a throwaway sidecar
+# 3. Main dump — parallel directory format, zstd-compressed, via a throwaway sidecar
 docker run --rm \
   --name "sw-backup-$TS" \
   --network sovpro_sw \
@@ -670,7 +672,7 @@ docker run --rm \
   -e PGPASSWORD="$(grep '^DB_PASSWORD=' /home/bunker-admin/sovpro/.env | cut -d= -f2-)" \
   postgres:16 \
   pg_dump -h db -U sw -d sovereignwatch \
-          -Fd -j 8 -Z 0 \
+          -Fd -j 8 --compress=zstd:3 \
           -f "/backup/sovereignwatch-$TS.d" \
           --verbose
 

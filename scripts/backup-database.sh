@@ -3,13 +3,21 @@
 #
 # Daily Postgres backup automation for SovereignWatch / Canadian Political Data.
 # Mechanical translation of the runbook in docs/operations.md (Path B — fast
-# parallel snapshot). Latest dump stays uncompressed and restore-ready;
+# parallel snapshot). Latest dump stays restore-ready as a directory dump;
 # older dumps are demoted to .tar.zst. Designed to run from cron.
+#
+# 2026-07-31: the dump itself is now zstd-compressed IN the directory
+# format (pg_dump -Fd --compress=zstd:N, PG16+). Before this, the latest
+# dump staged uncompressed — ~390GB at a 258GB DB — and the transient
+# two-staging-dirs peak during compaction filled the 1.8TB Internal NVMe
+# on 2026-07-31, killing that night's run and a concurrent ingest.
+# Compressed directory dumps stay directly pg_restore-able (and still
+# restore in parallel with -j); nightly staging is now ~45GB.
 #
 # Tuning knobs (resolved as: process env > $SOVPRO_REPO/.env > code default):
 #   BACKUP_DEST            target directory
-#   BACKUP_RETENTION       total dumps kept (1 uncompressed + N-1 compacted)
-#   BACKUP_COMPRESS_LEVEL  zstd level for compaction (1..19)
+#   BACKUP_RETENTION       total dumps kept (1 directory dump + N-1 compacted)
+#   BACKUP_COMPRESS_LEVEL  zstd level for BOTH the dump and compaction (1..19)
 #   BACKUP_PARALLEL_JOBS   pg_dump -j value
 #   SOVPRO_REPO            path to the sovpro checkout (for git SHA + .env)
 #
@@ -145,8 +153,10 @@ log "dumping globals (sw role + cluster config)"
 docker exec sw-db pg_dumpall -U sw --globals-only > "$GLOBALS" \
     || fail "pg_dumpall --globals-only failed"
 
-# 3. Main dump — parallel directory format, no compression, via throwaway sidecar
-log "starting pg_dump (-Fd -j $BACKUP_PARALLEL_JOBS -Z 0)"
+# 3. Main dump — parallel directory format, zstd-compressed per segment,
+# via throwaway sidecar. Compressed -Fd dumps restore exactly like
+# uncompressed ones (pg_restore decompresses transparently, -j works).
+log "starting pg_dump (-Fd -j $BACKUP_PARALLEL_JOBS --compress=zstd:$BACKUP_COMPRESS_LEVEL)"
 DUMP_START="$(date -u +%s)"
 docker run --rm \
     --name "sw-backup-$TS" \
@@ -155,7 +165,7 @@ docker run --rm \
     -e PGPASSWORD="$DB_PASSWORD" \
     postgres:16 \
     pg_dump -h db -U sw -d sovereignwatch \
-            -Fd -j "$BACKUP_PARALLEL_JOBS" -Z 0 \
+            -Fd -j "$BACKUP_PARALLEL_JOBS" --compress="zstd:$BACKUP_COMPRESS_LEVEL" \
             -f "/backup/sovereignwatch-$TS.d" \
             --verbose >>"$LOG_FILE" 2>&1 \
     || fail "pg_dump failed (see log)"
@@ -189,7 +199,7 @@ COMPLETED_UTC="$(date -u +%Y%m%dT%H%M%SZ)"
     echo "dump_segments: $DUMP_SEGMENTS"
     echo "toc_entries: $TOC_ENTRIES"
     echo "globals_size_bytes: $GLOBALS_SIZE_BYTES"
-    echo "dump_format: directory (-Fd), parallel_jobs: $BACKUP_PARALLEL_JOBS, compression: 0 (none)"
+    echo "dump_format: directory (-Fd), parallel_jobs: $BACKUP_PARALLEL_JOBS, compression: zstd:$BACKUP_COMPRESS_LEVEL"
     echo "elapsed_seconds: $ELAPSED_SECONDS"
     echo "completed_utc: $COMPLETED_UTC"
     echo "exit_code: 0"
