@@ -206,6 +206,7 @@ def parse_divisions(html: str) -> list[ParsedDivision]:
 def _norm_name(s: str) -> str:
     s = unicodedata.normalize("NFKD", s or "")
     s = "".join(c for c in s if not unicodedata.combining(c))
+    s = s.replace("\xa0", " ")   # NBSP survives inside cell names
     s = s.replace("’", "'").replace("`", "'")
     s = s.lower()
     # "B.Jones" / "K.Jones" print with no space after the initial —
