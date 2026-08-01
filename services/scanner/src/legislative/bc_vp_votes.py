@@ -122,8 +122,10 @@ def _names_from_cells(fragment: str) -> list[str]:
         if re.fullmatch(r"[\d\s—–-]+", s):
             continue
         # Section markers / headers leaking through table structure:
-        # "(IN COMMITTEE -- SECTION A)" etc.
+        # "(IN COMMITTEE -- SECTION A)" etc.; stray entity fragments.
         if "(" in s or "--" in s or len(s) > 40:
+            continue
+        if "&" in s or "nbsp" in s.lower():
             continue
         names.append(s)
     return names
@@ -209,6 +211,9 @@ def _norm_name(s: str) -> str:
     # "B.Jones" / "K.Jones" print with no space after the initial —
     # insert one so the initial-token splitter can see it.
     s = re.sub(r"\.(?=[a-z])", ". ", s)
+    # Hyphen ↔ space drift: V&P prints "Halsey Brandt" where the roster
+    # stores "Halsey-Brandt". Fold both to spaces.
+    s = s.replace("-", " ")
     return _WS_RE.sub(" ", s).strip()
 
 
