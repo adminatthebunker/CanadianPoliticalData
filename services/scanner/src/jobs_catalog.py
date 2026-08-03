@@ -177,6 +177,15 @@ COMMANDS: dict[str, dict[str, Any]] = {
              "help": "Send email even when no committees are stale (audit cadence)."},
         ],
     },
+    "check-ingest-freshness": {
+        "description": "Sentinel: per jurisdiction, compare MAX(bill_events.event_date) against MAX(speeches.spoken_at). A recess quiets both surfaces; a broken Hansard pipeline shows bills advancing with no speeches behind them. Exits non-zero (job shows FAILED) when any jurisdiction's lag exceeds its threshold (default 30 days; publication-lag overrides for NB/NU live in legislative/freshness.py). Added after the 2026-08-02 audit found QC/NB/NU holes hidden behind 'succeeded, sittings=0' daily runs.",
+        "cli": "check-ingest-freshness",
+        "category": "maintenance",
+        "args": [
+            {"name": "threshold_days", "type": "int", "required": False,
+             "help": "Default breach threshold in days. Default: 30."},
+        ],
+    },
     "ingest-bc-vp-votes": {
         "description": "Ingest BC recorded divisions from Votes & Proceedings (lims.leg.bc.ca/pdms/votes-and-proceedings, P35/1992+). Parses Yeas/Nays division tables into `votes` (source_system='votes-bc-vp') + `vote_positions` with date-windowed surname resolution. Coexists with the Hansard-regex extract-bc-votes; distinct source_system.",
         "cli": "ingest-bc-vp-votes",

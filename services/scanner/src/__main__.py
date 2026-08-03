@@ -909,23 +909,32 @@ def cmd_fetch_ns_bill_pages(ctx: click.Context, limit, force, delay_secs, jitter
 
 
 @cli.command("discover-on-bills")
-@click.option("--parliament", type=int, default=44)
-@click.option("--session", type=int, default=1)
+@click.option("--parliament", type=int, default=None,
+              help="Explicit parliament. Omit (with --session omitted) to "
+                   "auto-resolve the current session and probe for "
+                   "successors after a prorogation/election.")
+@click.option("--session", type=int, default=None)
 @click.option("--all-sessions", is_flag=True,
               help="Walk every ON session in legislative_sessions. "
                    "Overrides --parliament/--session.")
 @click.pass_context
 def cmd_discover_on_bills(
-    ctx: click.Context, parliament: int, session: int, all_sessions: bool,
+    ctx: click.Context, parliament, session, all_sessions: bool,
 ) -> None:
     """Enumerate Ontario bills from ola.org session index (phase 1).
 
-    With --all-sessions, walks every (parliament, session) pair already
-    in legislative_sessions for ON. Idempotent on source_id. Use this
-    after a one-time historical-roster ingest has populated the
-    sessions table; subsequent runs only pick up newly-listed bills.
+    With no flags: DB-latest session + successor probe (self-healing
+    across prorogations). With --all-sessions, walks every (parliament,
+    session) pair already in legislative_sessions for ON. Idempotent on
+    source_id; subsequent runs only pick up newly-listed bills.
     """
-    from .legislative.on_bills import discover_ola_bills_all_sessions
+    from .legislative.on_bills import (
+        discover_ola_bills_all_sessions,
+        discover_ola_bills_current,
+    )
+
+    if (parliament is None) != (session is None):
+        raise click.UsageError("--parliament and --session must be given together")
 
     async def _wrap(db: Database) -> None:
         if all_sessions:
@@ -934,6 +943,18 @@ def cmd_discover_on_bills(
                 f"[green]discover-on-bills[/green] (all sessions): "
                 f"sessions={stats['sessions_touched']} "
                 f"bills={stats['bills']}"
+            )
+        elif parliament is None:
+            stats = await discover_ola_bills_current(db)
+            console.print(
+                f"auto-resolved current ON session: "
+                f"P{stats['parliament']}-S{stats['session']}"
+            )
+            console.print(
+                f"[green]discover-on-bills[/green] "
+                f"P{stats['parliament']}-S{stats['session']}: "
+                f"bills={stats['bills']} "
+                f"successor_bills={stats['successor_bills']}"
             )
         else:
             stats = await discover_ola_bills(
@@ -3682,6 +3703,55 @@ def cmd_check_bc_committees_freshness(
             f"committees={len(rows)} stale={len(stale)} "
             f"threshold_days={threshold_days} emailed={emailed}"
         )
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
+@cli.command("check-ingest-freshness")
+@click.option("--threshold-days", type=int, default=None,
+              help="Default breach threshold in days for jurisdictions "
+                   "without a publication-lag override. Default: 30.")
+@click.pass_context
+def cmd_check_ingest_freshness(ctx: click.Context, threshold_days) -> None:
+    """Sentinel: flag jurisdictions whose speeches lag their bill events.
+
+    Bill events and Hansard come from different upstream surfaces, so a
+    recess quiets both while a broken Hansard pipeline shows bills
+    advancing with no speeches behind them. Exits non-zero on any breach
+    so the weekly run surfaces as a FAILED job in the admin panel — the
+    counter to "succeeded with sittings=0" holes (QC/NB/NU, 2026-08-02).
+    """
+    from .legislative.freshness import (
+        DEFAULT_THRESHOLD_DAYS,
+        check_ingest_freshness,
+    )
+
+    effective_threshold = (
+        threshold_days if threshold_days is not None else DEFAULT_THRESHOLD_DAYS
+    )
+
+    async def _wrap(db: Database) -> None:
+        rows = await check_ingest_freshness(
+            db, threshold_days=effective_threshold,
+        )
+        breaches = [r for r in rows if r.breached]
+        for r in rows:
+            marker = "[red]BREACH[/red]" if r.breached else "[green]ok[/green]"
+            console.print(
+                f"{marker} {r.jurisdiction}: latest_speech={r.latest_speech} "
+                f"latest_bill_event={r.latest_bill_event} "
+                f"lag={r.lag_days}d threshold={r.threshold_days}d"
+            )
+        console.print(
+            f"check-ingest-freshness: jurisdictions={len(rows)} "
+            f"breaches={len(breaches)}"
+        )
+        if breaches:
+            raise SystemExit(
+                f"check-ingest-freshness: {len(breaches)} jurisdiction(s) "
+                f"breached: {[r.jurisdiction for r in breaches]} — a Hansard "
+                f"pipeline is likely silently broken; run its ingest with a "
+                f"wide --since and check session auto-resolution."
+            )
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 
 

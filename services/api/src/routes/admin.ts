@@ -111,6 +111,12 @@ const COMMAND_CATALOG = [
       { name: "always_email", type: "bool", required: false, help: "Send email even when no committees are stale (audit cadence)." },
     ],
   },
+  { key: "check-ingest-freshness", category: "maintenance",
+    description: "Sentinel: per jurisdiction, compare MAX(bill_events.event_date) vs MAX(speeches.spoken_at). Exits non-zero (job shows FAILED) when lag exceeds threshold (default 30d; NB/NU publication-lag overrides in scanner freshness.py). Catches 'succeeded, sittings=0' Hansard holes.",
+    args: [
+      { name: "threshold_days", type: "int", required: false, help: "Default breach threshold in days. Default: 30." },
+    ],
+  },
   { key: "ingest-bc-vp-votes", category: "hansard",
     description: "Ingest BC recorded divisions from Votes & Proceedings (pdms, P35/1992+): Yeas/Nays division tables into `votes` + `vote_positions` with date-windowed surname resolution. Coexists with the Hansard-regex extract-bc-votes.",
     args: [

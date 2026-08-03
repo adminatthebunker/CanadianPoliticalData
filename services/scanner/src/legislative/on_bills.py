@@ -66,12 +66,18 @@ _HEADERS = {
 # ─────────────────────────────────────────────────────────────────────
 
 async def discover_ola_bills(
-    db: Database, *, parliament: int, session: int
+    db: Database, *, parliament: int, session: int, require_bills: bool = False
 ) -> dict[str, int]:
     """Scrape the session index and upsert minimal bill rows.
 
     Idempotent: source_id '<system>:<parliament>-<session>:bill-<N>' is
     stable across runs.
+
+    require_bills: when True, skip the session upsert if the index lists
+    zero bills. Used by the successor probe in
+    discover_ola_bills_current — a nonexistent session that soft-200s to
+    a landing page must not create a phantom legislative_sessions row,
+    or current_session() would resolve to it on the next run.
     """
     url = INDEX_TEMPLATE.format(p=parliament, s=session)
     async with httpx.AsyncClient(headers=_HEADERS, follow_redirects=True) as client:
@@ -92,6 +98,9 @@ async def discover_ola_bills(
 
     log.info("discover_ola_bills: %d bills in P%d-S%d", len(bill_numbers), parliament, session)
 
+    if require_bills and not bill_numbers:
+        return {"session_id": 0, "bills": 0}
+
     session_id = await _upsert_session(db, parliament, session)
     stats = {"session_id": 1, "bills": 0}
     for n in bill_numbers:
@@ -104,6 +113,50 @@ async def discover_ola_bills(
         )
         stats["bills"] += 1
     return stats
+
+
+async def discover_ola_bills_current(db: Database) -> dict[str, int]:
+    """Discover bills for the DB-latest ON session, then probe for successors.
+
+    legislative_sessions only learns new ON sessions from this discovery
+    step, so resolving purely from the DB would pin us to the old session
+    forever at a prorogation or election. After ingesting the DB-latest
+    session, probe the two possible successors — (p, s+1) for a new
+    session, (p+1, 1) for a new parliament — and ingest whichever lists
+    at least one bill. require_bills=True keeps a soft-200 landing page
+    from creating a phantom session row.
+
+    A probe that 404s or lists zero bills is normal (no successor yet);
+    the nightly re-run picks the new session up the day its index appears.
+    """
+    from .current_session import current_session
+
+    parliament, session = await current_session(
+        db, level="provincial", province_territory="ON",
+    )
+    stats = await discover_ola_bills(db, parliament=parliament, session=session)
+    out = {
+        "parliament": parliament,
+        "session": session,
+        "bills": stats["bills"],
+        "successor_bills": 0,
+    }
+    for p2, s2 in ((parliament, session + 1), (parliament + 1, 1)):
+        try:
+            sub = await discover_ola_bills(
+                db, parliament=p2, session=s2, require_bills=True,
+            )
+        except httpx.HTTPStatusError:
+            continue
+        if sub["bills"]:
+            log.info(
+                "discover_ola_bills_current: successor session P%d-S%d "
+                "found with %d bills", p2, s2, sub["bills"],
+            )
+            out["parliament"], out["session"] = p2, s2
+            out["successor_bills"] = sub["bills"]
+            break
+    return out
 
 
 async def discover_ola_bills_all_sessions(

@@ -27,6 +27,7 @@ enough to create a new bill row from scratch).
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from datetime import date, datetime
@@ -43,6 +44,12 @@ log = logging.getLogger(__name__)
 RSS_URL = "https://nslegislature.ca/legislative-business/bills-statutes/rss"
 SOURCE_SYSTEM = "socrata-ns"  # we merge into the existing NS rows
 REQUEST_TIMEOUT = 30
+
+# The nslegislature.ca F5 WAF intermittently serves an HTML challenge page
+# in place of the feed (observed ~3×/week as ET.ParseError at line 1).
+# Retry with backoff; the challenge usually clears within a minute.
+FETCH_ATTEMPTS = 3
+RETRY_BASE_DELAY_SECS = 20.0
 
 _BILL_URL_RE = re.compile(
     r"/bills/(?P<assembly>[\w-]+)/bill-(?P<number>[\w-]+)"
@@ -120,17 +127,50 @@ def _parse_status(desc: str) -> tuple[Optional[str], Optional[date]]:
     return m.group("status").strip(), d
 
 
+def _looks_like_xml(payload: bytes) -> bool:
+    head = payload.lstrip()[:64].lower()
+    return head.startswith(b"<?xml") or head.startswith(b"<rss")
+
+
+async def _fetch_feed_with_retry(client: httpx.AsyncClient) -> bytes:
+    """GET the RSS feed, retrying past WAF challenge pages.
+
+    A challenge response is HTTP 200 with HTML, so status checks alone
+    don't catch it — sniff the payload before handing it to the XML
+    parser.
+    """
+    last_head = b""
+    for attempt in range(1, FETCH_ATTEMPTS + 1):
+        r = await client.get(RSS_URL, timeout=REQUEST_TIMEOUT)
+        r.raise_for_status()
+        if _looks_like_xml(r.content):
+            return r.content
+        last_head = r.content.lstrip()[:120]
+        if attempt < FETCH_ATTEMPTS:
+            delay = RETRY_BASE_DELAY_SECS * (2 ** (attempt - 1))
+            log.warning(
+                "ns_rss: non-XML response (WAF challenge?) on attempt %d/%d "
+                "— retrying in %.0fs", attempt, FETCH_ATTEMPTS, delay,
+            )
+            await asyncio.sleep(delay)
+    raise RuntimeError(
+        f"ns_rss: NS WAF challenge page served on all {FETCH_ATTEMPTS} "
+        f"attempts (payload head: {last_head!r}). Feed content unchanged "
+        f"upstream — safe to let tomorrow's run retry."
+    )
+
+
 async def ingest_ns_rss(db: Database) -> dict[str, int]:
     """Fetch the NS bills RSS and refresh matching bill rows."""
     async with httpx.AsyncClient(follow_redirects=True) as client:
-        r = await client.get(RSS_URL, timeout=REQUEST_TIMEOUT)
-        r.raise_for_status()
-        xml = r.content
+        xml = await _fetch_feed_with_retry(client)
 
     root = ET.fromstring(xml)
     items = root.findall(".//item")
     stats = {"items": len(items), "matched": 0, "updated": 0,
              "events_added": 0, "unmatched": 0}
+    assemblies_matched: set[str] = set()
+    assemblies_unmatched: set[str] = set()
 
     for item in items:
         parsed = _parse_item(item)
@@ -144,8 +184,10 @@ async def ingest_ns_rss(db: Database) -> dict[str, int]:
         )
         if bill_id is None:
             stats["unmatched"] += 1
+            assemblies_unmatched.add(parsed["assembly"])
             continue
         stats["matched"] += 1
+        assemblies_matched.add(parsed["assembly"])
 
         status_text, status_date = _parse_status(parsed["description"] or "")
         status_changed_at = (
@@ -194,6 +236,20 @@ async def ingest_ns_rss(db: Database) -> dict[str, int]:
                     orjson.dumps({"source": "nslegislature-rss"}).decode(),
                 )
                 stats["events_added"] += 1
+
+    # New-assembly canary: RSS referencing an assembly with zero matched
+    # bills means Socrata bootstrap hasn't run for it — the RSS can't
+    # create bill rows from scratch, so until `ingest-ns-bills` runs for
+    # the new assembly, every daily refresh silently no-ops. Scream.
+    novel = assemblies_unmatched - assemblies_matched
+    if novel:
+        log.error(
+            "ns_rss: RSS references assembl%s %s with NO matching bills in "
+            "DB — a new NS General Assembly has likely started. Run "
+            "`ingest-ns-bills` to bootstrap it, or every daily RSS refresh "
+            "will keep no-opping.",
+            "y" if len(novel) == 1 else "ies", sorted(novel),
+        )
 
     log.info(
         "ns_rss: items=%d matched=%d updated=%d events_added=%d unmatched=%d",
