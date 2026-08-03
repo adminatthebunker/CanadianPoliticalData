@@ -34,6 +34,8 @@ The earlier hopeful note about `gnb.socrata.com` carrying NB legislative data tu
 
 ## Hansard / Debates ✅ LIVE (2026-04-22)
 
+> **2026-08-02 — publication-lag hole backfilled.** NB publishes transcripts 2–3 months after the sitting; the old daily `since_days=14` window filtered on *sitting date*, so late-published transcripts landed permanently outside it (speeches were stuck at 2026-03-27 while bill events ran to 2026-06-12). Wide re-run (`--since 2026-03-01`) recovered 14 sittings / 585 new speeches through 2026-05-14; the daily schedule now runs with empty args (full current-session re-list). One upstream artifact: `61\2\hansard\33 2026-05-05b.pdf` is a corrupt PDF (`pdftotext: Couldn't find trailer dictionary`) — retry on a future pass; if it stays broken, that sitting needs the Legislative Library. `check-ingest-freshness` carries a 150-day NB threshold for the legitimate lag.
+
 - **Primary source:** HTML listing at `/en/house-business/hansard/{L}/{S}` → per-sitting PDFs at `/content/house_business\{L}\{S}\hansard\{seq} {YYYY-MM-DD}{b|bil}.pdf`.
   - Path literal backslashes (`\`) are served verbatim; the scanner URL-encodes them as `%5C` on fetch.
   - Filename suffix drifts between `b.pdf` (older) and `bil.pdf` (newer). Listing regex matches both.

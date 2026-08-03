@@ -35,6 +35,8 @@ These URLs were the user's initial research handoff for QC and seeded the pipeli
 
 ## Hansard / Debates ✅ LIVE (2026-04-20, sessions 39-1 → 43-2)
 
+> **2026-08-02 — 43-3 hole found + fixed.** Session 43-3 opened 2026-05-05 and its dropdown label carries a `Session en cours - ` prefix that the `_SESSION_OPTION_RE` in `qc_hansard.py` didn't tolerate — discovery raised, the Wayback fallback returned zero sittings, and the daily job reported `succeeded, sittings=0` for ~3 months (the bug was invisible at build time because QC was *between* sessions mid-April: no option carried the prefix then). Regex fixed to allow a prefix; the dropdown-miss error (`SessionNotInDropdownError`) no longer falls back to Wayback. Backfilled 2026-08-02: 17 sittings / 3,961 speeches (43-3, 2026-05-06 → 2026-06-12) + 68 new votes; 43-2's 2026-04-02 end was verified complete (prorogation was 2026-04-08; no sittings after 04-02). The corpus table below predates 43-3 and its totals are stale — trust the DB.
+
 **Final corpus (8 sessions, 2009-01-13 → 2026-04-02):**
 
 | Session | Speeches | Sittings | Politician-resolved | Date range |

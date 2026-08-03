@@ -38,6 +38,8 @@ NU has **consensus government** — 22 non-partisan MLAs. No political parties, 
 - **Difficulty (1–5):** 2.
 - **Notes:** Bilingual publication (Inuktitut + English). Records from 1999-04-01.
 
+> **2026-08-02 — upstream publication lag verified, not a pipeline bug.** Full-listing re-scan (all 58 upstream PDFs) confirmed the newest published transcript is 2024-05-31, while NU bill events run to 2026-06-11 (741-day lag). Upload paths date the publication delay: May-2024 sittings were uploaded in `/sites/default/files/2025-08/` and `2025-09/` — a ~15-month lag. The old daily `since_days=14` schedule could therefore **never** ingest anything from NU (transcripts always arrive with sitting dates far outside the window); the schedule now runs with empty args (full listing re-scan, etag-cached). `check-ingest-freshness` carries an 800-day NU threshold — fires only if the lag grows past known-good. Open question for a future research pass: whether 2025+ transcripts will appear on `/hansard` or whether the current (post-2025-election) assembly publishes elsewhere.
+
 ## Voting Records / Divisions
 
 - **Source URL(s):** Hansard + Legislative Library proceedings
