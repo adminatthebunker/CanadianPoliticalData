@@ -41,10 +41,10 @@ INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) V
  'ingest-federal-bills', '{}'::jsonb,
  '0 11 * * *', true, 'daily-ingest-rollout'),
 ('Federal Hansard daily ingest',
- 'ingest-federal-hansard', '{"since_days": 14}'::jsonb,
+ 'ingest-federal-hansard', '{}'::jsonb,
  '15 11 * * *', true, 'daily-ingest-rollout'),
 ('Federal committee evidence daily ingest',
- 'ingest-federal-committees', '{"since_days": 14}'::jsonb,
+ 'ingest-federal-committees', '{}'::jsonb,
  '20 11 * * *', true, 'daily-ingest-rollout'),
 ('Federal votes extraction',
  'extract-federal-votes', '{}'::jsonb,
@@ -76,10 +76,10 @@ INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) V
  'ingest-bc-bills', '{}'::jsonb,
  '0 14 * * *', true, 'daily-ingest-rollout'),
 ('BC Hansard daily ingest',
- 'ingest-bc-hansard', '{"since_days": 14}'::jsonb,
+ 'ingest-bc-hansard', '{}'::jsonb,
  '15 14 * * *', true, 'daily-ingest-rollout'),
 ('BC committee transcripts daily ingest',
- 'ingest-bc-committees', '{"since_days": 14}'::jsonb,
+ 'ingest-bc-committees', '{}'::jsonb,
  '25 14 * * *', true, 'daily-ingest-rollout'),
 -- Weekly dead-canary: surface stale BC committee seeds before they become
 -- a silent ingest gap. BC has no auto-discovery API; if the operator
@@ -105,10 +105,10 @@ INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) V
  'ingest-ab-bills', '{}'::jsonb,
  '0 15 * * *', true, 'daily-ingest-rollout'),
 ('AB Hansard daily ingest',
- 'ingest-ab-hansard', '{"since_days": 14}'::jsonb,
+ 'ingest-ab-hansard', '{}'::jsonb,
  '15 15 * * *', true, 'daily-ingest-rollout'),
 ('AB committee transcripts daily ingest',
- 'ingest-ab-committees', '{"since_days": 14}'::jsonb,
+ 'ingest-ab-committees', '{}'::jsonb,
  '25 15 * * *', true, 'daily-ingest-rollout'),
 ('AB speaker resolver',
  'resolve-ab-speakers', '{}'::jsonb,
@@ -137,7 +137,7 @@ INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) V
  'ingest-qc-bills-rss', '{}'::jsonb,
  '5 16 * * *', true, 'daily-ingest-rollout'),
 ('QC Hansard daily ingest',
- 'ingest-qc-hansard', '{"since_days": 14}'::jsonb,
+ 'ingest-qc-hansard', '{}'::jsonb,
  '15 16 * * *', true, 'daily-ingest-rollout'),
 ('QC speaker resolver',
  'resolve-qc-speakers', '{}'::jsonb,
@@ -190,7 +190,7 @@ INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) V
  'parse-mb-bill-events', '{}'::jsonb,
  '10 17 * * *', true, 'daily-ingest-rollout'),
 ('MB Hansard daily ingest',
- 'ingest-mb-hansard', '{"since_days": 14}'::jsonb,
+ 'ingest-mb-hansard', '{}'::jsonb,
  '15 17 * * *', true, 'daily-ingest-rollout'),
 ('MB bill sponsor resolver',
  'resolve-mb-bill-sponsors', '{}'::jsonb,
@@ -223,7 +223,7 @@ INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) V
  'parse-on-bill-pages', '{}'::jsonb,
  '10 18 * * *', true, 'daily-ingest-rollout'),
 ('ON Hansard daily ingest',
- 'ingest-on-hansard', '{"since_days": 14}'::jsonb,
+ 'ingest-on-hansard', '{}'::jsonb,
  '20 18 * * *', true, 'daily-ingest-rollout'),
 ('ON speaker resolver',
  'resolve-on-speakers', '{}'::jsonb,
@@ -242,7 +242,7 @@ INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) V
  'ingest-nb-bills', '{}'::jsonb,
  '0 19 * * *', true, 'daily-ingest-rollout'),
 ('NB Hansard daily ingest',
- 'ingest-nb-hansard', '{"since_days": 14}'::jsonb,
+ 'ingest-nb-hansard', '{}'::jsonb,
  '15 19 * * *', true, 'daily-ingest-rollout'),
 ('NB speaker resolver',
  'resolve-nb-speakers', '{}'::jsonb,
@@ -260,7 +260,7 @@ INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) V
  'ingest-nl-bills', '{}'::jsonb,
  '0 20 * * *', true, 'daily-ingest-rollout'),
 ('NL Hansard daily ingest',
- 'ingest-nl-hansard', '{"since_days": 14}'::jsonb,
+ 'ingest-nl-hansard', '{}'::jsonb,
  '15 20 * * *', true, 'daily-ingest-rollout'),
 ('NL speaker resolver',
  'resolve-nl-speakers', '{}'::jsonb,
@@ -282,7 +282,7 @@ INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) V
  'ingest-nt-bills', '{}'::jsonb,
  '0 21 * * *', true, 'daily-ingest-rollout'),
 ('NT Hansard daily ingest',
- 'ingest-nt-hansard', '{"since_days": 14, "limit_sittings": 5}'::jsonb,
+ 'ingest-nt-hansard', '{"limit_sittings": 25}'::jsonb,
  '30 21 * * *', true, 'daily-ingest-rollout'),
 ('NT presiding speaker resolver',
  'resolve-presiding-speakers', '{"province": "NT"}'::jsonb,
@@ -310,7 +310,7 @@ INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) V
  'ingest-sk-mlas', '{"parliaments": "30"}'::jsonb,
  '0 22 * * *', true, 'daily-ingest-rollout'),
 ('SK Hansard daily ingest',
- 'ingest-sk-hansard', '{"since_days": 14, "limit_sittings": 5}'::jsonb,
+ 'ingest-sk-hansard', '{"limit_sittings": 25}'::jsonb,
  '15 22 * * *', true, 'daily-ingest-rollout'),
 ('SK presiding speaker resolver',
  'resolve-presiding-speakers', '{"province": "SK"}'::jsonb,
@@ -370,10 +370,12 @@ INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) V
 
 -- ─── NU Hansard (21:15 UTC) ─────────────────────────────────────────
 -- Drupal-9 PDF source at assembly.nu.ca/hansard. ~59 PDFs back to
--- 2021-02-24. since_days=14 narrows to recent sittings only; NU
--- publishes infrequently (long inter-sitting gaps are normal).
+-- 2021-02-24. Empty args = full listing re-scan (idempotent, cached);
+-- NU publishes infrequently and with long lag, so a fixed since-window
+-- would skip late-published sittings forever (see 2026-08-02 incident:
+-- 2 years of transcripts silently missed under since_days=14).
 ('NU Hansard daily ingest',
- 'ingest-nu-hansard', '{"since_days": 14}'::jsonb,
+ 'ingest-nu-hansard', '{}'::jsonb,
  '15 21 * * *', true, 'daily-ingest-rollout'),
 
 -- ─── SK votes (22:50 UTC) ───────────────────────────────────────────
@@ -428,6 +430,14 @@ INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) V
 ('Map materialized views refresh',
  'refresh-views', '{}'::jsonb,
  '55 23 * * *', true, 'audit-2026-05-21'),
+
+-- Ingest-freshness sentinel: per jurisdiction, MAX(bill_events) vs
+-- MAX(speeches) lag. Exits non-zero on breach so the run shows FAILED
+-- in the admin panel. Weekly Monday — catches "succeeded, sittings=0"
+-- Hansard holes (QC/NB/NU incident, 2026-08-02).
+('Ingest freshness sentinel (weekly)',
+ 'check-ingest-freshness', '{}'::jsonb,
+ '37 13 * * 1', true, 'daily-ingest-rollout'),
 
 -- Roster enrichment + slug-stamping additions (MEDIUM-bucket triage,
 -- same audit cycle, later in the day). Slotted into the Sunday
