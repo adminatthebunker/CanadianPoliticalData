@@ -176,9 +176,15 @@ _TRANSCRIPT_HREF_RE = re.compile(
 
 # Session selector dropdown option -> "43e législature, 2e session (...)".
 # Build a (parl, sess) -> select_value map by scraping these.
+# The active session's label carries a "Session en cours - " prefix before
+# the legislature digits, so the pattern must tolerate arbitrary text
+# between the option's ">" and the "NNe législature" token. Anchoring at
+# ">" cost us the whole 43-3 session (May–Jun 2026): the current session
+# never matched, discovery raised, and the Wayback fallback returned zero
+# sittings while the job reported success.
 _SESSION_OPTION_RE = re.compile(
     r'<option[^>]+value="(?P<val>\d+)"[^>]*>'
-    r'\s*(?P<parl>\d+)e\s+l[ée]gislature,\s*(?P<sess>\d+)(?:re|e)\s+session',
+    r'[^<]*?(?P<parl>\d+)e\s+l[ée]gislature,\s*(?P<sess>\d+)(?:re|e)\s+session',
     re.IGNORECASE,
 )
 
@@ -340,12 +346,23 @@ async def discover_sitting_refs(
             "qc_hansard form returned 0 refs for %d-%d — falling back to Wayback",
             parliament, session,
         )
+    except SessionNotInDropdownError:
+        # The dropdown is the authority on which sessions exist upstream.
+        # A miss means our option regex broke or we resolved a session the
+        # assembly doesn't know — Wayback can't fix either, and falling
+        # back would convert the failure into a silent sittings=0 success
+        # (exactly how the 43-3 May–Jun 2026 hole stayed hidden).
+        raise
     except Exception as exc:
         log.info(
             "qc_hansard form discovery failed for %d-%d (%s) — falling back to Wayback",
             parliament, session, exc,
         )
     return await discover_via_wayback(client, parliament=parliament, session=session)
+
+
+class SessionNotInDropdownError(RuntimeError):
+    """Requested (parliament, session) missing from the listing dropdown."""
 
 
 async def _discover_via_form(
@@ -359,7 +376,7 @@ async def _discover_via_form(
     session_map = _extract_session_map(html)
     key = (parliament, session)
     if key not in session_map:
-        raise RuntimeError(
+        raise SessionNotInDropdownError(
             f"qc_hansard discovery: session {parliament}-{session} not in "
             f"dropdown (known: {sorted(session_map.keys())[:10]}…)"
         )
