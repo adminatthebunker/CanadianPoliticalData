@@ -60,6 +60,10 @@ Read this before any non-trivial change to a listed area. The structure mirrors 
 
 ## Embeddings & vector storage
 
+### Do not find chunker/embedder work via anti-joins against the corpus
+**Why:** "Speeches with no chunks" as `LEFT JOIN speech_chunks … WHERE c.id IS NULL` is O(corpus), not O(backlog) — Postgres must prove *absence*, so it hash-joins both full tables (~24 GB of buffer reads by 2026-08). The daily `chunk-and-embed-speeches` job crossed the pool's 60 s `command_timeout` on 2026-08-03/04 and failed two mornings running, purely from data growth. Same failure class as a fixed `since_days` window: cost/coverage drifts silently until a green job goes red (or worse, stays green with missing work).
+**How to apply:** Pending work is a flag + partial index: `speeches.needs_chunking` (migration `0057`, default `true` on insert, cleared transactionally per processed speech — skips included) mirrors `idx_chunks_needs_embedding` (`WHERE embedding IS NULL`) on the embed side. New derived-work pipelines get the same shape: a work-queue marker the processor clears, never a corpus-wide "what's missing" scan on a schedule. Re-queue for re-processing by setting the flag, not by deleting the marker column.
+
 ### Do not introduce parallel vector columns on `speech_chunks` for re-embed work
 **Why:** A previous blue-green column (`embedding_next`) was renamed back and dropped after the coordination cost (HNSW rebuild, dual-write logic, cutover) outweighed the benefit. Re-introducing it would re-introduce the same coordination cost.
 **How to apply:** `embedding` is the canonical Qwen3 column. One column, one HNSW index. For re-embeds, write through the same column.
