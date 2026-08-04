@@ -42,6 +42,7 @@ import httpx
 import orjson
 
 from ..db import Database
+from .speech_chunker import sync_chunk_politician_scoped
 from . import ns_hansard_parse as parse_mod
 
 log = logging.getLogger(__name__)
@@ -506,20 +507,20 @@ async def ingest(
 
     # Sync denormalised politician_id onto chunks so /search joins stay
     # consistent when we re-resolve speakers after more slugs land.
-    await db.execute(
-        """
-        UPDATE speech_chunks sc
-           SET politician_id = s.politician_id
-          FROM speeches s
-         WHERE sc.speech_id = s.id
-           AND s.level = 'provincial'
-           AND s.province_territory = 'NS'
-           AND s.source_system = $1
-           AND sc.politician_id IS DISTINCT FROM s.politician_id
-        """,
-        SOURCE_SYSTEM,
-        timeout=300,
+    # Scoped to this run's sitting-date floor and batched (see
+    # sync_chunk_politician_scoped for why the unscoped monolithic
+    # UPDATE is a timeout poison loop).
+    min_sitting_date = min(
+        (r.sitting_date for r in refs if r.sitting_date is not None),
+        default=None,
     )
+    if min_sitting_date is not None:
+        await sync_chunk_politician_scoped(
+            db,
+            province="NS",
+            source_system=SOURCE_SYSTEM,
+            min_date=min_sitting_date,
+        )
 
     log.info(
         "ns_hansard done: %d sittings, %d speeches "

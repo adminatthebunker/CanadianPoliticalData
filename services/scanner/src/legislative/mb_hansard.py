@@ -58,6 +58,7 @@ import httpx
 import orjson
 
 from ..db import Database
+from .speech_chunker import sync_chunk_politician_scoped
 from . import mb_hansard_parse as parse_mod
 from . import mb_hansard_parse_w97 as parse_w97
 
@@ -519,6 +520,11 @@ async def ingest(
             len(refs), parliament, session,
         )
 
+        # Date floor of this run's processed sittings, for the scoped
+        # chunk-denorm sync below. MB refs carry no date — it only
+        # exists after parsing the transcript.
+        min_sitting_date = None
+
         for ref in refs:
             if limit_speeches and (
                 stats.speeches_inserted + stats.speeches_updated
@@ -569,6 +575,8 @@ async def ingest(
                 "sitting vol=%s date=%s → %d speeches",
                 ref.volume, result.sitting_date, len(result.speeches),
             )
+            if min_sitting_date is None or result.sitting_date < min_sitting_date:
+                min_sitting_date = result.sitting_date
 
             for ps in result.speeches:
                 if limit_speeches and (
@@ -610,21 +618,16 @@ async def ingest(
 
             await asyncio.sleep(REQUEST_DELAY_SECONDS)
 
-    # Sync denormalised politician_id onto chunks.
-    await db.execute(
-        """
-        UPDATE speech_chunks sc
-           SET politician_id = s.politician_id
-          FROM speeches s
-         WHERE sc.speech_id = s.id
-           AND s.level = 'provincial'
-           AND s.province_territory = 'MB'
-           AND s.source_system = $1
-           AND sc.politician_id IS DISTINCT FROM s.politician_id
-        """,
-        SOURCE_SYSTEM,
-        timeout=300,
-    )
+    # Sync denormalised politician_id onto chunks — scoped to this run's
+    # sitting-date floor and batched (see sync_chunk_politician_scoped
+    # for why the unscoped monolithic UPDATE is a timeout poison loop).
+    if min_sitting_date is not None:
+        await sync_chunk_politician_scoped(
+            db,
+            province="MB",
+            source_system=SOURCE_SYSTEM,
+            min_date=min_sitting_date,
+        )
 
     log.info(
         "mb_hansard done: %d sittings, %d speeches "

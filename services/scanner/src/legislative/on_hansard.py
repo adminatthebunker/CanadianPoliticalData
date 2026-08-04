@@ -41,6 +41,7 @@ import httpx
 import orjson
 
 from ..db import Database
+from .speech_chunker import sync_chunk_politician_scoped
 from . import on_hansard_parse as parse_mod
 
 log = logging.getLogger(__name__)
@@ -570,23 +571,11 @@ async def ingest(
     # form exceeded statement_timeout on every daily run.
     min_sitting_date = min((r.sitting_date for r in refs), default=None)
     if min_sitting_date is not None:
-        await db.execute(
-            """
-            UPDATE speech_chunks sc
-               SET politician_id = s.politician_id
-              FROM speeches s
-             WHERE sc.speech_id = s.id
-               AND sc.level = 'provincial'
-               AND sc.province_territory = 'ON'
-               AND sc.spoken_at >= $2::date
-               AND s.level = 'provincial'
-               AND s.province_territory = 'ON'
-               AND s.source_system = $1
-               AND sc.politician_id IS DISTINCT FROM s.politician_id
-            """,
-            SOURCE_SYSTEM,
-            min_sitting_date,
-            timeout=300,
+        await sync_chunk_politician_scoped(
+            db,
+            province="ON",
+            source_system=SOURCE_SYSTEM,
+            min_date=min_sitting_date,
         )
 
     log.info(

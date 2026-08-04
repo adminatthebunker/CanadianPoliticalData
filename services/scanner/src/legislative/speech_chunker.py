@@ -40,6 +40,7 @@ import logging
 import os
 import re
 from dataclasses import dataclass
+from datetime import date
 from typing import Any, Optional
 
 from ..db import Database
@@ -254,6 +255,69 @@ async def sync_chunk_denorm(
         stats.chunks_synced, since_days,
     )
     return stats
+
+
+async def sync_chunk_politician_scoped(
+    db: Database,
+    *,
+    province: str,
+    source_system: str,
+    min_date: date,
+    batch_rows: int = 1000,
+) -> int:
+    """Batched politician_id denorm sync for one province's recent chunks.
+
+    Called by the per-province Hansard ingesters after their sitting loop
+    (scoped to the run's sitting-date floor) instead of a monolithic
+    UPDATE. The monolithic form is a poison loop under a statement
+    timeout: politician_id is indexed on speech_chunks, so no update is
+    HOT-eligible and every drifted row pays an index-tuple insert into
+    all six indexes — the HNSW vector index alone costs ~ms per row.
+    6,920 drifted BC rows took >240 s, timed out, rolled back, and left
+    the same backlog for the next run (2026-08-03/04). Batches commit
+    individually (autocommit per statement), so each run converges even
+    if a later batch times out.
+    """
+    total = 0
+    while True:
+        tag = await db.execute(
+            f"""
+            UPDATE speech_chunks sc
+               SET politician_id = s.politician_id
+              FROM speeches s
+             WHERE sc.id IN (
+                    SELECT sc2.id
+                      FROM speech_chunks sc2
+                      JOIN speeches s2 ON s2.id = sc2.speech_id
+                     WHERE sc2.level = 'provincial'
+                       AND sc2.province_territory = $1
+                       AND sc2.spoken_at >= $2::date
+                       AND s2.level = 'provincial'
+                       AND s2.province_territory = $1
+                       AND s2.source_system = $3
+                       AND sc2.politician_id IS DISTINCT FROM s2.politician_id
+                     LIMIT {int(batch_rows)}
+                   )
+               AND s.id = sc.speech_id
+               AND sc.politician_id IS DISTINCT FROM s.politician_id
+            """,
+            province,
+            min_date,
+            source_system,
+            timeout=300,
+        )
+        try:
+            n = int(tag.rsplit(" ", 1)[-1])
+        except (ValueError, AttributeError):
+            n = 0
+        total += n
+        if n < batch_rows:
+            break
+    log.info(
+        "sync_chunk_politician_scoped[%s]: chunks_synced=%d (min_date=%s)",
+        province, total, min_date,
+    )
+    return total
 
 
 async def chunk_pending(

@@ -60,6 +60,7 @@ import httpx
 import orjson
 
 from ..db import Database
+from .speech_chunker import sync_chunk_politician_scoped
 from . import bc_hansard_parse as parse_mod
 
 log = logging.getLogger(__name__)
@@ -887,25 +888,21 @@ async def ingest(
 
             await asyncio.sleep(REQUEST_DELAY_SECONDS)
 
-    # Sync denormalised politician_id / confidence onto chunks. Chunks
-    # created before this run were built from speeches.politician_id at
-    # chunk time; if ingest updated the parent row (e.g. via Blues→Final
-    # replacement or a widened resolver pass), chunks would otherwise
-    # drift. One UPDATE keeps them consistent.
-    await db.execute(
-        """
-        UPDATE speech_chunks sc
-           SET politician_id = s.politician_id
-          FROM speeches s
-         WHERE sc.speech_id = s.id
-           AND s.level = 'provincial'
-           AND s.province_territory = 'BC'
-           AND s.source_system = $1
-           AND sc.politician_id IS DISTINCT FROM s.politician_id
-        """,
-        SOURCE_SYSTEM,
-        timeout=300,
-    )
+    # Sync denormalised politician_id onto chunks. Chunks created before
+    # this run were built from speeches.politician_id at chunk time; if
+    # ingest updated the parent row (e.g. via Blues→Final replacement or
+    # a widened resolver pass), chunks would otherwise drift. Scoped to
+    # this run's sitting-date floor and batched — the unscoped monolithic
+    # UPDATE outgrew its 300 s timeout on 2026-08-03/04 and rolled back
+    # its work every night (see sync_chunk_politician_scoped).
+    min_sitting_date = min((r.sitting_date for r in refs), default=None)
+    if min_sitting_date is not None:
+        await sync_chunk_politician_scoped(
+            db,
+            province="BC",
+            source_system=SOURCE_SYSTEM,
+            min_date=min_sitting_date,
+        )
 
     log.info(
         "bc_hansard done: %d sittings, %d speeches "
