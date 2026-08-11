@@ -523,9 +523,17 @@ async def resolve_ab_speakers(
     # — Step 2's `legls` list can be empty when all speeches are
     # already resolved (e.g. after a pre-reboot run), which would
     # silently skip chunk propagation.
+    # AB committee transcripts share source_system='assembly.ab.ca' but
+    # carry their metadata under raw->'ab_committee' (no 'ab_hansard'
+    # key) — COALESCE both paths or committee speeches surface as a
+    # NULL legl and crash the int() below (first hit 2026-08-05, the
+    # first time resolved committee speeches had drifted chunks).
     chunk_legl_rows = await db.fetch(
         """
-        SELECT DISTINCT (s.raw->'ab_hansard'->>'legislature')::int AS legl
+        SELECT DISTINCT COALESCE(
+                   s.raw->'ab_hansard'->>'legislature',
+                   s.raw->'ab_committee'->>'legislature'
+               )::int AS legl
           FROM speech_chunks sc
           JOIN speeches s ON s.id = sc.speech_id
          WHERE s.source_system = 'assembly.ab.ca'
@@ -534,7 +542,13 @@ async def resolve_ab_speakers(
          ORDER BY 1
         """
     )
-    chunk_legls = [int(r["legl"]) for r in chunk_legl_rows]
+    if any(r["legl"] is None for r in chunk_legl_rows):
+        log.error(
+            "resolve_ab_speakers: drifted chunks whose speech raw has no "
+            "legislature under ab_hansard OR ab_committee — a new raw "
+            "shape needs a COALESCE branch above; skipping those rows"
+        )
+    chunk_legls = [int(r["legl"]) for r in chunk_legl_rows if r["legl"] is not None]
     log.info("resolve_ab_speakers: legls with stale chunks = %s", chunk_legls)
     for legl in chunk_legls:
         n_row = await db.pool.fetchrow(
@@ -547,7 +561,10 @@ async def resolve_ab_speakers(
                  AND s.source_system = 'assembly.ab.ca'
                  AND s.politician_id IS NOT NULL
                  AND sc.politician_id IS DISTINCT FROM s.politician_id
-                 AND (s.raw->'ab_hansard'->>'legislature')::int = $1
+                 AND COALESCE(
+                         s.raw->'ab_hansard'->>'legislature',
+                         s.raw->'ab_committee'->>'legislature'
+                     )::int = $1
               RETURNING sc.id
             )
             SELECT COUNT(*) AS n FROM updated

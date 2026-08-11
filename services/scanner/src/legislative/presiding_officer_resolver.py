@@ -41,6 +41,62 @@ from ..db import Database
 
 log = logging.getLogger(__name__)
 
+# Chunk-update batch sizing. politician_id is indexed on speech_chunks,
+# so these updates are never HOT — every row pays an index-tuple insert
+# into all six indexes including HNSW (~ms/row, ~0.5 MB WAL/row). The
+# original 5,000-row batches predate that cost and blew the 60 s pool
+# timeout nightly on NL/MB through 2026-08-10; 500 rows ≈ ~1k chunks
+# stays well inside the explicit 300 s ceiling. See docs/gotchas.md
+# § "Do not run monolithic bulk UPDATEs against speech_chunks".
+CHUNK_UPDATE_BATCH = 500
+
+
+async def _reconcile_chunks_batched(
+    db: Database, where_sql: str, params: list,
+) -> int:
+    """Batched speech_chunks ← speeches politician_id reconcile.
+
+    Replaces the monolithic reconcile sweeps: a single UPDATE over
+    accumulated drift either finishes inside the statement timeout or
+    rolls back everything and leaves the same backlog for the next run
+    (the BC Hansard poison loop, 2026-08-03/04). Batches autocommit,
+    so every run converges even if a later batch times out.
+
+    `where_sql` filters the parent speech as `s2` (predicates on
+    province / speaker_role / speaker_name_raw); the NOT NULL and
+    drift checks are appended here.
+    """
+    total = 0
+    while True:
+        tag = await db.execute(
+            f"""
+            UPDATE speech_chunks sc
+               SET politician_id = s.politician_id
+              FROM speeches s
+             WHERE sc.id IN (
+                    SELECT sc2.id
+                      FROM speech_chunks sc2
+                      JOIN speeches s2 ON s2.id = sc2.speech_id
+                     WHERE {where_sql}
+                       AND s2.politician_id IS NOT NULL
+                       AND sc2.politician_id IS DISTINCT FROM s2.politician_id
+                     LIMIT {CHUNK_UPDATE_BATCH}
+                   )
+               AND s.id = sc.speech_id
+               AND sc.politician_id IS DISTINCT FROM s.politician_id
+            """,
+            *params,
+            timeout=300,
+        )
+        try:
+            n = int(tag.rsplit(" ", 1)[-1])
+        except (ValueError, AttributeError):
+            n = 0
+        total += n
+        if n < CHUNK_UPDATE_BATCH:
+            break
+    return total
+
 
 # ── Speaker rosters ─────────────────────────────────────────────────
 #
@@ -958,11 +1014,12 @@ async def resolve_speakers(
             continue
         by_politician.setdefault(pid, []).append(r["id"])
 
-    # Flush in 5k-row batches — passing 100k+ UUIDs to ANY($1::uuid[]) in
-    # a single statement times out asyncpg. Confidence 0.9 (below full-name
-    # match's 1.0, above ambiguous surname's 0.5) — we're certain of the
-    # date window but not of any per-speech semantic check.
-    BATCH = 5000
+    # Flush in CHUNK_UPDATE_BATCH-row batches (see constant's comment —
+    # the chunk update is non-HOT and HNSW-amplified, so batches must
+    # stay small). Confidence 0.9 (below full-name match's 1.0, above
+    # ambiguous surname's 0.5) — we're certain of the date window but
+    # not of any per-speech semantic check.
+    BATCH = CHUNK_UPDATE_BATCH
     for pid, speech_ids in by_politician.items():
         for i in range(0, len(speech_ids), BATCH):
             batch = speech_ids[i : i + BATCH]
@@ -985,6 +1042,7 @@ async def resolve_speakers(
                    AND politician_id IS DISTINCT FROM $1::uuid
                 """,
                 pid, batch,
+                timeout=300,
             )
             stats.resolved += len(batch)
             # asyncpg returns a command tag like "UPDATE 123" — parse the count.
@@ -997,26 +1055,16 @@ async def resolve_speakers(
     # from the parent speech. This guards against timeout-aborted prior
     # runs where the speech UPDATE committed but the matching chunk
     # UPDATE never did — on re-run, the speech is no longer NULL so it
-    # falls out of `rows` above, and the chunk desync persists. One
-    # targeted sweep closes the loop regardless of run history.
-    reconcile = await db.execute(
-        """
-        UPDATE speech_chunks sc
-           SET politician_id = s.politician_id
-          FROM speeches s
-         WHERE sc.speech_id = s.id
-           AND s.level = 'provincial'
-           AND s.province_territory = $1
-           AND s.speaker_role = ANY($2::text[])
-           AND s.politician_id IS NOT NULL
-           AND sc.politician_id IS DISTINCT FROM s.politician_id
-        """,
-        province, list(_speaker_role_values(province)),
+    # falls out of `rows` above, and the chunk desync persists. Batched
+    # (see _reconcile_chunks_batched) so it converges regardless of how
+    # much drift accumulated.
+    stats.chunks_updated += await _reconcile_chunks_batched(
+        db,
+        """s2.level = 'provincial'
+                       AND s2.province_territory = $1
+                       AND s2.speaker_role = ANY($2::text[])""",
+        [province, list(_speaker_role_values(province))],
     )
-    try:
-        stats.chunks_updated += int(reconcile.split()[-1])
-    except (ValueError, AttributeError):
-        pass
 
     log.info(
         "resolve_speakers(%s): scanned=%d resolved=%d no_term_match=%d chunks_updated=%d",
@@ -1136,7 +1184,7 @@ async def resolve_role_only_presiding(
                 continue
             by_politician.setdefault(pid, []).append(r["id"])
 
-    BATCH = 5000
+    BATCH = CHUNK_UPDATE_BATCH
     for pid, speech_ids in by_politician.items():
         for i in range(0, len(speech_ids), BATCH):
             batch = speech_ids[i : i + BATCH]
@@ -1159,6 +1207,7 @@ async def resolve_role_only_presiding(
                    AND politician_id IS DISTINCT FROM $1::uuid
                 """,
                 pid, batch,
+                timeout=300,
             )
             stats.resolved += len(batch)
             try:
@@ -1175,44 +1224,22 @@ async def resolve_role_only_presiding(
     role_keys = list(role_map.keys())
     name_keys = list(name_map.keys())
     if role_keys:
-        reconcile = await db.execute(
-            """
-            UPDATE speech_chunks sc
-               SET politician_id = s.politician_id
-              FROM speeches s
-             WHERE sc.speech_id = s.id
-               AND s.level = 'provincial'
-               AND s.province_territory = $1
-               AND s.speaker_role = ANY($2::text[])
-               AND s.politician_id IS NOT NULL
-               AND sc.politician_id IS DISTINCT FROM s.politician_id
-            """,
-            province, role_keys,
+        stats.chunks_updated += await _reconcile_chunks_batched(
+            db,
+            """s2.level = 'provincial'
+                       AND s2.province_territory = $1
+                       AND s2.speaker_role = ANY($2::text[])""",
+            [province, role_keys],
         )
-        try:
-            stats.chunks_updated += int(reconcile.split()[-1])
-        except (ValueError, AttributeError):
-            pass
     if name_keys:
-        reconcile = await db.execute(
-            """
-            UPDATE speech_chunks sc
-               SET politician_id = s.politician_id
-              FROM speeches s
-             WHERE sc.speech_id = s.id
-               AND s.level = 'provincial'
-               AND s.province_territory = $1
-               AND (s.speaker_role IS NULL OR s.speaker_role = '')
-               AND s.speaker_name_raw = ANY($2::text[])
-               AND s.politician_id IS NOT NULL
-               AND sc.politician_id IS DISTINCT FROM s.politician_id
-            """,
-            province, name_keys,
+        stats.chunks_updated += await _reconcile_chunks_batched(
+            db,
+            """s2.level = 'provincial'
+                       AND s2.province_territory = $1
+                       AND (s2.speaker_role IS NULL OR s2.speaker_role = '')
+                       AND s2.speaker_name_raw = ANY($2::text[])""",
+            [province, name_keys],
         )
-        try:
-            stats.chunks_updated += int(reconcile.split()[-1])
-        except (ValueError, AttributeError):
-            pass
 
     log.info(
         "resolve_role_only_presiding(%s): scanned=%d resolved=%d "
