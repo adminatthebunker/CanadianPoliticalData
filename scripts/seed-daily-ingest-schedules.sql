@@ -481,6 +481,48 @@ INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) V
  'ingest-nt-mlas', '{}'::jsonb,
  '52 4 * * 0', true, 'audit-2026-05-21');
 
+-- ─── Weekly current-roster refresh (Sun 05:05–05:40 UTC) ────────────
+-- Roster-audit 2026-08-12: the Open North current-roster commands were
+-- never scheduled — a by-election winner or floor-crosser only landed
+-- when someone ran the command by hand. All of these share the
+-- detect_retirements path (close ended_at + flip is_active on members
+-- dropped upstream), so flag-less weekly runs are self-healing.
+-- Deliberately NOT scheduled: the Open North SK/NS variants (native
+-- slug-stamping rosters already run weekly; a second roster source
+-- there re-opens the SK-triples duplicate-politician class), the NU
+-- variant (Open North indexes 0 NU rows), and ingest-nwt-mlas (native
+-- ingest-nt-mlas already covers NT weekly).
+DELETE FROM scanner_schedules WHERE created_by = 'roster-audit-2026-08-12';
+
+INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) VALUES
+('Federal MP roster weekly refresh',
+ 'ingest-mps', '{}'::jsonb,
+ '5 5 * * 0', true, 'roster-audit-2026-08-12'),
+('Senate roster weekly refresh',
+ 'ingest-senators', '{}'::jsonb,
+ '8 5 * * 0', true, 'roster-audit-2026-08-12'),
+('AB MLA roster weekly refresh (Open North)',
+ 'ingest-mlas', '{}'::jsonb,
+ '10 5 * * 0', true, 'roster-audit-2026-08-12'),
+('BC MLA roster weekly refresh (Open North)',
+ 'ingest-bc-mlas', '{}'::jsonb,
+ '15 5 * * 0', true, 'roster-audit-2026-08-12'),
+('ON MPP roster weekly refresh (Open North)',
+ 'ingest-ontario-mpps', '{}'::jsonb,
+ '20 5 * * 0', true, 'roster-audit-2026-08-12'),
+('NB MLA roster weekly refresh (Open North)',
+ 'ingest-new-brunswick-mlas', '{}'::jsonb,
+ '25 5 * * 0', true, 'roster-audit-2026-08-12'),
+('NL MHA roster weekly refresh (Open North)',
+ 'ingest-nl-mhas', '{}'::jsonb,
+ '30 5 * * 0', true, 'roster-audit-2026-08-12'),
+('PE MLA roster weekly refresh (Open North)',
+ 'ingest-pei-mlas', '{}'::jsonb,
+ '35 5 * * 0', true, 'roster-audit-2026-08-12'),
+('YT MLA roster weekly refresh (Open North)',
+ 'ingest-yukon-mlas', '{}'::jsonb,
+ '40 5 * * 0', true, 'roster-audit-2026-08-12');
+
 -- next_run_at is computed by the worker the first time it polls; leave
 -- it NULL here so croniter advances it correctly on the worker tick.
 
@@ -488,5 +530,5 @@ COMMIT;
 
 -- Show what we just wrote.
 SELECT name, cron, enabled, command FROM scanner_schedules
- WHERE created_by IN ('daily-ingest-rollout', 'audit-2026-05-21')
+ WHERE created_by IN ('daily-ingest-rollout', 'audit-2026-05-21', 'roster-audit-2026-08-12')
  ORDER BY cron, name;

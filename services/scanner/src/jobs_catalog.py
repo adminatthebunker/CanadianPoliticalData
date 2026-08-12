@@ -1014,8 +1014,56 @@ COMMANDS: dict[str, dict[str, Any]] = {
         "cli": "ingest-senators", "category": "enrichment", "args": [],
     },
     "ingest-mlas": {
-        "description": "Provincial/territorial legislators via Open North.",
+        "description": "AB current MLA roster from Open North Represent (SETS['alberta_mlas'] — the name predates the per-province commands). Closes politician_terms.ended_at + flips is_active=false for politicians dropped from the upstream roster (detect_retirements). Run weekly.",
         "cli": "ingest-mlas", "category": "enrichment", "args": [],
+    },
+    "ingest-bc-mlas": {
+        "description": "BC current MLA roster from Open North Represent. Closes politician_terms.ended_at + flips is_active=false for politicians dropped from the upstream roster (detect_retirements). Run weekly. Native LIMS IDs come from enrich-bc-member-ids, not this.",
+        "cli": "ingest-bc-mlas", "category": "enrichment",
+        "args": [
+            {"name": "limit", "type": "int", "required": False, "default": 200,
+             "help": "Cap on rows pulled per page from Open North. detect_retirements is skipped when the cap is hit."},
+        ],
+    },
+    "ingest-ontario-mpps": {
+        "description": "ON current MPP roster from Open North Represent. Closes politician_terms.ended_at + flips is_active=false for politicians dropped from the upstream roster (detect_retirements). Run weekly. Native ola_member_id stamping stays with ingest-on-former-mpps.",
+        "cli": "ingest-ontario-mpps", "category": "enrichment",
+        "args": [
+            {"name": "limit", "type": "int", "required": False, "default": 200,
+             "help": "Cap on rows pulled per page from Open North. detect_retirements is skipped when the cap is hit."},
+        ],
+    },
+    "ingest-new-brunswick-mlas": {
+        "description": "NB current MLA roster from Open North Represent. Closes politician_terms.ended_at + flips is_active=false for politicians dropped from the upstream roster (detect_retirements). Run weekly.",
+        "cli": "ingest-new-brunswick-mlas", "category": "enrichment",
+        "args": [
+            {"name": "limit", "type": "int", "required": False, "default": 200,
+             "help": "Cap on rows pulled per page from Open North. detect_retirements is skipped when the cap is hit."},
+        ],
+    },
+    "ingest-nl-mhas": {
+        "description": "NL current MHA roster from Open North Represent. Closes politician_terms.ended_at + flips is_active=false for politicians dropped from the upstream roster (detect_retirements). Run weekly.",
+        "cli": "ingest-nl-mhas", "category": "enrichment",
+        "args": [
+            {"name": "limit", "type": "int", "required": False, "default": 200,
+             "help": "Cap on rows pulled per page from Open North. detect_retirements is skipped when the cap is hit."},
+        ],
+    },
+    "ingest-pei-mlas": {
+        "description": "PE current MLA roster from Open North Represent. Closes politician_terms.ended_at + flips is_active=false for politicians dropped from the upstream roster (detect_retirements). Run weekly.",
+        "cli": "ingest-pei-mlas", "category": "enrichment",
+        "args": [
+            {"name": "limit", "type": "int", "required": False, "default": 200,
+             "help": "Cap on rows pulled per page from Open North. detect_retirements is skipped when the cap is hit."},
+        ],
+    },
+    "ingest-yukon-mlas": {
+        "description": "YT current MLA roster from Open North Represent. Closes politician_terms.ended_at + flips is_active=false for politicians dropped from the upstream roster (detect_retirements). Run weekly.",
+        "cli": "ingest-yukon-mlas", "category": "enrichment",
+        "args": [
+            {"name": "limit", "type": "int", "required": False, "default": 200,
+             "help": "Cap on rows pulled per page from Open North. detect_retirements is skipped when the cap is hit."},
+        ],
     },
     "ingest-manitoba-mlas": {
         "description": "MB current MLA roster from Open North Represent (/representatives/manitoba-legislature/). Closes politician_terms.ended_at + flips is_active=false for politicians dropped from the upstream roster (detect_retirements). Run weekly.",
