@@ -225,6 +225,11 @@ INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) V
 ('ON Hansard daily ingest',
  'ingest-on-hansard', '{}'::jsonb,
  '20 18 * * *', true, 'daily-ingest-rollout'),
+-- Flag-less: full current-parliament re-list (8 listings + ~140 nodes,
+-- ~3 min) — self-healing per the no-fixed-window rule.
+('ON committee transcripts daily ingest',
+ 'ingest-on-committees', '{}'::jsonb,
+ '25 18 * * *', true, 'daily-ingest-rollout'),
 ('ON speaker resolver',
  'resolve-on-speakers', '{}'::jsonb,
  '35 18 * * *', true, 'daily-ingest-rollout'),

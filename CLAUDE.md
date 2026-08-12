@@ -70,6 +70,7 @@ Every upstream legislature that ships a stable integer or slug ID for its member
 - Quebec: `qc_assnat_id` (int)
 - Alberta: `ab_assembly_mid` (zero-padded text)
 - Manitoba: `mb_assembly_slug`
+- Saskatchewan: `sk_assembly_slug` (synthesised `firstname-lastname` — legassembly.sk.ca publishes no per-MLA stable ID; populated by `ingest-sk-mlas` from the Hansard speaker index)
 - Northwest Territories: `nt_mla_slug` (kebab-case; same slug across `/meet-members/mla/` and `/former-members/` URL paths)
 
 When adding a new jurisdiction, **find and persist its canonical member ID first**. It replaces name-fuzz with exact FK joins and makes sponsor / speaker resolution trivial. Sub-national legislatures with sparse structured rosters drag the global FK ratio on `bill_sponsors` down — closing the gap means adding ID columns for the remaining legislatures, not rewriting the resolver.

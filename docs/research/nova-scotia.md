@@ -75,13 +75,13 @@ The NS Hansard pages sit on a different CDN path than the per-bill HTML that tri
 - **Difficulty (1–5):** 3.
 - **Notes:** Divisions entered in minutes. No standalone export.
 
-## Committee Activity
+## Committee Activity — research complete 2026-08-12, build-ready
 
-- **Source URL(s):** https://nslegislature.ca/legislative-business/committees/standing ; https://nslegislature.ca/about/supporting-offices/legislative-committees-office
-- **Format:** HTML pages with meeting archives, membership, public submissions.
-- **Data available:** Standing committees (Community Services, Health, Human Resources, Natural Resources, Public Accounts, Veterans Affairs); schedules, transcripts.
-- **Overlap with existing scanner:** None.
-- **Difficulty (1–5):** 2.
+> **2026-08-12 probe (corrects an earlier belief):** the Hansard-section claim that the daily Hansard feed "includes committee Hansards" is **wrong for the current site** — the chamber feed (`/legislative-business/hansard-debates/assembly-N-session-M`) lists only `house_*` sittings. Committee Hansard lives in **per-committee archive pages**: `/legislative-business/committees/standing/{slug}/archive/{slug}` renders a table (Meeting Date / Subject / Video / Correspondence / Hansard) whose Hansard links are per-meeting **PDFs** at `nslegislature.ca/sites/default/files/pdfs/committees/{code}/{code}_{YYYYMMDD}.pdf` (e.g. `pa/pa_20260617.pdf`; `corr/` sibling dir holds correspondence). Eleven standing committees: assembly-matters, community-services, health, human-resources, internal-affairs, law-amendments, natural-resources-and-economic-development, private-and-local-bills, public-accounts, public-bills, veterans-affairs.
+>
+> **PDF shape (sampled pa_20260617.pdf):** structured cover page — WITNESSES block (name — title per line, grouped by org), CHAIR / VICE-CHAIR names, date/time — then ALL-CAPS speaker labels (`THE CHAIR:` …). This is the AB-committees cover-page pattern: parse the witness roster from the cover, resolve members by name against the NS roster (`nslegislature_slug` FK exists on `politicians` but PDFs carry no slugs — name-based), everyone in the WITNESSES block is NULL-by-design. Bounded new-PDF-parser build (~AB-sized slice, difficulty 3, not the hoped-for discovery-filter change). WAF note: `/sites/default/files/` PDF fetch succeeded without challenge at probe time; verify budget behaviour before a full walk.
+
+- **Overlap with existing scanner:** none — needs a new `ns_committees.py` (discovery = 11 archive pages, likely paginated; parser = new all-caps PDF shape).
 - **Notes:** Contact: legcomm@novascotia.ca, 902-424-4432.
 
 ## Existing third-party scrapers

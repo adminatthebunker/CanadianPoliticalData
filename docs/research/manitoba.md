@@ -50,11 +50,13 @@ The user's initial Manitoba research handoff:
 
 ## Committee Activity
 
+> **2026-08-12 fact-check — committee verbatim is PARTIALLY IN THE CORPUS ALREADY, mis-typed.** This section's old claim ("notices/broadcasts/reports only") contradicted the Hansard section, and the DB settles it: **376 speeches across 104 Hansard volumes** carry committee-transcript headings (`Officials Speaking on Record at the … meeting`, `Committee Membership`) in `raw->'mb_hansard'->>'section'` — MB publishes Standing Committee verbatim as volumes in the same `/hansard/{leg}_{sess}/vol_NN/` family the chamber walker ingests, so committee content landed as floor-typed speeches. A proper MB committee slice is therefore a **retag + metadata-extraction workstream over already-ingested rows** (identify committee volumes by heading shape, set `speech_type='committee'`, extract committee name into `raw->'mb_committee'`), not a new scraper. The ~10.9K `The Chairperson` rotating-role turns remain unattributable in-corpus (no chair-handover language — 2026-05-20 probe). Deferred; bounded.
+
 - **Source URL(s):** https://www.gov.mb.ca/legislature/committees/ ; https://www.gov.mb.ca/legislature/committees/membership.html
-- **Format:** HTML pages with meeting notices, broadcasts, reports, clerk contacts.
+- **Format:** HTML pages with meeting notices, broadcasts, reports, clerk contacts; verbatim in Hansard vol family (see above).
 - **Data available:** Non-permanent rotating membership; broadcasts; reports.
-- **Overlap with existing scanner:** None.
-- **Difficulty (1–5):** 2.
+- **Overlap with existing scanner:** committee volumes already flow through `mb_hansard.py` (mis-typed as floor).
+- **Difficulty (1–5):** 2 (retag pass over existing rows).
 - **Notes:** Meetings via Zoom Webinar. Standing committees can't meet Jan–Aug except Public Accounts.
 
 ## Existing third-party scrapers

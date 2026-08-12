@@ -35,14 +35,17 @@
 - **Difficulty (1–5):** 3.
 - **Notes:** Divisions embedded in daily Votes and Proceedings. Consistent URL structure by Parliament/session/date.
 
-## Committee Activity
+## Committee Activity ✅ LIVE (2026-08-12)
 
-- **Source URL(s):** https://www.ola.org/en/legislative-business/committees ; https://www.ola.org/en/legislative-business/committees/documents
-- **Format:** HTML transcripts; some committees publish CSV exports (e.g. Standing Committee on Finance and Economic Affairs).
-- **Data available:** Memberships, meetings (transcripts by date), reports (PDF/HTML), transcripts (HTML).
-- **Overlap with existing scanner:** None.
-- **Difficulty (1–5):** 3.
-- **Notes:** 9 Standing Committees. Transcripts include member remarks, votes, and staff lists.
+> **Shipped 2026-08-12** as `services/scanner/src/legislative/on_committees.py` + `ingest-on-committees`. First P44 run: **138 transcripts / 32,682 speeches / 70.6% attributed** across all 8 standing committees. `committees_status` flipped to `live`. Daily 18:25 UTC schedule, flag-less full current-parliament re-list.
+
+- **Source (probed 2026-08-12):** ola.org's Drupal `?_format=json` serializer works on committee transcript nodes exactly as for chamber Hansard — full transcript HTML in `body[0].value` + `field_date` / `field_parliament` / `field_associated_committee` / `field_pdf` metadata. Discovery: per-committee listing at `/en/legislative-business/committees/{slug}/parliament-{N}/transcripts`, hrefs shaped `committee-transcript-2026-may-25` (lowercase month, abbreviated or full). P44 slugs: finance-economic-affairs, government-agencies, heritage-infrastructure-cultural-policy, interior, justice-policy, procedure-house-affairs, public-accounts, social-policy.
+- **Parsing:** `on_hansard_parse.extract_speeches` reused verbatim — committee attribution shapes (`The Chair (Hon. Ernie Hardeman):`, `Mr. Dave Smith:`) are the chamber shapes; parser staff/group classification preserved, everything else forced `speech_type='committee'`.
+- **Speaker resolution — witness-safe:** exact full-name matching only (chamber cascade's surname fallback disabled — committee witnesses share the `Mr./Ms. First Last` label shape with MPPs, so a full-name miss means witness NULL). Role-parens chairs at 0.95; ~30% witness share observed on P44.
+- **Session resolution:** listings are per parliament; sessions derived empirically from chamber-corpus first-sitting dates (same approach as SK committees).
+- **Closed-session meetings** legitimately publish 1-3-turn fragments — skipped quietly (not parse errors).
+- **Historical depth:** committee-hansard-index reaches back to P39 (2007-11-28) and documents to P35 (1990), but **pre-P40 transcripts are PDF-only uploads** — the JSON/HTML era (P40+, ~2011) is this pipeline's floor; a P40–P43 backfill is the natural follow-up (same code, `--parliament N` per run), pre-P40 PDFs are a separate parser workstream.
+- **Notes:** the alternative discovery surface `/en/ajax/committee-documents/C{code}` (HTML fragments per committee, codes embedded in `/committees/documents/parliament-{N}`) exists but the per-committee listing pages are simpler and sufficient.
 
 ## Existing third-party scrapers
 

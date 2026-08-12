@@ -131,6 +131,23 @@ COMMANDS: dict[str, dict[str, Any]] = {
              "help": "Optional comma-separated committee acronyms (e.g. 'HS,EF'). Default: all 11 standing committees."},
         ],
     },
+    "ingest-on-committees": {
+        "description": "Pull Ontario standing-committee transcripts (ola.org Drupal JSON nodes) into the `speeches` table with speech_type='committee'.",
+        "cli": "ingest-on-committees",
+        "category": "hansard",
+        "args": [
+            {"name": "parliament", "type": "int", "required": False,
+             "help": "ON Parliament number (e.g. 44). Default: current."},
+            {"name": "since", "type": "date", "required": False,
+             "help": "Only ingest transcripts on/after this date (ISO YYYY-MM-DD)."},
+            {"name": "until", "type": "date", "required": False,
+             "help": "Only ingest transcripts on/before this date (ISO YYYY-MM-DD)."},
+            {"name": "limit_transcripts", "type": "int", "required": False,
+             "help": "Cap on transcripts fetched this run (newest-first)."},
+            {"name": "committees", "type": "str", "required": False,
+             "help": "Optional comma-separated committee slugs (e.g. 'public-accounts,justice-policy'). Default: all 8."},
+        ],
+    },
     "ingest-sk-committees": {
         "description": "Pull Saskatchewan committee Hansard Verbatim Reports (HTML/PDF from docs.legassembly.sk.ca) into the `speeches` table with speech_type='committee'.",
         "cli": "ingest-sk-committees",

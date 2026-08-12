@@ -82,13 +82,15 @@ Bill linkage: existing SK bill IDs (e.g. `Bill 50`, `Clause 4 of The Saskatchewa
 
 Forward-incremental: only re-parse the *current* session's Journal (the rolling 2023-25-electronic-style document); historicals are immutable. Daily schedule passes `{"current_only": true}` once the backfill is done.
 
-## Committee Activity
+## Committee Activity ✅ LIVE (2026-08-12)
 
-- **Source URL(s):** https://www.legassembly.sk.ca/legislative-business/legislative-committees/ ; https://docs.legassembly.sk.ca
-- **Format:** HTML; committee docs on docs.legassembly.sk.ca.
-- **Data available:** Four standing committees (Crown and Central Agencies, Economy, Intergovernmental Affairs and Justice, Public Accounts); House Management, Private Bills, Privileges.
-- **Overlap with existing scanner:** None.
-- **Difficulty (1–5):** 2.
+> **Shipped 2026-08-12** as `services/scanner/src/legislative/sk_committees.py` + `ingest-sk-committees` (commit `53bfb02`). First 30L run: **95 meetings / 17,149 speeches / 59.8% attributed / 25% witnesses** across 8 committees (PAC 5,200 · HUS 3,293 · IAJ 3,185 · CCA 2,829 · ECO 2,363 · HOS 242 · PBC 23 · PRV 14). `committees_status` flipped to `live`. Daily 22:20 UTC schedule, flag-less full current-legislature re-list.
+
+- **Source:** the same paginated archive as chamber Hansard (`/legislative-business/archive/?page=N`) lists per-meeting Hansard Verbatim Reports at deterministic URLs `docs.legassembly.sk.ca/legdocs/Committees/{ACR}/Debates/{NN}L/{YYYYMMDD}Debates-{ACR}(-HTML.htm|.pdf)` — both formats per meeting on 30L, HTML wins. Minutes/Notices/Reports/Tableddocs live in sibling paths and are excluded by the regex. **Committee paths carry legislature only (no session)** — sessions resolved empirically from the chamber corpus' first-sitting-per-session dates.
+- **Committee acronyms (29L–30L):** BIE, CCA, ECO, HOS, HUS, IAJ, PAC, PBC, PRV (`KNOWN_COMMITTEES` in the module; unknown acronyms log loudly and still ingest). BIE publishes minutes-shaped "Debates" that parse to <3 speeches and are skipped.
+- **Parsing:** chamber parsers reused verbatim (Word-15 HTML chassis identical; PDF fallback via `sk_hansard_pdf_parse`).
+- **Speaker resolution — witness-safe:** committee labels use FULL names (`Hugh Gordon: —`) unlike the chamber's honorific+surname style, so slug-miss on a plain full name = witness NULL by design (no surname fallback); surname resolution only for role-bearing shapes (`Chair Wotherspoon` — the chamber classifier returns these role-only, the committee resolver recovers the surname from the raw label). No structured attendance block exists (the Chair introduces members in prose, incl. substitutions — a future substitution-parsing pass could lift attribution a few points).
+- **Historical depth:** archive lists committee Debates back to the late 1990s/early 2000s (29L partially PDF-only). `--all-legislatures` flag exists for the backfill; PDF-path plain-member surnames stay NULL pending a shape check on pre-30L PDFs.
 - **Notes:** Contact: committees_branch@legassembly.sk.ca, 306-787-9930.
 
 ## Existing third-party scrapers

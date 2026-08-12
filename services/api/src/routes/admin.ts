@@ -75,6 +75,15 @@ const COMMAND_CATALOG = [
       { name: "limit_speeches", type: "int", required: false, help: "Cap on TOTAL speeches ingested." },
     ],
   },
+  { key: "ingest-on-committees", category: "hansard",
+    description: "Pull Ontario standing-committee transcripts (ola.org Drupal JSON nodes) into the `speeches` table with speech_type='committee'.",
+    args: [
+      { name: "parliament", type: "int", required: false, help: "ON Parliament number (e.g. 44). Default: current." },
+      { name: "since", type: "date", required: false, help: "Only ingest transcripts on/after this date." },
+      { name: "until", type: "date", required: false, help: "Only ingest transcripts on/before this date." },
+      { name: "limit_transcripts", type: "int", required: false, help: "Cap on transcripts fetched this run (newest-first)." },
+      { name: "committees", type: "string", required: false, help: "Optional comma-separated committee slugs (e.g. 'public-accounts,justice-policy'). Default: all 8." },
+    ] },
   { key: "ingest-sk-committees", category: "hansard",
     description: "Pull Saskatchewan committee Hansard Verbatim Reports (HTML/PDF from docs.legassembly.sk.ca) into the `speeches` table with speech_type='committee'.",
     args: [
