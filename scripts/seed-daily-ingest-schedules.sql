@@ -312,6 +312,12 @@ INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) V
 ('SK Hansard daily ingest',
  'ingest-sk-hansard', '{"limit_sittings": 25}'::jsonb,
  '15 22 * * *', true, 'daily-ingest-rollout'),
+-- Flag-less: full current-legislature re-list (~90 meetings, ~2 min) —
+-- self-healing per the no-fixed-window rule; late-published transcripts
+-- can never fall outside a window.
+('SK committee Hansard daily ingest',
+ 'ingest-sk-committees', '{}'::jsonb,
+ '20 22 * * *', true, 'daily-ingest-rollout'),
 ('SK presiding speaker resolver',
  'resolve-presiding-speakers', '{"province": "SK"}'::jsonb,
  '30 22 * * *', true, 'daily-ingest-rollout');

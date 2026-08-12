@@ -75,6 +75,16 @@ const COMMAND_CATALOG = [
       { name: "limit_speeches", type: "int", required: false, help: "Cap on TOTAL speeches ingested." },
     ],
   },
+  { key: "ingest-sk-committees", category: "hansard",
+    description: "Pull Saskatchewan committee Hansard Verbatim Reports (HTML/PDF from docs.legassembly.sk.ca) into the `speeches` table with speech_type='committee'.",
+    args: [
+      { name: "legislature", type: "int", required: false, help: "SK Legislature number (e.g. 30). Default: current." },
+      { name: "all_legislatures", type: "bool", required: false, help: "Ingest every legislature the archive lists (historical backfill)." },
+      { name: "since", type: "date", required: false, help: "Only ingest meetings on/after this date." },
+      { name: "until", type: "date", required: false, help: "Only ingest meetings on/before this date." },
+      { name: "limit_meetings", type: "int", required: false, help: "Cap on committee meetings fetched this run (newest-first)." },
+      { name: "committees", type: "string", required: false, help: "Optional comma-separated committee acronyms (e.g. 'PAC,CCA'). Default: all." },
+    ] },
   { key: "ingest-ab-committees", category: "hansard",
     description: "Pull Alberta standing-committee transcripts (PDFs from docs.assembly.ab.ca) into the `speeches` table with speech_type='committee'.",
     args: [

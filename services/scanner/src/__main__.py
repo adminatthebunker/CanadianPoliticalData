@@ -2689,6 +2689,185 @@ def cmd_ingest_sk_hansard(
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 
 
+@cli.command("ingest-sk-committees")
+@click.option("--legislature", type=int, default=None,
+              help="Restrict to one legislature (e.g. 30). Default: current.")
+@click.option("--all-legislatures", is_flag=True, default=False,
+              help="Ingest every legislature the archive lists (historical "
+                   "backfill). Overrides --legislature.")
+@click.option("--since", type=str, default=None,
+              help="Only ingest meetings on or after YYYY-MM-DD.")
+@click.option("--until", type=str, default=None,
+              help="Only ingest meetings on or before YYYY-MM-DD.")
+@click.option("--limit-meetings", type=int, default=None,
+              help="Cap to first N meetings (newest-first ordering).")
+@click.option("--committees", type=str, default=None,
+              help="Comma-separated committee acronyms (e.g. PAC,CCA).")
+@click.option("--url", type=str, default=None,
+              help="Bypass discovery; ingest one transcript URL.")
+@click.option("--delay", type=float, default=1.0,
+              help="Seconds between per-meeting fetches.")
+@click.option("--max-archive-pages", type=int, default=None,
+              help="Cap discovery walker (defensive). Default: walk to empty.")
+@click.pass_context
+def cmd_ingest_sk_committees(
+    ctx: click.Context, legislature, all_legislatures, since, until,
+    limit_meetings, committees, url, delay, max_archive_pages,
+) -> None:
+    """Ingest SK committee Hansard Verbatim Reports.
+
+    Discovery walks the same paginated archive as ingest-sk-hansard but
+    harvests the Committees/{ACR}/Debates family the chamber walker
+    skips. HTML wins over PDF per meeting. Sessions are resolved from
+    the meeting date against chamber-corpus session boundaries (committee
+    URLs carry legislature only). Speaker resolution is witness-safe:
+    full-name slug match or role-bearing surname only — plain names that
+    aren't an MLA's full name are witnesses and stay NULL.
+
+    Idempotent. UPSERT keys: (source_system='hansard-sk', source_url, sequence).
+    """
+    from .legislative.sk_committees import ingest_sk_committees as _ingest
+    from .legislative.current_session import current_session
+    from datetime import date as _Date
+
+    def _parse_date(val, flag):
+        if not val:
+            return None
+        try:
+            return _Date.fromisoformat(val)
+        except ValueError:
+            console.print(f"[red]invalid {flag} {val!r}; expected YYYY-MM-DD[/red]")
+            raise click.exceptions.Exit(2)
+
+    since_d = _parse_date(since, "--since")
+    until_d = _parse_date(until, "--until")
+    committees_list = (
+        [c for c in committees.split(",") if c.strip()] if committees else None
+    )
+
+    async def _wrap(db: Database) -> None:
+        legl = legislature
+        if all_legislatures:
+            legl = None
+        elif legl is None:
+            legl, _sess = await current_session(
+                db, level="provincial", province_territory="SK")
+            console.print(f"[dim]auto-resolved current SK legislature: {legl}L[/dim]")
+        stats = await _ingest(
+            db,
+            legislature=legl,
+            since=since_d,
+            until=until_d,
+            limit_meetings=limit_meetings,
+            committees=committees_list,
+            url=url,
+            delay=delay,
+            max_archive_pages=max_archive_pages,
+        )
+        console.print(
+            f"[green]ingest-sk-committees[/green]: "
+            f"seen={stats.meetings_seen} fetched={stats.meetings_fetched} "
+            f"skipped={stats.meetings_skipped} "
+            f"inserted={stats.speeches_inserted} "
+            f"updated={stats.speeches_updated} "
+            f"resolved={stats.resolved} witnesses={stats.witnesses} "
+            f"sessions={sorted(stats.sessions_touched)} "
+            f"fetch_fail={len(stats.fetch_failures)} "
+            f"parse_fail={len(stats.parse_failures)}"
+        )
+        if stats.unknown_acronyms:
+            console.print(
+                f"  [red]unknown acronyms:[/red] {sorted(stats.unknown_acronyms)}"
+            )
+        if stats.fetch_failures or stats.parse_failures:
+            for f in (stats.fetch_failures + stats.parse_failures)[:5]:
+                console.print(f"  [yellow]warn:[/yellow] {f}")
+
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
+@cli.command("ingest-on-committees")
+@click.option("--parliament", type=int, default=None,
+              help="ON Parliament number (e.g. 44). Default: current.")
+@click.option("--since", type=str, default=None,
+              help="Only ingest transcripts on or after YYYY-MM-DD.")
+@click.option("--until", type=str, default=None,
+              help="Only ingest transcripts on or before YYYY-MM-DD.")
+@click.option("--limit-transcripts", type=int, default=None,
+              help="Cap to first N transcripts (newest-first ordering).")
+@click.option("--committees", type=str, default=None,
+              help="Comma-separated committee slugs "
+                   "(e.g. public-accounts,justice-policy).")
+@click.option("--url", type=str, default=None,
+              help="Bypass discovery; ingest one transcript URL.")
+@click.pass_context
+def cmd_ingest_on_committees(
+    ctx: click.Context, parliament, since, until, limit_transcripts,
+    committees, url,
+) -> None:
+    """Ingest ON standing-committee transcripts via ola.org Drupal JSON.
+
+    Discovery walks each committee's per-parliament transcripts listing;
+    transcript nodes are fetched with ?_format=json and parsed with the
+    ON chamber Hansard parser (same attribution shapes). Speaker
+    resolution is witness-safe: exact full-name matching only — plain
+    names that aren't an MPP's full name are witnesses and stay NULL.
+
+    Idempotent. UPSERT keys: (source_system='hansard-on', source_url, sequence).
+    """
+    from .legislative.on_committees import ingest_on_committees as _ingest
+    from .legislative.current_session import current_session
+    from datetime import date as _Date
+
+    def _parse_date(val, flag):
+        if not val:
+            return None
+        try:
+            return _Date.fromisoformat(val)
+        except ValueError:
+            console.print(f"[red]invalid {flag} {val!r}; expected YYYY-MM-DD[/red]")
+            raise click.exceptions.Exit(2)
+
+    since_d = _parse_date(since, "--since")
+    until_d = _parse_date(until, "--until")
+    committees_list = (
+        [c for c in committees.split(",") if c.strip()] if committees else None
+    )
+
+    async def _wrap(db: Database) -> None:
+        parl = parliament
+        if parl is None:
+            parl, _sess = await current_session(
+                db, level="provincial", province_territory="ON")
+            console.print(f"[dim]auto-resolved current ON parliament: P{parl}[/dim]")
+        stats = await _ingest(
+            db,
+            parliament=parl,
+            since=since_d,
+            until=until_d,
+            limit_transcripts=limit_transcripts,
+            committees=committees_list,
+            one_off_url=url,
+        )
+        console.print(
+            f"[green]ingest-on-committees[/green]: "
+            f"committees={stats.committees_walked} "
+            f"seen={stats.transcripts_seen} fetched={stats.transcripts_fetched} "
+            f"skipped={stats.transcripts_skipped} "
+            f"inserted={stats.speeches_inserted} "
+            f"updated={stats.speeches_updated} "
+            f"resolved={stats.resolved} witnesses={stats.witnesses} "
+            f"sessions={sorted(stats.sessions_touched)} "
+            f"fetch_fail={len(stats.fetch_failures)} "
+            f"parse_fail={len(stats.parse_failures)}"
+        )
+        if stats.fetch_failures or stats.parse_failures:
+            for f in (stats.fetch_failures + stats.parse_failures)[:5]:
+                console.print(f"  [yellow]warn:[/yellow] {f}")
+
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
 @cli.command("ingest-sk-mlas")
 @click.option("--parliaments", default="30",
               help="Comma-separated SK parliament numbers to fetch (e.g. '29,30'). Default: 30.")
