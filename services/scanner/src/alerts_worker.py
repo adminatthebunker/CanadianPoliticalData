@@ -161,6 +161,47 @@ def _build_filter_sql(payload: dict[str, Any], param_offset: int) -> tuple[str, 
     return (" AND " + " AND ".join(clauses) if clauses else ""), params
 
 
+async def _postcode_politician_ids(db: Database, postcode: str) -> list[str] | None:
+    """Resolve a filter_payload postcode to current-rep politician IDs.
+
+    Reads public.postcode_cache directly — this worker NEVER calls Open
+    North (same posture as never calling TEI; the API warms the cache at
+    saved-search save time). Staleness is fine: postcodes don't move.
+    Returns None on cache miss so the caller can retry next tick.
+
+    PIP + join mirrors services/api/src/lib/postcode-reps.ts — keep the
+    two in sync.
+    """
+    normalized = "".join(ch for ch in postcode if ch.isalnum()).upper()
+    row = await db.fetchrow(
+        "SELECT centroid_lng, centroid_lat FROM public.postcode_cache WHERE postcode = $1",
+        normalized,
+    )
+    if row is None:
+        return None
+    rows = await db.fetch(
+        """
+        WITH hits AS (
+          SELECT constituency_id, name, level
+            FROM constituency_boundaries
+           WHERE effective_to IS NULL
+             AND ST_Contains(boundary, ST_SetSRID(ST_MakePoint($1, $2), 4326))
+        )
+        SELECT DISTINCT p.id
+          FROM politicians p
+          JOIN hits h
+            ON p.constituency_id = h.constituency_id
+            OR (p.constituency_id IS NULL
+                AND p.level = h.level
+                AND lower(p.constituency_name) = lower(h.name))
+         WHERE p.is_active = true
+        """,
+        row["centroid_lng"],
+        row["centroid_lat"],
+    )
+    return [str(r["id"]) for r in rows]
+
+
 async def find_new_matches(
     db: Database,
     saved_search_id: str,
@@ -337,13 +378,49 @@ async def process_due_searches(db: Database) -> int:
         # A saved search without an embedding AND without meaningful
         # filters can't be matched — skip it and update the watermark.
         if qvec is None and not any(
-            filter_payload.get(k) for k in ("level", "province_territory", "politician_id", "party")
+            filter_payload.get(k)
+            for k in (
+                "level", "province_territory", "politician_id",
+                "politician_ids", "postcode", "party",
+            )
         ):
             await db.execute(
                 "UPDATE private.saved_searches SET last_checked_at = now() WHERE id = $1",
                 row["id"],
             )
             continue
+
+        # Postcode → rep IDs, merged into politician_ids before matching.
+        # _build_filter_sql then needs no postcode awareness. The API warms
+        # postcode_cache at save time; a cache miss here means Open North
+        # was down at save — retry next tick WITHOUT advancing the
+        # watermark (this worker never calls upstream itself).
+        if filter_payload.get("postcode"):
+            resolved_ids = await _postcode_politician_ids(db, str(filter_payload["postcode"]))
+            if resolved_ids is None:
+                log.warning(
+                    "postcode %s not in postcode_cache for saved_search %s — retrying next tick",
+                    filter_payload["postcode"], row["id"],
+                )
+                continue
+            merged = list(dict.fromkeys([
+                *(filter_payload.get("politician_ids") or []),
+                *([filter_payload["politician_id"]] if filter_payload.get("politician_id") else []),
+                *resolved_ids,
+            ]))
+            filter_payload = {
+                k: v for k, v in filter_payload.items()
+                if k not in ("postcode", "politician_id")
+            }
+            filter_payload["politician_ids"] = merged
+            if not merged:
+                # Postcode resolved to zero current reps: zero possible
+                # matches is a valid "checked" outcome — advance and move on.
+                await db.execute(
+                    "UPDATE private.saved_searches SET last_checked_at = now() WHERE id = $1",
+                    row["id"],
+                )
+                continue
 
         try:
             if qvec is not None:

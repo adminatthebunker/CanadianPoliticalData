@@ -35,6 +35,7 @@ import { useAIAnalyzeMeta } from "../hooks/useAIAnalyzeMeta";
 import { useReportsMeta } from "../hooks/useReportsMeta";
 import { useSpeechFacets, type FacetsResponse } from "../hooks/useSpeechFacets";
 import { useUserAuth } from "../hooks/useUserAuth";
+import { POSTAL_RE, canonicalizePostal, storePostcode } from "../lib/postal";
 import "../styles/hansard-search.css";
 
 type ViewMode = "timeline" | "politician" | "analysis" | "map";
@@ -124,6 +125,11 @@ function readFilter(params: URLSearchParams): SpeechSearchFilter {
   const havePair = parliament != null && session != null;
   const rawAnchor = params.get("anchor_chunk_id");
   const anchor_chunk_id = rawAnchor && UUID_RE.test(rawAnchor) ? rawAnchor : undefined;
+  const rawPostcode = params.get("postcode");
+  const postcode =
+    rawPostcode && POSTAL_RE.test(rawPostcode)
+      ? canonicalizePostal(rawPostcode)
+      : undefined;
   return {
     q: params.get("q") ?? "",
     anchor_chunk_id,
@@ -133,6 +139,7 @@ function readFilter(params: URLSearchParams): SpeechSearchFilter {
       : undefined) as SpeechSearchFilter["level"],
     province_territory: params.get("province") ?? undefined,
     politician_ids: politician_ids.length > 0 ? politician_ids : undefined,
+    postcode,
     party: params.get("party") ?? undefined,
     from: params.get("from") ?? undefined,
     to: params.get("to") ?? undefined,
@@ -159,6 +166,7 @@ function writeFilter(f: SpeechSearchFilter, view: ViewMode): URLSearchParams {
   if (f.lang && f.lang !== "any") p.set("lang", f.lang);
   if (f.level) p.set("level", f.level);
   if (f.province_territory) p.set("province", f.province_territory);
+  if (f.postcode) p.set("postcode", f.postcode);
   if (f.party) p.set("party", f.party);
   if (f.from) p.set("from", f.from);
   if (f.to) p.set("to", f.to);
@@ -378,6 +386,12 @@ export default function HansardSearchPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [appliedSig]);
 
+  // Remember the last postcode the user actually searched with, so the
+  // "My reps" picker (and the home-page input) prefill next visit.
+  useEffect(() => {
+    if (appliedFilter.postcode) storePostcode(appliedFilter.postcode);
+  }, [appliedFilter.postcode]);
+
   // Stage a partial update to the draft without touching the URL. Used
   // by every filter input that should *not* fire a new search until the
   // user explicitly commits.
@@ -447,6 +461,7 @@ export default function HansardSearchPage() {
   const hasAnyFilter = Boolean(
     appliedFilter.level ||
       appliedFilter.province_territory ||
+      appliedFilter.postcode ||
       appliedFilter.party ||
       appliedFilter.from ||
       appliedFilter.to ||

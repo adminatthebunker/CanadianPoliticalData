@@ -3,6 +3,8 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import { config } from "../config.js";
 import { query, queryOne } from "../db.js";
+import { politicianIdsForPostcode } from "../lib/postcode-reps.js";
+import { PostcodeUpstreamError } from "../lib/postcode.js";
 
 /**
  * Per-saved-search RSS feeds. A feed URL like
@@ -83,9 +85,14 @@ interface FeedMatch {
 function buildFilterWhere(
   payload: Record<string, unknown>,
   paramOffset: number,
-): { sql: string; params: (string | number)[] } {
+  // Pre-merged politician IDs: payload politician_id/politician_ids plus
+  // any postcode-resolved reps (resolution is async, so the caller does
+  // it — this builder stays sync). null = no politician constraint;
+  // empty array = constrain to nothing (postcode resolved to zero reps).
+  politicianIds: string[] | null,
+): { sql: string; params: (string | number | string[])[] } {
   const clauses: string[] = [];
-  const params: (string | number)[] = [];
+  const params: (string | number | string[])[] = [];
   const push = (col: string, val: string) => {
     params.push(val);
     clauses.push(`${col} = $${paramOffset + params.length}`);
@@ -96,8 +103,14 @@ function buildFilterWhere(
   if (typeof level === "string") push("sc.level", level);
   const pt = payload.province_territory;
   if (typeof pt === "string") push("sc.province_territory", pt);
-  const pol = payload.politician_id;
-  if (typeof pol === "string") push("sc.politician_id", pol);
+  if (politicianIds !== null) {
+    if (politicianIds.length === 0) {
+      clauses.push("FALSE");
+    } else {
+      params.push(politicianIds);
+      clauses.push(`sc.politician_id = ANY($${paramOffset + params.length}::uuid[])`);
+    }
+  }
   const party = payload.party;
   if (typeof party === "string") push("sc.party_at_time", party);
   const from = payload.from;
@@ -116,10 +129,44 @@ function buildFilterWhere(
   };
 }
 
+/** Merge the payload's politician selectors (legacy singular, canonical
+ *  array, postcode-resolved reps) into one ID list. Returns null when the
+ *  payload has no politician constraint at all. A postcode that can't be
+ *  resolved right now (Open North down + cold cache) degrades to [] —
+ *  a temporarily-empty feed, never a 500 or an unfiltered corpus feed. */
+async function mergedPoliticianIds(
+  payload: Record<string, unknown>,
+): Promise<string[] | null> {
+  const ids = new Set<string>();
+  let constrained = false;
+  if (typeof payload.politician_id === "string") {
+    ids.add(payload.politician_id);
+    constrained = true;
+  }
+  if (Array.isArray(payload.politician_ids)) {
+    for (const id of payload.politician_ids) {
+      if (typeof id === "string") ids.add(id);
+    }
+    constrained = true;
+  }
+  if (typeof payload.postcode === "string" && payload.postcode.length > 0) {
+    constrained = true;
+    try {
+      for (const id of await politicianIdsForPostcode(payload.postcode)) ids.add(id);
+    } catch (err) {
+      if (!(err instanceof PostcodeUpstreamError)) throw err;
+      return [];
+    }
+  }
+  return constrained ? [...ids] : null;
+}
+
 async function runFeedMatch(ss: SavedSearchForFeed): Promise<FeedMatch[]> {
+  const politicianIds = await mergedPoliticianIds(ss.filter_payload);
   const { sql: filterSql, params: filterParams } = buildFilterWhere(
     ss.filter_payload,
-    ss.query_embedding ? 1 : 0
+    ss.query_embedding ? 1 : 0,
+    politicianIds
   );
 
   if (ss.query_embedding) {

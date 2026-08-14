@@ -5,6 +5,13 @@ import {
   type SpeechType,
 } from "../hooks/useSpeechSearch";
 import { useLegislativeSessions } from "../hooks/useLegislativeSessions";
+import {
+  POSTAL_RE,
+  canonicalizePostal,
+  formatPostal,
+  loadStoredPostcode,
+  storePostcode,
+} from "../lib/postal";
 
 // Canonical filter taxonomy. Each entry is one row in the +Filter menu
 // and one chip when active. `date` collapses the from/to pair; the rest
@@ -12,6 +19,7 @@ import { useLegislativeSessions } from "../hooks/useLegislativeSessions";
 type FilterType =
   | "lang"
   | "level"
+  | "postcode"
   | "province"
   | "party"
   | "date"
@@ -24,6 +32,7 @@ type FilterType =
 const FILTER_LABELS: Record<FilterType, string> = {
   lang: "Language",
   level: "Level",
+  postcode: "My reps",
   province: "Province",
   party: "Party",
   date: "Date range",
@@ -35,6 +44,7 @@ const FILTER_LABELS: Record<FilterType, string> = {
 };
 
 const ALL_FILTERS: FilterType[] = [
+  "postcode",
   "level",
   "province",
   "party",
@@ -107,6 +117,7 @@ function isActive(t: FilterType, v: SpeechSearchFilter): boolean {
   switch (t) {
     case "lang":           return !!v.lang && v.lang !== "any";
     case "level":          return !!v.level;
+    case "postcode":       return !!v.postcode;
     case "province":       return !!v.province_territory;
     case "party":          return !!v.party;
     case "date":           return !!v.from || !!v.to;
@@ -128,6 +139,8 @@ function chipLabel(t: FilterType, v: SpeechSearchFilter): string {
       return v.lang === "fr" ? "Français" : v.lang === "en" ? "English" : "Language";
     case "level":
       return v.level ? `${v.level[0].toUpperCase()}${v.level.slice(1)}` : "Level";
+    case "postcode":
+      return v.postcode ? formatPostal(v.postcode) : "My reps";
     case "province":
       return v.province_territory
         ? PROVINCE_LABEL[v.province_territory] ?? v.province_territory
@@ -175,6 +188,7 @@ function clearPatch(t: FilterType): Partial<SpeechSearchFilter> {
   switch (t) {
     case "lang":           return { lang: "any" };
     case "level":          return { level: undefined };
+    case "postcode":       return { postcode: undefined };
     case "province":       return { province_territory: undefined };
     case "party":          return { party: undefined };
     case "date":           return { from: undefined, to: undefined };
@@ -397,6 +411,7 @@ function renderPicker(
   switch (t) {
     case "lang":           return <LangPicker value={value} apply={apply} />;
     case "level":          return <LevelPicker value={value} apply={apply} />;
+    case "postcode":       return <PostcodePicker value={value} apply={apply} />;
     case "province":       return <ProvincePicker value={value} apply={apply} />;
     case "party":          return <PartyPicker value={value} apply={apply} />;
     case "date":           return <DateRangePicker value={value} apply={apply} />;
@@ -487,6 +502,65 @@ function ProvincePicker({ value, apply }: PickerProps) {
           </option>
         ))}
       </select>
+    </>
+  );
+}
+
+function PostcodePicker({ value, apply }: PickerProps) {
+  // Prefill from the active filter, falling back to the last postcode the
+  // user searched with anywhere on the site (localStorage, client-only).
+  const [draft, setDraft] = useState(
+    () => formatPostal(value.postcode ?? loadStoredPostcode() ?? ""),
+  );
+  const [error, setError] = useState<string | null>(null);
+  const commit = () => {
+    const trimmed = draft.trim();
+    if (!trimmed) {
+      apply({ postcode: undefined });
+      return;
+    }
+    if (!POSTAL_RE.test(trimmed)) {
+      setError("Enter a full postal code, e.g. K1A 0A6");
+      return;
+    }
+    const canonical = canonicalizePostal(trimmed);
+    storePostcode(canonical);
+    apply({ postcode: canonical });
+  };
+  return (
+    <>
+      <PickerHeader title="My reps" />
+      <p className="cpd-filter-popover__help">
+        Only show speeches by the representatives for this postal code —
+        your MP, MLA, and municipal reps.
+      </p>
+      <input
+        type="text"
+        className="cpd-filter-popover__input"
+        autoFocus
+        placeholder="K1A 0A6"
+        autoComplete="postal-code"
+        maxLength={7}
+        value={draft}
+        onChange={(e) => {
+          setDraft(e.target.value);
+          if (error) setError(null);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") commit();
+        }}
+        aria-invalid={error ? true : undefined}
+      />
+      {error && <p className="cpd-filter-popover__error" role="alert">{error}</p>}
+      <div className="cpd-filter-popover__actions">
+        <button
+          type="button"
+          className="cpd-filter-popover__btn"
+          onClick={commit}
+        >
+          Apply
+        </button>
+      </div>
     </>
   );
 }

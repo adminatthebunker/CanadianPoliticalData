@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { query } from "../db.js";
 import { resolvePhotoUrl } from "../lib/photos.js";
 import { resolvePostcode, PostcodeUpstreamError } from "../lib/postcode.js";
+import { politicianIdsForPostcode } from "../lib/postcode-reps.js";
 
 /**
  * /api/v1/lookup/postcode/:code
@@ -77,22 +78,13 @@ export default async function lookupRoutes(app: FastifyInstance) {
       }
       throw err;
     }
-    const { lat, lng } = resolved.latlng;
-
-    // PIP over the local boundaries mirror, then join politicians.
-    // A point commonly sits in several current boundaries at once
-    // (federal riding + provincial riding + municipal ward + the
-    // city-wide census-subdivision polygon), which is exactly what we
-    // want: the ward gives the ward councillor, the city polygon gives
-    // the mayor / at-large members.
-    const matched = await query<MatchedPolitician>(
-      `WITH hits AS (
-         SELECT constituency_id, name, level
-           FROM constituency_boundaries
-          WHERE effective_to IS NULL
-            AND ST_Contains(boundary, ST_SetSRID(ST_MakePoint($1, $2), 4326))
-       )
-       SELECT p.id, p.name, p.party, p.elected_office, p.level,
+    // PIP + politician join now lives in lib/postcode-reps.ts, shared with
+    // the search routes' `postcode` filter — so "reps the drawer shows" is
+    // provably the same set "search filters by". The enrichment
+    // (websites / scan summary) stays local to this route.
+    const repIds = await politicianIdsForPostcode(code);
+    const matched = repIds.length === 0 ? [] : await query<MatchedPolitician>(
+      `SELECT p.id, p.name, p.party, p.elected_office, p.level,
               p.constituency_name, p.email,
               p.photo_path, p.photo_url,
               MAX(s.sovereignty_tier) AS worst_tier,
@@ -103,20 +95,15 @@ export default async function lookupRoutes(app: FastifyInstance) {
               COUNT(*) FILTER (WHERE s.sovereignty_tier = 4)::int AS us,
               COUNT(*) FILTER (WHERE s.sovereignty_tier = 5)::int AS foreign
          FROM politicians p
-         JOIN hits h
-           ON p.constituency_id = h.constituency_id
-           OR (p.constituency_id IS NULL
-               AND p.level = h.level
-               AND lower(p.constituency_name) = lower(h.name))
          LEFT JOIN websites w ON w.owner_type='politician' AND w.owner_id=p.id AND w.is_active
                               AND COALESCE(w.label,'') <> 'shared_official'
          LEFT JOIN LATERAL (
            SELECT * FROM infrastructure_scans WHERE website_id = w.id
            ORDER BY scanned_at DESC LIMIT 1
          ) s ON true
-        WHERE p.is_active = true
+        WHERE p.id = ANY($1::uuid[])
         GROUP BY p.id`,
-      [lng, lat],
+      [repIds],
     );
 
     matched.sort(

@@ -21,6 +21,7 @@ import committeesRoutes from "./routes/committees.js";
 import openparliamentRoutes from "./routes/openparliament.js";
 import coverageRoutes from "./routes/coverage.js";
 import searchRoutes, { EmbeddingServiceUnavailableError } from "./routes/search.js";
+import { PostcodeUpstreamError } from "./lib/postcode.js";
 import projectionRoutes from "./routes/projections.js";
 import speechRoutes from "./routes/speeches.js";
 import chunkRoutes from "./routes/chunks.js";
@@ -77,6 +78,38 @@ app.setErrorHandler((err, _req, reply) => {
       code: "embedding_service_unavailable",
       message:
         "Search embedding service is temporarily unavailable. Please try again in a moment.",
+    });
+  }
+  // Postcode-filter resolution failures (search routes propagate
+  // PostcodeUpstreamError from lib/postcode-reps.ts). Bad codes are a bad
+  // filter value → 400 (404 is already anchor_not_found's signal on these
+  // routes); upstream outage → 503, only reachable on a cold cache while
+  // Open North is down (SWR serves stale otherwise). lookup.ts keeps its
+  // own local catch and is unaffected.
+  if (err instanceof PostcodeUpstreamError) {
+    if (err.kind === "invalid") {
+      return reply.status(400).send({
+        statusCode: 400,
+        error: "Bad Request",
+        code: "postcode_invalid",
+        message: "Invalid Canadian postal code (e.g. K1A 0A6)",
+      });
+    }
+    if (err.kind === "not_found") {
+      return reply.status(400).send({
+        statusCode: 400,
+        error: "Bad Request",
+        code: "postcode_not_found",
+        message: "Postal code not found",
+      });
+    }
+    app.log.warn({ err: err.message }, "postcode resolution unavailable");
+    return reply.status(503).send({
+      statusCode: 503,
+      error: "Service Unavailable",
+      code: "postcode_service_unavailable",
+      message:
+        "Postal code lookup service is temporarily unavailable. Please try again in a moment.",
     });
   }
   reply.send(err);

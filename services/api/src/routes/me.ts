@@ -5,6 +5,7 @@ import { requireUser, getUser } from "../middleware/user-auth.js";
 import { SESSION_COOKIE } from "../lib/auth-token.js";
 import { CSRF_COOKIE, requireCsrf } from "../lib/csrf.js";
 import { baseFilterSchema, encodeQuery, toPgVector } from "./search.js";
+import { resolvePostcode, PostcodeUpstreamError } from "../lib/postcode.js";
 import { feedToken } from "./feeds.js";
 import { config } from "../config.js";
 import {
@@ -62,6 +63,41 @@ const attributionUrlSchema = z
   })
   .nullable()
   .optional();
+
+/** Validate + normalize a filter_payload postcode at save time, and — the
+ *  load-bearing part — warm public.postcode_cache so the alerts worker
+ *  (which never calls Open North; it only reads the cache) can resolve it.
+ *  Mutates the payload to the canonical spaceless-uppercase form.
+ *  Returns an error message for a bad postcode (caller 400s), null when
+ *  fine. An Open North outage is NOT an error: save anyway (the cache-warm
+ *  retries naturally on next search/alert-save) — mirrors the TEI-embed
+ *  graceful-degradation posture below. */
+async function normalizeAndWarmPostcode(
+  payload: { postcode?: string },
+  log: { warn: (obj: object, msg: string) => void },
+): Promise<string | null> {
+  if (!payload.postcode) {
+    delete payload.postcode;
+    return null;
+  }
+  try {
+    const resolved = await resolvePostcode(payload.postcode);
+    payload.postcode = resolved.postcode.replace(/\s/g, "").toUpperCase();
+    return null;
+  } catch (err) {
+    if (err instanceof PostcodeUpstreamError) {
+      if (err.kind === "invalid") return "Invalid Canadian postal code (e.g. K1A 0A6)";
+      if (err.kind === "not_found") return "Postal code not found";
+      log.warn(
+        { err: err.message, postcode: payload.postcode },
+        "[saved-searches] postcode cache-warm unavailable; saving anyway"
+      );
+      payload.postcode = payload.postcode.replace(/[\s-]/g, "").toUpperCase();
+      return null;
+    }
+    throw err;
+  }
+}
 
 const savedSearchCreateBody = z.object({
   name: z.string().trim().min(1).max(100),
@@ -236,6 +272,9 @@ export default async function meRoutes(app: FastifyInstance) {
           ? null
           : scrape_attribute_url;
 
+      const postcodeErr = await normalizeAndWarmPostcode(filter_payload, req.log);
+      if (postcodeErr) return reply.code(400).send({ error: postcodeErr });
+
       // Compute scrape_next_run_at server-side: NULL when scrape_cadence
       // is 'none', else now() + cadence interval. This is what the
       // scrape worker's dispatcher tests against. The user can edit
@@ -324,6 +363,9 @@ export default async function meRoutes(app: FastifyInstance) {
       let updateEmbedding = false;
       let newEmbeddingLiteral: string | null = null;
       if (filter_payload !== undefined) {
+        const postcodeErr = await normalizeAndWarmPostcode(filter_payload, req.log);
+        if (postcodeErr) return reply.code(400).send({ error: postcodeErr });
+
         const existing = await queryOne<{ filter_payload: z.infer<typeof baseFilterSchema> }>(
           `SELECT filter_payload FROM private.saved_searches WHERE id = $1 AND user_id = $2`,
           [req.params.id, claims.sub]

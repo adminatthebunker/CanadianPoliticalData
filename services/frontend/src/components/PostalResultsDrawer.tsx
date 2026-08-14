@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { Link } from "react-router-dom";
 import type { PostalLookupResponse, PostalRep } from "./PostalLookupBar";
 import { TIER_META, type SovereigntyTier } from "../types";
+import { canonicalizePostal, storePostcode } from "../lib/postal";
 
 interface Props {
   data: PostalLookupResponse;
@@ -54,6 +55,16 @@ export function PostalResultsDrawer({ data, onClose }: Props) {
         <ul className="postal-drawer__list">
           {data.representatives.map((r, i) => <DrawerRepRow key={i} rep={r} />)}
         </ul>
+
+        <div className="postal-drawer__actions">
+          <Link
+            to={`/search?postcode=${canonicalizePostal(data.postal_code)}`}
+            className="lander__btn lander__btn--primary postal-drawer__search-btn"
+            onClick={() => storePostcode(canonicalizePostal(data.postal_code))}
+          >
+            Search their speeches →
+          </Link>
+        </div>
 
         <footer className="report-card__foot">
           <div className="report-card__methodology">

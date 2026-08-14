@@ -1461,6 +1461,15 @@ button.active { background: var(--accent); border-color: var(--accent); }
   background: var(--panel-2); border: 1px solid var(--border);
   border-radius: 8px; padding: .65rem .75rem;
 }
+.postal-drawer__actions {
+  padding: .35rem 1rem .65rem;
+  display: flex;
+}
+.postal-drawer__search-btn {
+  flex: 1 1 auto;
+  font-size: .85rem;
+  padding: .6rem .9rem;
+}
 .postal-drawer__row-head {
   display: flex; gap: .55rem; align-items: flex-start;
 }
@@ -1803,6 +1812,13 @@ button.active { background: var(--accent); border-color: var(--accent); }
   gap: 1rem;
   margin: 0 0 1rem;
 }
+/* Unified single search card (2026-08: the standalone "Find your reps"
+   card folded into the search bar — postal-only submits route to /map). */
+.lander__forms--single {
+  grid-template-columns: 1fr;
+  max-width: 620px;
+  margin-inline: auto;
+}
 .lander__form-card {
   display: flex; flex-direction: column; gap: .65rem;
   padding: 1.1rem 1rem 1.15rem;
@@ -1839,6 +1855,13 @@ button.active { background: var(--accent); border-color: var(--accent); }
 }
 .lander__find-row input::placeholder { color: rgba(148, 163, 184, 0.55); }
 .lander__find-row .lander__btn { flex: 0 0 auto; padding: .75rem 1.1rem; }
+/* Optional "my reps" postcode on the search card: compact fixed-width
+   sibling of the flexible query input. */
+.lander__find-row input.lander__postal-inline { flex: 0 1 10.5rem; }
+@media (max-width: 720px) {
+  .lander__find-row { flex-wrap: wrap; }
+  .lander__find-row input.lander__postal-inline { flex: 1 1 8rem; }
+}
 .lander__find-error {
   color: #fca5a5; font-size: .82rem;
 }

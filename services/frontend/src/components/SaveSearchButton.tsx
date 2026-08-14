@@ -79,6 +79,7 @@ export function SaveSearchButton({ filter }: Props) {
         lang = "any",
         level,
         province_territory,
+        postcode,
         party,
         from,
         to,
@@ -87,6 +88,7 @@ export function SaveSearchButton({ filter }: Props) {
       const payload: Record<string, unknown> = { q, lang };
       if (level) payload.level = level;
       if (province_territory) payload.province_territory = province_territory;
+      if (postcode) payload.postcode = postcode;
       if (pids.length > 0) payload.politician_ids = pids;
       if (party) payload.party = party;
       if (from) payload.from = from;

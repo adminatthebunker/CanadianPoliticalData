@@ -122,6 +122,11 @@ export interface SpeechSearchFilter {
   politician_id?: string;
   /** Canonical multi-select politician pin, cap 10 at the API. */
   politician_ids?: string[];
+  /** "My reps" filter: canonical spaceless postcode (e.g. "K1A0A6").
+   *  Resolved server-side to the postcode's current representatives at
+   *  every level and UNIONED with politician pins — the resolved reps
+   *  don't count against the 10-pin cap. */
+  postcode?: string;
   party?: string;
   from?: string;
   to?: string;
@@ -186,6 +191,7 @@ export function buildSpeechSearchQuery(f: SpeechSearchFilter): string {
   // URLSearchParams multi-value handling). Backward compatible with
   // single-pin URLs shared/bookmarked before Phase 2.
   for (const id of effectivePoliticianIds(f)) p.append("politician_id", id);
+  if (f.postcode) p.set("postcode", f.postcode);
   if (f.party) p.set("party", f.party);
   if (f.from) p.set("from", f.from);
   if (f.to) p.set("to", f.to);
@@ -225,6 +231,7 @@ export function buildSpeechCountQuery(f: SpeechSearchFilter): string {
   if (f.level) p.set("level", f.level);
   if (f.province_territory) p.set("province_territory", f.province_territory);
   for (const id of effectivePoliticianIds(f)) p.append("politician_id", id);
+  if (f.postcode) p.set("postcode", f.postcode);
   if (f.party) p.set("party", f.party);
   if (f.from) p.set("from", f.from);
   if (f.to) p.set("to", f.to);

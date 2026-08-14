@@ -342,6 +342,13 @@
   line-height: 1.4;
 }
 
+.cpd-filter-popover__error {
+  margin: 0;
+  font-size: .78rem;
+  color: var(--accent, #d33);
+  line-height: 1.4;
+}
+
 .cpd-filter-popover__radio-list,
 .cpd-filter-popover__check-list {
   display: flex;

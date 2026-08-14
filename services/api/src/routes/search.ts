@@ -3,6 +3,7 @@ import { z } from "zod";
 import { config } from "../config.js";
 import { pool, query, queryOne } from "../db.js";
 import { resolvePhotoUrl } from "../lib/photos.js";
+import { politicianIdsForPostcode } from "../lib/postcode-reps.js";
 import { requireUser, getUser } from "../middleware/user-auth.js";
 import {
   registerSearchTelemetry,
@@ -118,6 +119,11 @@ export const baseFilterSchema = z.object({
   province_territory: z.string().length(2).optional(),
   politician_id: politicianIdInput,
   politician_ids: z.array(z.string().uuid()).max(10).optional(),
+  // "My reps" filter: resolved server-side (lib/postcode-reps.ts) to the
+  // postcode's current representatives and unioned with politician_ids.
+  // Loose at schema level — classifyPostcode does real validation at
+  // resolve time, which also admits 3-char FSAs.
+  postcode: z.string().trim().max(12).optional(),
   party: z.string().max(64).optional(),
   from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
@@ -412,10 +418,26 @@ export async function resolveSearchVector(
   return null;
 }
 
+/** Filter widened with the postcode's server-resolved rep IDs. Resolution
+ *  happens once per request in the route handler (withPostcodeIds), not in
+ *  buildFilterWhere, because the latter is sync and called from several
+ *  query builders per request. */
+type FilterWithPostcodeIds = BaseFilter & { postcode_politician_ids?: string[] };
+
+/** Resolve `postcode` → politician IDs and attach them to the filter.
+ *  Propagates PostcodeUpstreamError; the app-level setErrorHandler maps it
+ *  to stable postcode_* error codes. */
+async function withPostcodeIds<T extends BaseFilter>(
+  f: T,
+): Promise<T & { postcode_politician_ids?: string[] }> {
+  if (!f.postcode) return f;
+  return { ...f, postcode_politician_ids: await politicianIdsForPostcode(f.postcode) };
+}
+
 /** Build the WHERE clause + filter params shared by /speeches and /facets.
  *  Returns filter-only params (no vector, no q-text). Callers append those
  *  at whatever $N index they need and pass the combined array to `query`. */
-function buildFilterWhere(f: BaseFilter): {
+function buildFilterWhere(f: FilterWithPostcodeIds): {
   whereSql: string;
   filterParams: (string | number | string[])[];
 } {
@@ -424,8 +446,17 @@ function buildFilterWhere(f: BaseFilter): {
   if (f.lang !== "any") { filterParams.push(f.lang); where.push(`sc.language = $${filterParams.length}`); }
   if (f.level)          { filterParams.push(f.level); where.push(`sc.level = $${filterParams.length}`); }
   if (f.province_territory) { filterParams.push(f.province_territory); where.push(`sc.province_territory = $${filterParams.length}`); }
-  const pids = effectivePoliticianIds(f);
+  // Pinned IDs (capped at 10 by effectivePoliticianIds) union with the
+  // postcode's server-resolved reps (uncapped — an at-large council can
+  // exceed 10). Both are "speaker is one of…" selectors; intersection
+  // would be near-always empty. A postcode that resolves to zero reps
+  // must yield zero results, never fall through to the full corpus.
+  const pids = [...new Set([
+    ...effectivePoliticianIds(f),
+    ...(f.postcode_politician_ids ?? []),
+  ])];
   if (pids.length > 0) { filterParams.push(pids); where.push(`sc.politician_id = ANY($${filterParams.length}::uuid[])`); }
+  else if (f.postcode) { where.push("FALSE"); }
   if (f.party)          { filterParams.push(f.party); where.push(`sc.party_at_time = $${filterParams.length}`); }
   if (f.from)           { filterParams.push(f.from); where.push(`sc.spoken_at >= $${filterParams.length}`); }
   if (f.to)             { filterParams.push(f.to);   where.push(`sc.spoken_at < ($${filterParams.length}::date + interval '1 day')`); }
@@ -476,6 +507,7 @@ function hasAnyStructuralFilter(f: BaseFilter): boolean {
     : Boolean(f.speech_type);
   return Boolean(
     effectivePoliticianIds(f).length > 0 ||
+    f.postcode ||
     f.party || f.level || f.province_territory || f.from || f.to ||
     (f.parliament_number != null && f.session_number != null) ||
     speechTypes ||
@@ -1029,18 +1061,20 @@ export default async function searchRoutes(app: FastifyInstance) {
   app.get("/speeches", async (req, reply) => {
     const parsed = searchQuery.safeParse(req.query);
     if (!parsed.success) return reply.badRequest(parsed.error.message);
-    const { group_by } = parsed.data;
+
+    const input = await withPostcodeIds(parsed.data);
+    const { group_by } = input;
 
     if (group_by === "politician") {
-      return handleGroupedByPolitician(app, reply, parsed.data);
+      return handleGroupedByPolitician(app, reply, input);
     }
 
     if (
-      !parsed.data.q &&
-      !parsed.data.anchor_chunk_id &&
-      !hasAnyStructuralFilter(parsed.data)
+      !input.q &&
+      !input.anchor_chunk_id &&
+      !hasAnyStructuralFilter(input)
     ) {
-      return reply.badRequest("provide `q`, `anchor_chunk_id`, or at least one filter (politician_ids, party, level, province, from, to, parliament+session, speech_type, politician_active)");
+      return reply.badRequest("provide `q`, `anchor_chunk_id`, or at least one filter (politician_ids, postcode, party, level, province, from, to, parliament+session, speech_type, politician_active)");
     }
 
     // Default the cosine-similarity floor to 0.5 when not set. Below
@@ -1054,10 +1088,10 @@ export default async function searchRoutes(app: FastifyInstance) {
     // browsing ignores it harmlessly. Anchor mode opts into the same
     // 0.5 floor — the anchor chunk's neighbourhood beyond ~0.5 cosine
     // becomes weak signal under Qwen3.
-    const effectiveMin = parsed.data.min_similarity ?? 0.5;
-    return runTimelineSearch(parsed.data, {
+    const effectiveMin = input.min_similarity ?? 0.5;
+    return runTimelineSearch(input, {
       minSimilarity: effectiveMin,
-      includeCount: parsed.data.include_count,
+      includeCount: input.include_count,
       reply,
     });
   });
@@ -1077,13 +1111,14 @@ export default async function searchRoutes(app: FastifyInstance) {
       !parsed.data.anchor_chunk_id &&
       !hasAnyStructuralFilter(parsed.data)
     ) {
-      return reply.badRequest("provide `q`, `anchor_chunk_id`, or at least one filter (politician_ids, party, level, province, from, to, parliament+session, speech_type, politician_active)");
+      return reply.badRequest("provide `q`, `anchor_chunk_id`, or at least one filter (politician_ids, postcode, party, level, province, from, to, parliament+session, speech_type, politician_active)");
     }
 
     if (parsed.data.anchor_chunk_id) markAnchorQuery();
     markHasFilters(hasAnyStructuralFilter(parsed.data));
 
-    const { whereSql: baseWhereSql, filterParams } = buildFilterWhere(parsed.data);
+    const input = await withPostcodeIds(parsed.data);
+    const { whereSql: baseWhereSql, filterParams } = buildFilterWhere(input);
     const effectiveMin = parsed.data.min_similarity ?? 0.5;
 
     const resolved = await resolveSearchVector(parsed.data);
@@ -1145,6 +1180,8 @@ export default async function searchRoutes(app: FastifyInstance) {
         ...parsed.data,
         politician_id: undefined,
         politician_ids: [parsed.data.politician_id],
+        // Deep-dive on ONE politician — a postcode union would corrupt it.
+        postcode: undefined,
         group_by: "timeline",
         per_group_limit: 5,
         sort: "mentions",
@@ -1191,7 +1228,8 @@ export default async function searchRoutes(app: FastifyInstance) {
     if (parsed.data.anchor_chunk_id) markAnchorQuery();
     markHasFilters(hasAnyStructuralFilter(parsed.data));
 
-    const { whereSql: baseWhereSql, filterParams } = buildFilterWhere(parsed.data);
+    const input = await withPostcodeIds(parsed.data);
+    const { whereSql: baseWhereSql, filterParams } = buildFilterWhere(input);
     const params: (string | number | string[])[] = [...filterParams];
 
     const resolved = await resolveSearchVector(parsed.data);

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { fetchJson } from "../api";
+import { POSTAL_RE, canonicalizePostal } from "../lib/postal";
 
 export interface PostalScanSummary {
   websites: number;
@@ -30,8 +31,6 @@ export interface PostalLookupResponse {
   postal_code: string;
   representatives: PostalRep[];
 }
-
-const POSTAL_RE = /^[A-Za-z]\d[A-Za-z][ -]?\d[A-Za-z]\d$/;
 
 interface Props {
   /** Currently-displayed postal code so the form can show its Clear button without owning the result state. */
@@ -68,7 +67,7 @@ export function PostalLookupBar({ activePostalCode, autoSubmitCode, onResult }: 
     setError(null); setLoading(true);
     try {
       const res = await fetchJson<PostalLookupResponse>(
-        `/lookup/postcode/${trimmed.replace(/\s|-/g, "").toUpperCase()}`
+        `/lookup/postcode/${canonicalizePostal(trimmed)}`
       );
       const ids = res.representatives.map(r => r.politician_id).filter((x): x is string => !!x);
       onResult(res, ids.length ? ids : null);

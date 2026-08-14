@@ -2,8 +2,13 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useDocumentTitle } from "../hooks/useDocumentTitle";
 import { useCoverage, type CoverageJurisdiction } from "../hooks/useCoverage";
-
-const POSTAL_RE = /^[A-Za-z]\d[A-Za-z][ -]?\d[A-Za-z]\d$/;
+import {
+  POSTAL_RE,
+  canonicalizePostal,
+  formatPostal,
+  loadStoredPostcode,
+  storePostcode,
+} from "../lib/postal";
 
 const nf = new Intl.NumberFormat("en-CA");
 
@@ -64,34 +69,59 @@ function relativeTime(iso: string): string {
 export default function Lander() {
   useDocumentTitle(null);
   const navigate = useNavigate();
-  const [postal, setPostal] = useState("");
-  const [postalError, setPostalError] = useState<string | null>(null);
   const [hansard, setHansard] = useState("");
+  // Optional postcode on the unified search card, prefilled with the
+  // last postcode used anywhere on the site (client-side only).
+  const [searchPostal, setSearchPostal] = useState(() => {
+    const stored = loadStoredPostcode();
+    return stored ? formatPostal(stored) : "";
+  });
+  const [searchPostalError, setSearchPostalError] = useState<string | null>(null);
 
   const coverage = useCoverage();
   const stats = coverage.data ? aggregateCoverage(coverage.data.jurisdictions) : null;
 
-  function submitPostal(e: React.FormEvent) {
-    e.preventDefault();
-    const trimmed = postal.trim();
-    if (!POSTAL_RE.test(trimmed)) {
-      setPostalError("Enter a valid Canadian postal code (e.g. K1A 0A6)");
-      return;
-    }
-    const canonical = trimmed.replace(/\s|-/g, "").toUpperCase();
-    navigate(`/map?postal=${canonical}`);
-  }
-
-  function submitHansard(e: React.FormEvent) {
+  // One search bar, three behaviours:
+  //   query only            → semantic speech search
+  //   postal code only      → rep lookup on the map (the old "Find your
+  //                           reps" flow — who represents this postcode)
+  //   query + postal code   → speech search filtered to that postcode's
+  //                           representatives
+  function submitSearch(e: React.FormEvent) {
     e.preventDefault();
     const trimmed = hansard.trim();
-    if (!trimmed) return;
-    navigate(`/search?q=${encodeURIComponent(trimmed)}`);
+    const trimmedPostal = searchPostal.trim();
+    if (!trimmed && !trimmedPostal) return;
+    if (trimmedPostal && !POSTAL_RE.test(trimmedPostal)) {
+      setSearchPostalError("Enter a valid Canadian postal code (e.g. K1A 0A6)");
+      return;
+    }
+    const canonical = trimmedPostal ? canonicalizePostal(trimmedPostal) : null;
+    if (canonical) storePostcode(canonical);
+    if (canonical && !trimmed) {
+      navigate(`/map?postal=${canonical}`);
+      return;
+    }
+    const p = new URLSearchParams();
+    p.set("q", trimmed);
+    if (canonical) p.set("postcode", canonical);
+    navigate(`/search?${p.toString()}`);
   }
 
-  const searchHint = stats
-    ? `Semantic search across ${nf.format(stats.speeches)} speeches.`
-    : "Search what every politician has said on the record.";
+  const trimmedQ = hansard.trim();
+  const postalValid = POSTAL_RE.test(searchPostal.trim());
+  const repsOnlyMode = postalValid && !trimmedQ;
+
+  // Explicit, state-aware hint so the two-input bar explains itself.
+  const searchHint = repsOnlyMode
+    ? `Finds the representatives for ${formatPostal(searchPostal.trim())} — your MP, MLA, and municipal councillors.`
+    : postalValid && trimmedQ
+      ? `Searches speeches by ${formatPostal(searchPostal.trim())}'s representatives only.`
+      : trimmedQ
+        ? (stats
+            ? `Semantic search across ${nf.format(stats.speeches)} speeches.`
+            : "Search what every politician has said on the record.")
+        : "Search term, postal code, or both — a postal code alone finds your reps; add a search term to see what your reps have said about it.";
 
   return (
     <div className="lander">
@@ -123,8 +153,8 @@ export default function Lander() {
           Open data, public record &mdash; built to make democracy legible.
         </p>
 
-        <div className="lander__forms">
-          <form className="lander__form-card lander__form-card--hero" onSubmit={submitHansard}>
+        <div className="lander__forms lander__forms--single">
+          <form className="lander__form-card lander__form-card--hero" onSubmit={submitSearch}>
             <h2 className="lander__form-heading">
               <span aria-hidden="true">🔎</span> Search the record
             </h2>
@@ -137,41 +167,29 @@ export default function Lander() {
                 onChange={e => setHansard(e.target.value)}
                 aria-label="Search Canadian parliamentary speeches"
               />
-              <button type="submit" className="lander__btn lander__btn--primary">
-                Search →
-              </button>
-            </div>
-            <p className="lander__find-hint">{searchHint}</p>
-          </form>
-
-          <form className="lander__form-card" onSubmit={submitPostal}>
-            <h2 className="lander__form-heading">
-              <span aria-hidden="true">📍</span> Find your reps
-            </h2>
-            <div className="lander__find-row">
               <input
-                id="lander-postal"
+                id="lander-hansard-postal"
                 type="text"
+                className="lander__postal-inline"
                 placeholder="Postal code (K1A 0A6)"
-                value={postal}
-                onChange={e => { setPostal(e.target.value); setPostalError(null); }}
-                aria-label="Canadian postal code"
-                aria-invalid={postalError ? true : undefined}
-                aria-describedby={postalError ? "lander-postal-error" : undefined}
+                title="Postal code alone finds your reps; with a search term it filters speeches to your reps"
+                value={searchPostal}
+                onChange={e => { setSearchPostal(e.target.value); setSearchPostalError(null); }}
+                aria-label="Postal code — alone it finds your representatives; with a search term it filters speeches to them"
+                aria-invalid={searchPostalError ? true : undefined}
+                aria-describedby={searchPostalError ? "lander-hansard-postal-error" : undefined}
                 maxLength={7}
               />
-              <button type="submit" className="lander__btn">
-                Find →
+              <button type="submit" className="lander__btn lander__btn--primary">
+                {repsOnlyMode ? "Find my reps →" : "Search →"}
               </button>
             </div>
-            {postalError && (
-              <div id="lander-postal-error" className="lander__find-error" role="alert">
-                {postalError}
+            {searchPostalError && (
+              <div id="lander-hansard-postal-error" className="lander__find-error" role="alert">
+                {searchPostalError}
               </div>
             )}
-            <p className="lander__find-hint">
-              Look up your MP, MLA, and municipal councillors.
-            </p>
+            <p className="lander__find-hint" aria-live="polite">{searchHint}</p>
           </form>
         </div>
       </div>
