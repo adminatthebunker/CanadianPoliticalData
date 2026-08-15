@@ -5,7 +5,8 @@ Single-worker design on purpose (see plan). Every poll cycle:
 1. Expand any schedules whose `next_run_at <= now()` into new queued
    job rows, then update `last_enqueued_at` + `next_run_at` via croniter.
 2. Recover orphaned `status='running'` rows from a previous worker boot
-   (anything running > `WORKER_STUCK_MINUTES` minutes is requeued).
+   (anything running past its own timeout + `WORKER_STUCK_GRACE_SECONDS`
+   is requeued).
 3. Claim the next queued job (priority DESC, queued_at ASC) via
    `SELECT FOR UPDATE SKIP LOCKED` so future multi-worker setups Just
    Work without double-dispatching.
@@ -41,7 +42,7 @@ log = logging.getLogger("jobs_worker")
 POLL_INTERVAL = int(os.environ.get("JOBS_POLL_INTERVAL", "5"))          # seconds
 DEFAULT_TIMEOUT = int(os.environ.get("JOBS_DEFAULT_TIMEOUT", "7200"))   # 2h
 TAIL_BYTES = int(os.environ.get("JOBS_TAIL_BYTES", "4096"))
-WORKER_STUCK_MINUTES = int(os.environ.get("JOBS_STUCK_MINUTES", "5"))
+WORKER_STUCK_GRACE_SECONDS = int(os.environ.get("JOBS_STUCK_GRACE_SECONDS", "60"))
 PYTHON_BIN = os.environ.get("PYTHON_BIN", "python")
 
 
@@ -130,14 +131,22 @@ def _next_cron_after(expr: str, base: datetime) -> datetime:
 
 
 async def recover_stuck_jobs(db: Database) -> int:
-    """Requeue any 'running' rows older than WORKER_STUCK_MINUTES.
+    """Requeue 'running' rows that have outlived their own timeout.
 
     Called every poll cycle from main(). If the subprocess died without
     the parent flipping state (OOM-kill, container restart, segfault),
     the row would otherwise be stuck `running` forever.
+
+    The staleness threshold is per-row: the same timeout `run_job` would
+    have enforced (`args.timeout_seconds`, else DEFAULT_TIMEOUT) plus a
+    grace window. A flat window here would requeue jobs that are merely
+    slow — a live 2h OCR/backfill run would be re-dispatched underneath
+    itself and do its work twice. By definition a job still running past
+    its own timeout is one nobody is enforcing that timeout for, i.e. an
+    orphan from a dead worker.
     """
     status = await db.execute(
-        f"""
+        """
         UPDATE scanner_jobs
            SET status = 'queued',
                started_at = NULL,
@@ -145,8 +154,14 @@ async def recover_stuck_jobs(db: Database) -> int:
                        CASE WHEN COALESCE(error, '') = '' THEN '' ELSE '; ' END ||
                        'recovered after worker stall'
          WHERE status = 'running'
-           AND started_at < now() - interval '{WORKER_STUCK_MINUTES} minutes'
-        """
+           AND started_at < now() - make_interval(secs =>
+                   CASE WHEN args->>'timeout_seconds' ~ '^[0-9]+$'
+                        THEN (args->>'timeout_seconds')::int
+                        ELSE $1::int
+                   END + $2::int)
+        """,
+        DEFAULT_TIMEOUT,
+        WORKER_STUCK_GRACE_SECONDS,
     )
     # asyncpg execute returns a string like "UPDATE 0" — parse the count.
     try:

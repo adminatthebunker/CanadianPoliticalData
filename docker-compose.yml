@@ -276,9 +276,15 @@ services:
       SCRAPE_MASTODON_POSTS_PER_RUN: ${SCRAPE_MASTODON_POSTS_PER_RUN:-20}
       SCRAPE_DAILY_USD_CAP: ${SCRAPE_DAILY_USD_CAP:-5}
       SCRAPE_DISPATCH_INTERVAL: ${SCRAPE_DISPATCH_INTERVAL:-60}
+      # Derived-media cache (Edmonton pipeline): 16kHz opus audio +
+      # keyframe JPEGs per meeting, keyed by media identity. ~25GB at
+      # full backfill; makes every parser/OCR/voice iteration offline.
+      MEDIA_CACHE_DIR: /media-cache
+      POT_PROVIDER_URL: ${POT_PROVIDER_URL:-http://pot-provider:4416}
     volumes:
       - ./data:/data:ro
       - ./db:/app/db:ro
+      - ./media-cache:/media-cache
       # Phase 4 helper scripts (e.g. scripts/generate_muni_sets.py).
       # The generator also needs write access to the scanner's src directory
       # so the refreshed _muni_sets_generated.py persists to the host repo.
@@ -288,6 +294,21 @@ services:
       # Written by backfill-politician-photos; served RO by nginx.
       - assets:/assets
     profiles: ["tools"]
+    networks: [sw]
+
+  # ── bgutil PO-token provider (YouTube attestation sidecar) ────────
+  # YouTube enforces GVS PO-token attestation on video formats since
+  # 2026-08 (yt-dlp #17348); bulk fetches without a token 403
+  # intermittently. yt-dlp reaches this provider via the
+  # bgutil-ytdlp-pot-provider plugin (scanner requirements) pointed at
+  # POT_PROVIDER_URL. Pin server tag == plugin version.
+  pot-provider:
+    image: brainicism/bgutil-ytdlp-pot-provider:1.3.1
+    container_name: sw-pot-provider
+    init: true
+    environment:
+      TOKEN_TTL: 6
+    restart: unless-stopped
     networks: [sw]
 
   # ── Admin-panel jobs worker ───────────────────────────────────────
@@ -336,9 +357,12 @@ services:
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
       SMTP_FROM: ${SMTP_FROM:-}
       CPD_OPS_EMAIL: ${CPD_OPS_EMAIL:-admin@thebunkerops.ca}
+      MEDIA_CACHE_DIR: /media-cache
+      POT_PROVIDER_URL: ${POT_PROVIDER_URL:-http://pot-provider:4416}
     volumes:
       - ./data:/data:ro
       - ./db:/app/db:ro
+      - ./media-cache:/media-cache
       # Read-only mount of the host scripts/ dir so daily-cron jobs that
       # consume operator-curated seed files (e.g. ingest-bc-committees
       # reading scripts/seeds/bc-committee-meetings.json) can find them.

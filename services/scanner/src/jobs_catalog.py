@@ -1134,7 +1134,7 @@ COMMANDS: dict[str, dict[str, Any]] = {
              "help": "Seconds between page fetches (be polite to assnat.qc.ca)."},
             {"name": "limit", "type": "int", "required": False,
              "help": "Cap MNAs processed this run (smoke-test aid)."},
-            {"name": "bio-for-existing", "type": "bool", "required": False, "default": False,
+            {"name": "bio_for_existing", "type": "bool", "required": False, "default": False,
              "help": "Re-fetch bios for MNAs already in the DB (default: skip). Use after a regex-improvement to widen career spans."},
         ],
     },
@@ -1294,6 +1294,11 @@ COMMANDS: dict[str, dict[str, Any]] = {
              "help": "Cap meetings ingested per city."},
         ],
     },
+    "ingest-edmonton-meetings": {
+        "description": "Stage 1 (Edmonton) — meetings spine from data.edmonton.ca Socrata open datasets (full eScribe meeting record 2011-present), bypassing the JS-walled eScribe calendar. Idempotent on (source_system, source_meeting_id); safe to run daily.",
+        "cli": "ingest-edmonton-meetings", "category": "bills",
+        "args": [],
+    },
     "fetch-escribe-meeting-pages": {
         "description": "Stage 2 — populate meetings.raw_html for unfetched rows. Pace at --delay seconds between GETs.",
         "cli": "fetch-escribe-meeting-pages", "category": "bills",
@@ -1331,10 +1336,8 @@ COMMANDS: dict[str, dict[str, Any]] = {
             {"name": "city", "type": "enum", "required": False, "default": "all",
              "choices": ["calgary", "edmonton", "all"]},
             {"name": "limit", "type": "int", "required": False},
-            {"name": "max_channel_videos", "type": "int", "required": False, "default": 200,
+            {"name": "max_channel_videos", "type": "int", "required": False, "default": 800,
              "help": "Newest N videos to consider per channel."},
-            {"name": "max_date_drift_days", "type": "int", "required": False, "default": 3,
-             "help": "Max delta between meeting date and video upload date for a match."},
         ],
     },
     "fetch-meeting-captions": {
@@ -1349,12 +1352,50 @@ COMMANDS: dict[str, dict[str, Any]] = {
              "help": "Seconds between yt-dlp invocations to avoid throttling."},
         ],
     },
+    "reparse-meeting-captions": {
+        "description": "Rebuild caption speeches from stored VTTs (no network). Use after parser / segmentation / truecasing changes — deletes and re-inserts each meeting's speeches (chunks cascade; new rows re-enter the chunk queue). Re-run resolve-meeting-caption-speakers after.",
+        "cli": "reparse-meeting-captions", "category": "hansard",
+        "args": [
+            {"name": "city", "type": "enum", "required": False, "default": "all",
+             "choices": ["calgary", "edmonton", "all"]},
+        ],
+    },
     "resolve-meeting-caption-speakers": {
         "description": "Stage 7 — best-effort speaker FK on caption-derived speeches. Mayor heuristic + surname match against Open North roster.",
         "cli": "resolve-meeting-caption-speakers", "category": "hansard",
         "args": [
             {"name": "city", "type": "enum", "required": False, "default": "all",
              "choices": ["calgary", "edmonton", "all"]},
+        ],
+    },
+    "ocr-speaker-timeline": {
+        "description": "Stage 8 — OCR the clerk's on-screen speaker panel into meetings.raw->'speaker_timeline'. Downloads the meeting video at 480p, reads ~5s keyframes, colour-searches the clerk panel and OCRs the current-speaker entry gated on the ticking countdown. Video + frames are transient. Heavy: ~280MB download + ~10-15 CPU-min per meeting.",
+        "cli": "ocr-speaker-timeline", "category": "hansard",
+        "args": [
+            {"name": "city", "type": "enum", "required": False, "default": "edmonton",
+             "choices": ["edmonton"]},
+            {"name": "limit", "type": "int", "required": False,
+             "help": "Max meetings this run. Each is ~280MB download + ~10-15 CPU-min."},
+            {"name": "force", "type": "bool", "required": False, "default": False,
+             "help": "Rebuild timelines that already exist."},
+        ],
+    },
+    "apply-panel-attribution": {
+        "description": "Stage 9 — AUDIT caption attributions against the panel timeline. Attribution from the panel happens inside the collapse pipeline; this stage only compares direct text attributions against the covering interval and logs disagreements. It never writes.",
+        "cli": "apply-panel-attribution", "category": "hansard",
+        "args": [
+            {"name": "city", "type": "enum", "required": False, "default": "edmonton",
+             "choices": ["edmonton"]},
+        ],
+    },
+    "enrich-edmonton-minutes": {
+        "description": "Hydrate + parse eScribe minutes for video-matched Edmonton meetings (cached in raw_minutes_html), parse chair/attendance/delegation into meetings.raw->'minutes', and FK-resolve 'The Chair' caption turns to the roll-call-conducting member at confidence 0.8.",
+        "cli": "enrich-edmonton-minutes", "category": "hansard",
+        "args": [
+            {"name": "limit", "type": "int", "required": False,
+             "help": "Max meetings to process (default: all video-matched)."},
+            {"name": "delay", "type": "float", "required": False, "default": 1.0,
+             "help": "Seconds between per-meeting minutes fetches."},
         ],
     },
 
