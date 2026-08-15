@@ -286,13 +286,33 @@ def _samples_to_intervals(samples: list[dict]) -> list[dict]:
     return intervals
 
 
-async def _roster_names(db: Database, city: EscribeCity) -> list[str]:
+async def _roster_names(
+    db: Database, city: EscribeCity, when=None,
+) -> list[str]:
+    """Full names for OCR fuzzy-matching, valid at `when` (date-aware so a
+    2022 meeting's panel matches Sohi/Cartmell-era names, not today's)."""
+    from .youtube_captions import roster_for_date, _roster_valid_for
+    if when is None or _roster_valid_for(city.slug, when):
+        rows = await db.fetch(
+            """
+            SELECT name FROM politicians
+            WHERE level = 'municipal' AND province_territory = $1 AND source_id LIKE $2
+            """,
+            city.province_territory, f"opennorth:{city.slug}-city-council:%",
+        )
+        return [r["name"] for r in rows if r["name"]]
+    d = when.date() if hasattr(when, "date") else when
     rows = await db.fetch(
         """
-        SELECT name FROM politicians
-        WHERE level = 'municipal' AND province_territory = $1 AND source_id LIKE $2
+        SELECT DISTINCT p.name
+        FROM politician_terms t JOIN politicians p ON p.id = t.politician_id
+        WHERE t.level = 'municipal' AND t.province_territory = $1
+          AND (p.source_id LIKE 'opennorth:' || $2 || '-city-council:%'
+               OR p.source_id LIKE 'edmonton-socrata:%')
+          AND t.started_at <= $3::date
+          AND (t.ended_at IS NULL OR t.ended_at > $3::date)
         """,
-        city.province_territory, f"opennorth:{city.slug}-city-council:%",
+        city.province_territory, city.slug, d,
     )
     return [r["name"] for r in rows if r["name"]]
 
@@ -306,12 +326,12 @@ async def ocr_speaker_timeline(
     stats = PanelStats()
     city = CITIES[city_slug]
     caption_source = f"{city.source_system.split('-')[0]}-youtube-captions"
-    roster = await _roster_names(db, city)
+    roster_by_date: dict = {}
 
     rows = await db.fetch(
         f"""
         SELECT m.id::text AS id, m.video_url, m.source_meeting_id,
-               m.raw->'fetch' AS fetch_memo
+               m.started_at, m.raw->'fetch' AS fetch_memo
         FROM meetings m
         WHERE m.source_system = $1
           AND m.video_url IS NOT NULL
@@ -349,6 +369,11 @@ async def ocr_speaker_timeline(
         frames_dir = paths["frames_dir"]
         frame_files = sorted(os.listdir(frames_dir))
         n_frames = len(frame_files)
+        # Date-aware OCR roster (a 2022 panel must match Sohi-era names).
+        rkey = r["started_at"].date() if r["started_at"] else None
+        if rkey not in roster_by_date:
+            roster_by_date[rkey] = await _roster_names(db, city, when=r["started_at"])
+        roster = roster_by_date[rkey]
         with tempfile.TemporaryDirectory(prefix="panelocr-") as tmpdir:
             reader = _FrameReader(roster, tmpdir)
             samples = []

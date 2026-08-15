@@ -915,6 +915,49 @@ def _roster_valid_for(city_slug: str, when) -> bool:
     return d >= current_start
 
 
+async def roster_for_date(
+    db: Database, city: EscribeCity, when,
+) -> Optional[tuple[dict[str, str], Optional[str]]]:
+    """(SURNAME → politician_id, mayor_id) valid at `when`.
+
+    Current term → the live Open North roster; earlier dates → the dated
+    politician_terms rows from ingest-edmonton-roster-history (2004→2021
+    elections). None when no roster covers the date — callers must then
+    refuse to attribute rather than guess.
+    """
+    if when is None:
+        return None
+    d = when.date() if hasattr(when, "date") else when
+    if _roster_valid_for(city.slug, when):
+        roster = await _load_council_roster(db, city)
+        mayor = await _find_mayor(db, city)
+        return (roster, mayor) if roster else None
+    rows = await db.fetch(
+        """
+        SELECT p.id::text AS id, p.name, p.last_name, t.office
+        FROM politician_terms t
+        JOIN politicians p ON p.id = t.politician_id
+        WHERE t.level = 'municipal' AND t.province_territory = $1
+          AND (p.source_id LIKE 'opennorth:' || $2 || '-city-council:%'
+               OR p.source_id LIKE 'edmonton-socrata:%')
+          AND t.started_at <= $3::date
+          AND (t.ended_at IS NULL OR t.ended_at > $3::date)
+        """,
+        city.province_territory, city.slug, d,
+    )
+    if not rows:
+        return None
+    roster: dict[str, str] = {}
+    mayor: Optional[str] = None
+    for r in rows:
+        last = (r["last_name"] or "").strip() or (r["name"].split()[-1] if r["name"] else "")
+        if last:
+            roster[last.upper()] = r["id"]
+        if (r["office"] or "").lower() == "mayor":
+            mayor = r["id"]
+    return (roster, mayor) if roster else None
+
+
 async def _load_council_roster(db: Database, city: EscribeCity) -> dict[str, str]:
     """Map UPPERCASE-surname → politician_id for the city's Open North roster."""
     council_slug = f"opennorth:{city.slug}-city-council:"
@@ -1596,9 +1639,17 @@ async def resolve_meeting_caption_speakers(
 ) -> CaptionStats:
     stats = CaptionStats()
     for city in _resolve_cities(city_slug):
-        roster = await _load_council_roster(db, city)
-        mayor_id = await _find_mayor(db, city)
         source_system = f"{city.source_system.split('-')[0]}-youtube-captions"
+        # Per-meeting-date roster cache: pre-2025 meetings resolve against
+        # the dated politician_terms roster; current-term against Open
+        # North; dates with no roster refuse to attribute.
+        roster_cache: dict = {}
+
+        async def _roster_at(when):
+            key = when.date() if when is not None and hasattr(when, "date") else when
+            if key not in roster_cache:
+                roster_cache[key] = await roster_for_date(db, city, when)
+            return roster_cache[key]
         unresolved = await db.fetch(
             """
             SELECT s.id::text AS id, s.speaker_name_raw, s.speaker_role,
@@ -1615,12 +1666,12 @@ async def resolve_meeting_caption_speakers(
         unmatched_names: dict[str, int] = {}
         roster_skipped = 0
         for r in unresolved:
-            # Roster-validity gate: never resolve a pre-current-term
-            # meeting's speakers against the current roster.
-            if not _roster_valid_for(city.slug, r["meeting_started_at"]):
+            dated = await _roster_at(r["meeting_started_at"])
+            if dated is None:
                 roster_skipped += 1
                 stats.speakers_unresolved += 1
                 continue
+            roster, mayor_id = dated
             raw_name = (r["speaker_name_raw"] or "").strip()
             role = (r["speaker_role"] or "").lower()
             attribution = r["attribution"]

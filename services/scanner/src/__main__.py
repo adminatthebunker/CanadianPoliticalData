@@ -5602,6 +5602,28 @@ def cmd_match_meetings_to_youtube(
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 
 
+@cli.command("ingest-edmonton-roster-history")
+@click.pass_context
+def cmd_ingest_edmonton_roster_history(ctx: click.Context) -> None:
+    """Dated council membership (2004→2021 elections) from Socrata yqff-55ja.
+
+    Writes politician_terms rows (source=edmonton-socrata:yqff-55ja,
+    delete-and-reinsert = idempotent) and creates missing historical
+    members. Unlocks FK attribution for pre-2025-term backfill meetings —
+    without this the roster gate correctly refuses to resolve them.
+    """
+    from .legislative.edmonton_socrata import ingest_edmonton_roster_history as _ingest
+
+    async def _wrap(db: Database) -> None:
+        stats = await _ingest(db)
+        console.print(
+            f"[green]ingest-edmonton-roster-history[/green]: rows={stats.rows_fetched} "
+            f"matched={stats.people_matched} created={stats.people_created} "
+            f"terms={stats.terms_written} skipped={stats.skipped}"
+        )
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
 @cli.command("probe-edmonton-media")
 @click.option("--limit", type=int, default=None)
 @click.option("--force", is_flag=True, default=False,

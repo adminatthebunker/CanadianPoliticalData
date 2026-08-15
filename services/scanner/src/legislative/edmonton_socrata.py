@@ -73,6 +73,147 @@ _TERM_SESSIONS: dict[str, tuple[int, str, date, Optional[date]]] = {
 }
 
 
+# ── Dated roster history (yqff-55ja) ────────────────────────────────
+
+ROSTER_DATASET = "yqff-55ja"
+ROSTER_SOURCE_TAG = "edmonton-socrata:yqff-55ja"
+# Backfill meetings start 2011; one election of margin.
+ROSTER_MIN_ELECTION = date(2004, 1, 1)
+
+
+@dataclass
+class RosterStats:
+    rows_fetched: int = 0
+    people_matched: int = 0
+    people_created: int = 0
+    terms_written: int = 0
+    skipped: int = 0
+
+
+def _normalize_office(office: str) -> str:
+    o = (office or "").strip().title()
+    return "Councillor" if o == "Alderman" else o
+
+
+async def ingest_edmonton_roster_history(db: Database) -> RosterStats:
+    """Dated council membership from the Socrata membership-history dataset.
+
+    Why: the Open North roster is current-term only, and the attribution
+    resolvers must never match a pre-2025 meeting against it (the mayor for
+    2021-2025 was Amarjeet Sohi, not Andrew Knack). This ingests each
+    election's slate (2004→2021; the dataset is stale past the 2021
+    election, which is fine — the current term comes from Open North) as
+    ``politician_terms`` rows: service = [election_date, next general
+    election), with the 2021 cohort closed at the 2025-10-20 term boundary.
+    By-elections (single-row election dates) open a term for the winner at
+    their date; the predecessor's row keeps the election-boundary end (a
+    documented approximation — resignations mid-term are not modelled, and
+    an absent member can't be recognized by the chair anyway).
+
+    People: matched to existing municipal-AB politicians by exact
+    case-insensitive full name (continuing members like Knack/Paquette
+    attach terms to their Open North row); otherwise created with
+    ``source_id = edmonton-socrata:yqff-55ja:<slug>`` and is_active=false.
+    NEVER merged with existing rows beyond the exact-name match — see the
+    duplicate-politician Cooke rule.
+
+    Terms are delete-and-reinserted scoped by ``source = ROSTER_SOURCE_TAG``
+    (the standard revert primitive), so re-runs are idempotent.
+    """
+    stats = RosterStats()
+    city = CITIES["edmonton"]
+    async with httpx.AsyncClient(
+        headers=HEADERS, timeout=REQUEST_TIMEOUT, verify=SSL_VERIFY,
+    ) as client:
+        rows = await _fetch_json(client, ROSTER_DATASET, {
+            "$where": f"election_date >= '{ROSTER_MIN_ELECTION.isoformat()}'",
+            "$limit": "2000",
+        })
+    stats.rows_fetched = len(rows)
+
+    parsed = []
+    by_election: dict[date, int] = {}
+    for r in rows:
+        try:
+            ed = datetime.fromisoformat(r["election_date"]).date()
+        except (KeyError, ValueError):
+            stats.skipped += 1
+            continue
+        first = (r.get("first_name") or "").strip()
+        last = (r.get("last_name") or "").strip()
+        if not last:
+            stats.skipped += 1
+            continue
+        parsed.append({
+            "election": ed, "first": first, "last": last,
+            "office": _normalize_office(r.get("office", "")),
+            "raw": r,
+        })
+        by_election[ed] = by_election.get(ed, 0) + 1
+
+    general = sorted(d for d, n in by_election.items() if n >= 10)
+    term_2025_start = _TERM_SESSIONS["2025-2029"][2]
+
+    def service_end(start: date) -> date:
+        nxt = [g for g in general if g > start]
+        return nxt[0] if nxt else term_2025_start
+
+    # Delete-and-reinsert the tagged term rows (idempotent revert scope).
+    await db.execute(
+        "DELETE FROM politician_terms WHERE source = $1", ROSTER_SOURCE_TAG,
+    )
+
+    for p in parsed:
+        full = f"{p['first']} {p['last']}".strip()
+        pid = await db.fetchval(
+            """
+            SELECT id::text FROM politicians
+            WHERE level = 'municipal' AND province_territory = $1
+              AND lower(name) = lower($2)
+            ORDER BY is_active DESC, created_at ASC
+            LIMIT 1
+            """,
+            city.province_territory, full,
+        )
+        if pid:
+            stats.people_matched += 1
+        else:
+            slug = re.sub(r"[^a-z0-9]+", "-", full.lower()).strip("-")
+            pid = await db.fetchval(
+                """
+                INSERT INTO politicians (
+                    source_id, name, first_name, last_name,
+                    elected_office, level, province_territory,
+                    is_active, extras
+                ) VALUES ($1, $2, $3, $4, $5, 'municipal', $6, false, $7::jsonb)
+                ON CONFLICT (source_id) DO UPDATE SET updated_at = now()
+                RETURNING id::text
+                """,
+                f"{ROSTER_SOURCE_TAG}:{slug}", full, p["first"], p["last"],
+                p["office"], city.province_territory,
+                orjson.dumps({"yqff_row": p["raw"]}).decode(),
+            )
+            stats.people_created += 1
+        start = p["election"]
+        end = service_end(start)
+        await db.execute(
+            """
+            INSERT INTO politician_terms (
+                politician_id, office, level, province_territory,
+                started_at, ended_at, source
+            ) VALUES ($1::uuid, $2, 'municipal', $3, $4::date, $5::date, $6)
+            """,
+            pid, p["office"], city.province_territory,
+            start, end, ROSTER_SOURCE_TAG,
+        )
+        stats.terms_written += 1
+
+    log.info("edmonton roster history: rows=%d matched=%d created=%d terms=%d skipped=%d",
+             stats.rows_fetched, stats.people_matched, stats.people_created,
+             stats.terms_written, stats.skipped)
+    return stats
+
+
 @dataclass
 class SpineStats:
     rows_fetched: int = 0

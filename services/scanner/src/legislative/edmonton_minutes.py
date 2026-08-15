@@ -119,22 +119,44 @@ def parse_minutes(raw_html: str) -> dict:
     return {"chair": chair, "attendance": sorted(set(attendance)), "delegation": deduped}
 
 
-async def _resolve_initial_surname(db: Database, city, name: str) -> Optional[str]:
+async def _resolve_initial_surname(
+    db: Database, city, name: str, when=None,
+) -> Optional[str]:
     """'A. Stevenson' → politician id, matching surname exactly and first
-    initial when it disambiguates."""
+    initial when it disambiguates. Date-aware: resolves against the roster
+    valid at `when` (current term = Open North; earlier = dated
+    politician_terms; uncovered dates refuse)."""
     m = re.match(r"([A-Z])\.\s*(.+)$", name)
     if not m:
         return None
     initial, surname = m.group(1), m.group(2).strip()
-    rows = await db.fetch(
-        """
-        SELECT id::text AS id, name, last_name FROM politicians
-        WHERE level = 'municipal' AND province_territory = $1
-          AND source_id LIKE $2
-          AND lower(coalesce(last_name, '')) = lower($3)
-        """,
-        city.province_territory, f"opennorth:{city.slug}-city-council:%", surname,
-    )
+    from .youtube_captions import _roster_valid_for
+    if when is None or _roster_valid_for(city.slug, when):
+        rows = await db.fetch(
+            """
+            SELECT id::text AS id, name, last_name FROM politicians
+            WHERE level = 'municipal' AND province_territory = $1
+              AND source_id LIKE $2
+              AND lower(coalesce(last_name, '')) = lower($3)
+            """,
+            city.province_territory, f"opennorth:{city.slug}-city-council:%", surname,
+        )
+    else:
+        d = when.date() if hasattr(when, "date") else when
+        rows = await db.fetch(
+            """
+            SELECT DISTINCT p.id::text AS id, p.name, p.last_name
+            FROM politician_terms t
+            JOIN politicians p ON p.id = t.politician_id
+            WHERE t.level = 'municipal' AND t.province_territory = $1
+              AND (p.source_id LIKE 'opennorth:' || $2 || '-city-council:%'
+                   OR p.source_id LIKE 'edmonton-socrata:%')
+              AND t.started_at <= $3::date
+              AND (t.ended_at IS NULL OR t.ended_at > $3::date)
+              AND lower(coalesce(p.last_name, '')) = lower($4)
+            """,
+            city.province_territory, city.slug, d, surname,
+        )
     if not rows:
         return None
     if len(rows) == 1:
@@ -218,12 +240,9 @@ async def enrich_minutes(
             if not parsed["chair"]:
                 continue
             stats.chairs_found += 1
-            # Roster-validity gate: the Open North roster is current-term
-            # only — never resolve a pre-term meeting's chair against it.
-            from .youtube_captions import _roster_valid_for
-            if not _roster_valid_for(city.slug, r["started_at"]):
-                continue
-            chair_pid = await _resolve_initial_surname(db, city, parsed["chair"])
+            chair_pid = await _resolve_initial_surname(
+                db, city, parsed["chair"], when=r["started_at"],
+            )
             if not chair_pid:
                 log.info("chair %r not resolved to a council member (staff or ex-member?)",
                          parsed["chair"])
