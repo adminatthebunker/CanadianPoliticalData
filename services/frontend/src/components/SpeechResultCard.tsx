@@ -1,7 +1,7 @@
 import { Link, useSearchParams } from "react-router-dom";
 import type { SpeechSearchItem, SpeechSearchSocial } from "../hooks/useSpeechSearch";
 import { QuoteShareMenu } from "./QuoteShareMenu";
-import { ourcommonsVideoUrl } from "../lib/videoEmbedUrl";
+import { externalSourceUrl, speechVideoUrl } from "../lib/videoEmbedUrl";
 import { sanitizeHighlighted } from "../lib/textHighlight";
 
 export { sanitizeHighlighted };
@@ -105,22 +105,23 @@ export function SpeechResultCard({ item, hideSpeaker = false }: SpeechResultCard
   const date = formatDate(item.spoken_at);
   const chamber = chamberLabel(item.level, item.province_territory);
   const session = item.speech.session;
-  const hansardUrl = item.speech.source_url
-    ? item.speech.source_anchor
-      ? `${item.speech.source_url}#${item.speech.source_anchor}`
-      : item.speech.source_url
-    : null;
+  const hansardUrl = externalSourceUrl(
+    item.speech.source_url,
+    item.speech.source_anchor,
+    item.speech.source_system,
+  );
   const [searchParams] = useSearchParams();
   const q = searchParams.get("q") ?? "";
   const internalUrl =
     `/speeches/${item.speech_id}` +
     (q ? `?q=${encodeURIComponent(q)}` : "") +
     `#chunk-${item.chunk_id}`;
-  const videoUrl = ourcommonsVideoUrl({
+  const videoUrl = speechVideoUrl({
     source_system: item.speech.source_system,
     source_anchor: item.speech.source_anchor,
     level: item.level,
     language: item.language,
+    source_url: item.speech.source_url,
   });
 
   return (
@@ -182,7 +183,7 @@ export function SpeechResultCard({ item, hideSpeaker = false }: SpeechResultCard
             {presidingRoleLabel(item.speech.speaker_role)}
           </span>
         )}
-        {session && (
+        {session && item.level !== "municipal" && (
           <span className="speech-result__session">
             {" · "}
             {ordinal(session.parliament_number)} Parl., Sess. {session.session_number}

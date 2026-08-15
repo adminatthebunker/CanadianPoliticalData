@@ -1,7 +1,7 @@
 import { forwardRef, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import type { ContextSpeech, SpeechChunkSummary, SpeechDetail } from "../hooks/useSpeech";
-import { ourcommonsVideoUrl } from "../lib/videoEmbedUrl";
+import { externalSourceUrl, speechVideoUrl } from "../lib/videoEmbedUrl";
 import { highlightQuery, sanitizeHighlighted } from "../lib/textHighlight";
 import { readingTimeMinutes } from "../lib/speechHelpers";
 import { QuoteShareMenu } from "./QuoteShareMenu";
@@ -107,15 +107,18 @@ export const ExchangeSpeechRow = forwardRef<HTMLElement, ExchangeSpeechRowProps>
         }`
       : `/speeches/${speech.id}`;
 
-    const hansardUrl = speech.source_anchor
-      ? `${speech.source_url}#${speech.source_anchor}`
-      : speech.source_url;
+    const hansardUrl = externalSourceUrl(
+      speech.source_url,
+      speech.source_anchor,
+      speech.source_system,
+    );
 
-    const videoUrl = ourcommonsVideoUrl({
+    const videoUrl = speechVideoUrl({
       source_system: speech.source_system,
       source_anchor: speech.source_anchor,
       level: speech.level,
       language: speech.language,
+      source_url: speech.source_url,
     });
 
     return (
@@ -231,19 +234,21 @@ export const ExchangeSpeechRow = forwardRef<HTMLElement, ExchangeSpeechRowProps>
                 target="_blank"
                 rel="noopener noreferrer"
                 className="exchange-row__action exchange-row__action--video"
-                title="Watch on Parliament's site"
+                title="Watch the video of this speech at the source"
               >
                 <span aria-hidden="true">▶</span> Video ↗
               </a>
             )}
-            <a
-              href={hansardUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="exchange-row__action exchange-row__action--secondary"
-            >
-              Hansard ↗
-            </a>
+            {hansardUrl && (
+              <a
+                href={hansardUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="exchange-row__action exchange-row__action--secondary"
+              >
+                Hansard ↗
+              </a>
+            )}
             <QuoteShareMenu
               speakerName={pol?.name ?? speech.speaker_name_raw}
               dateIso={speech.spoken_at}

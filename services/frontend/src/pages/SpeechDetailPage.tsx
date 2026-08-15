@@ -161,7 +161,9 @@ export default function SpeechDetailPage() {
               <time dateTime={speech.spoken_at ?? ""}>{date}</time>
             </span>
           )}
-          {speech.session && (
+          {/* Municipal sessions are synthesized council terms with invented
+              parliament numbers — the level pill already says municipal. */}
+          {speech.session && speech.level !== "municipal" && (
             <span className="speech-detail__meta-pill">
               {speech.session.parliament_number}th Parl., Sess. {speech.session.session_number}
             </span>
