@@ -5654,8 +5654,10 @@ def cmd_probe_edmonton_media(ctx: click.Context, limit, force) -> None:
               help="Max meetings this run. Each is ~280MB download + ~10-15 CPU-min.")
 @click.option("--force", is_flag=True, default=False,
               help="Rebuild timelines that already exist.")
+@click.option("--workers", type=int, default=3,
+              help="Concurrent OCR worker threads (downloads stay serial).")
 @click.pass_context
-def cmd_ocr_speaker_timeline(ctx: click.Context, city, limit, force) -> None:
+def cmd_ocr_speaker_timeline(ctx: click.Context, city, limit, force, workers) -> None:
     """Stage 8 — OCR the clerk's on-screen speaker panel into a timeline.
 
     Downloads the meeting video at 480p, reads the ~5s YouTube keyframes,
@@ -5666,12 +5668,39 @@ def cmd_ocr_speaker_timeline(ctx: click.Context, city, limit, force) -> None:
     from .legislative.edmonton_panel_ocr import ocr_speaker_timeline as _ocr
 
     async def _wrap(db: Database) -> None:
-        stats = await _ocr(db, city_slug=city, limit=limit, force=force)
+        stats = await _ocr(db, city_slug=city, limit=limit, force=force, workers=workers)
         console.print(
             f"[green]ocr-speaker-timeline[/green]: meetings={stats.meetings_seen} "
             f"built={stats.timelines_built} dl_fails={stats.download_failures} "
             f"frames={stats.frames_processed} crops={stats.unique_crops_ocrd} "
             f"intervals={stats.intervals_stored}"
+        )
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
+@cli.command("cache-edmonton-media")
+@click.option("--city", type=click.Choice(("edmonton",)), default="edmonton")
+@click.option("--limit", type=int, default=None,
+              help="Max meetings this run (default: all with speeches).")
+@click.pass_context
+def cmd_cache_edmonton_media(ctx: click.Context, city, limit) -> None:
+    """Acquisition-only — build media derivative caches, no OCR.
+
+    Walks speeches-bearing meetings newest-first and runs the media
+    source ladder (ISI CDN first, YouTube fallback) to land audio +
+    frames + caption alignment in the media cache. Voice attribution
+    needs only this; OCR trails later as a separate low-priority pass.
+    Serial single-connection politeness; failures memoized in
+    meetings.raw->'fetch' with backoff.
+    """
+    from .legislative.edmonton_panel_ocr import cache_edmonton_media as _cache
+
+    async def _wrap(db: Database) -> None:
+        stats = await _cache(db, city_slug=city, limit=limit)
+        console.print(
+            f"[green]cache-edmonton-media[/green]: meetings={stats.meetings_seen} "
+            f"cached={stats.timelines_built} dl_fails={stats.download_failures} "
+            f"backoff_skips={stats.skipped_no_interval}"
         )
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 

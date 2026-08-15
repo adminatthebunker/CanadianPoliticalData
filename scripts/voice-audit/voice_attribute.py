@@ -171,12 +171,32 @@ def process_meeting(video_id: str, clf) -> str | None:
         # legislative/media_cache.py; the compose bind mounts it at
         # ./media-cache so host tooling reads it directly). Fallback:
         # direct audio download for meetings not yet cached.
-        cache_opus = os.path.join(
-            os.environ.get("MEDIA_CACHE_DIR",
-                           os.path.join(HERE, "..", "..", "media-cache")),
-            "youtube", video_id, "audio16k.opus")
+        cache_root = os.environ.get(
+            "MEDIA_CACHE_DIR", os.path.join(HERE, "..", "..", "media-cache"))
+        # Prefer the ISI-sourced cache (keyed by etag) when it exists.
+        cache_opus = None
+        cache_meta = None
+        etag = psql(f"""
+            SELECT raw->'media'->'isi'->>'etag' FROM meetings
+            WHERE source_system='edmonton-escribemeetings'
+              AND video_url='https://www.youtube.com/watch?v={video_id}'
+        """).strip()
+        candidates = []
+        if etag:
+            import re as _re
+            candidates.append(os.path.join(cache_root, "isi", _re.sub(r"[^A-Za-z0-9._-]", "_", etag)))
+        candidates.append(os.path.join(cache_root, "youtube", video_id))
+        for d in candidates:
+            if os.path.exists(os.path.join(d, "audio16k.opus")):
+                cache_opus = os.path.join(d, "audio16k.opus")
+                try:
+                    with open(os.path.join(d, "meta.json")) as fh:
+                        cache_meta = json.load(fh)
+                except (OSError, json.JSONDecodeError):
+                    cache_meta = None
+                break
         wav_path = os.path.join(workdir, "a.wav")
-        if os.path.exists(cache_opus):
+        if cache_opus:
             subprocess.run(
                 ["ffmpeg", "-v", "error", "-i", cache_opus,
                  "-ar", "16000", "-ac", "1", wav_path],
@@ -199,7 +219,12 @@ def process_meeting(video_id: str, clf) -> str | None:
                 return None
         audio, sr = sf.read(wav_path, dtype="float32")
         assert sr == SR
-        lag = measure_lag(audio, turns, clf)
+        if cache_meta and cache_meta.get("caption_offset_s") is not None:
+            # VAD-alignment already measured audio = caption + offset;
+            # the embed windows use start - lag, so lag = -offset.
+            lag = -float(cache_meta["caption_offset_s"])
+        else:
+            lag = measure_lag(audio, turns, clf)
         # Enrollment: the 8 longest macro/recognition turns per speaker
         # per meeting (a sample is as good as all 1,700 of the mayor's
         # turns for a pooled centroid). Classification targets: bare

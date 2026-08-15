@@ -52,8 +52,35 @@ JS_RUNTIME = os.environ.get("PANEL_OCR_JS_RUNTIME", "node")
 DOWNLOAD_TIMEOUT_SECS = 1800
 
 
+def _paths_for(d: str) -> dict:
+    return {
+        "dir": d,
+        "audio": os.path.join(d, "audio16k.opus"),
+        "frames_dir": os.path.join(d, "frames"),
+        "times": os.path.join(d, "times.json"),
+        "meta": os.path.join(d, "meta.json"),
+    }
+
+
 def cache_dir_for(video_id: str) -> str:
     return os.path.join(CACHE_ROOT, "youtube", video_id)
+
+
+def isi_cache_dir_for(etag: str) -> str:
+    import re as _re
+    return os.path.join(CACHE_ROOT, "isi", _re.sub(r"[^A-Za-z0-9._-]", "_", etag))
+
+
+def find_cache(video_id: str, isi_etag: Optional[str] = None) -> Optional[dict]:
+    """Existing derivatives for a meeting, either source (ISI preferred)."""
+    if isi_etag:
+        d = isi_cache_dir_for(isi_etag)
+        if os.path.exists(os.path.join(d, "meta.json")):
+            return _paths_for(d)
+    d = cache_dir_for(video_id)
+    if os.path.exists(os.path.join(d, "meta.json")):
+        return _paths_for(d)
+    return None
 
 
 def derivatives_ready(video_id: str) -> bool:
@@ -61,30 +88,162 @@ def derivatives_ready(video_id: str) -> bool:
     return os.path.exists(os.path.join(d, "meta.json"))
 
 
-def load_meta(video_id: str) -> Optional[dict]:
+def load_meta_from(paths: dict) -> Optional[dict]:
     try:
-        with open(os.path.join(cache_dir_for(video_id), "meta.json")) as fh:
+        with open(paths["meta"]) as fh:
             return json.load(fh)
     except (OSError, json.JSONDecodeError):
         return None
 
 
-async def ensure_derivatives(video_url: str) -> Optional[dict]:
-    """Fetch-once: return {'dir', 'audio', 'frames_dir', 'times', 'meta'}
-    for the meeting's derivatives, downloading + deriving only on a cache
-    miss. Returns None when acquisition fails (caller memoizes)."""
-    video_id = video_url.split("v=")[-1].split("&")[0]
-    d = cache_dir_for(video_id)
-    paths = {
-        "dir": d,
-        "audio": os.path.join(d, "audio16k.opus"),
-        "frames_dir": os.path.join(d, "frames"),
-        "times": os.path.join(d, "times.json"),
-        "meta": os.path.join(d, "meta.json"),
-    }
-    if derivatives_ready(video_id):
-        return paths
+def load_meta(video_id: str) -> Optional[dict]:
+    return load_meta_from(_paths_for(cache_dir_for(video_id)))
 
+
+async def _derive_from_file(video: str, paths: dict, *, source: str,
+                            video_url: str, identity: dict,
+                            vtt_text: Optional[str]) -> bool:
+    """Shared derivation: local video file → keyframes + opus + times +
+    (when vtt_text given) caption alignment → meta. True on success."""
+    probe = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0",
+         "-show_packets", "-show_entries", "packet=pts_time,flags",
+         "-of", "csv=p=0", video],
+        capture_output=True, text=True,
+    )
+    times = []
+    for line in probe.stdout.splitlines():
+        parts = line.strip().split(",")
+        if len(parts) >= 2 and "K" in parts[1]:
+            try:
+                times.append(float(parts[0]))
+            except ValueError:
+                pass
+    dur_out = subprocess.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+         "-of", "csv=p=0", video],
+        capture_output=True, text=True,
+    ).stdout.strip()
+    duration = float(dur_out) if dur_out else None
+
+    frames_dir = paths["frames_dir"]
+    os.makedirs(frames_dir, exist_ok=True)
+    res = subprocess.run(
+        ["ffmpeg", "-v", "error", "-skip_frame", "nokey", "-i", video,
+         "-map", "0:v", "-vsync", "0", "-q:v", "4",
+         os.path.join(frames_dir, "f%06d.jpg"),
+         "-map", "0:a", "-ac", "1", "-ar", "16000",
+         "-c:a", "libopus", "-b:a", "24k", paths["audio"]],
+        capture_output=True, text=True,
+    )
+    if res.returncode != 0:
+        log.warning("derivative pass failed for %s: %s", video_url, res.stderr[:300])
+        return False
+
+    n_frames = len(os.listdir(frames_dir))
+    # Keyframe-alignment sanity (review fragility B7): fail loudly.
+    if abs(len(times) - n_frames) > 2 or (
+        duration and times and times[-1] < duration * 0.9
+    ):
+        log.error("keyframe alignment unsafe (%s): %d pts / %d frames / "
+                  "last %.0fs of %.0fs — cache aborted",
+                  source, len(times), n_frames,
+                  times[-1] if times else -1, duration or -1)
+        return False
+
+    caption_offset = None
+    align_score = None
+    if vtt_text:
+        try:
+            from .caption_align import align_captions_to_audio
+            r = align_captions_to_audio(vtt_text, paths["audio"])
+            align_score = round(r.score, 1)
+            if r.trusted:
+                caption_offset = round(r.offset_s, 2)
+            else:
+                log.warning("caption alignment untrusted (%s, score=%.1f)",
+                            source, r.score)
+        except Exception as exc:
+            log.warning("caption alignment failed (%s): %s", source, exc)
+    # ISI derivatives are USELESS without a trusted offset — every caption
+    # timestamp is YouTube-based, so an unaligned ISI cache would corrupt
+    # every consumer. YouTube caches keep legacy fallbacks (+8 lead, lag
+    # sweep), so an untrusted offset there is survivable.
+    if source == "isi" and caption_offset is None:
+        return False
+
+    with open(paths["times"], "w") as fh:
+        json.dump({"keyframe_pts": times, "duration": duration}, fh)
+    with open(paths["meta"], "w") as fh:
+        json.dump({
+            "version": 2,
+            "source": source,
+            "video_url": video_url,
+            **identity,
+            "fetched_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "duration": duration,
+            "n_frames": n_frames,
+            "caption_offset_s": caption_offset,
+            "align_score": align_score,
+        }, fh)
+    return True
+
+
+async def _download_isi(isi: dict, dest: str) -> bool:
+    """Stream the ISI CDN MP4 to a temp file: single connection, project
+    bot UA (robots is a blanket Disallow — we fetch only URLs the public
+    eScribe player handed us; courtesy note drafted for the City Clerk)."""
+    import httpx
+    from .escribe import HEADERS
+    try:
+        async with httpx.AsyncClient(headers=HEADERS, timeout=120,
+                                     follow_redirects=True) as client:
+            async with client.stream("GET", isi["url"]) as resp:
+                resp.raise_for_status()
+                with open(dest, "wb") as fh:
+                    async for chunk in resp.aiter_bytes(1 << 20):
+                        fh.write(chunk)
+        return True
+    except httpx.HTTPError as exc:
+        log.warning("ISI download failed %s: %s", isi.get("url"), str(exc)[:200])
+        return False
+
+
+async def ensure_derivatives(
+    video_url: str, isi: Optional[dict] = None, vtt_text: Optional[str] = None,
+) -> Optional[dict]:
+    """Fetch-once source ladder: existing cache (either namespace) → ISI
+    (unthrottled 720p; requires vtt for the mandatory caption alignment) →
+    YouTube 480p fallback. Returns the standard paths dict or None (caller
+    memoizes the failure)."""
+    video_id = video_url.split("v=")[-1].split("&")[0]
+    isi = isi if isi and isi.get("url") and isi.get("etag") else None
+    existing = find_cache(video_id, isi["etag"] if isi else None)
+    if existing:
+        return existing
+
+    if isi and vtt_text:
+        d = isi_cache_dir_for(isi["etag"])
+        paths = _paths_for(d)
+        os.makedirs(d, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="mediacache-") as tmpdir:
+            video = os.path.join(tmpdir, "video.mp4")
+            if await _download_isi(isi, video):
+                ok = await _derive_from_file(
+                    video, paths, source="isi", video_url=video_url,
+                    identity={"isi_etag": isi["etag"], "isi_url": isi["url"]},
+                    vtt_text=vtt_text,
+                )
+                if ok:
+                    return paths
+        # ISI failed (download, derive, or untrusted alignment): clean the
+        # namespace dir and fall through to the YouTube lane.
+        import shutil as _shutil
+        _shutil.rmtree(d, ignore_errors=True)
+        log.info("ISI lane failed for %s — falling back to YouTube", video_id)
+
+    d = cache_dir_for(video_id)
+    paths = _paths_for(d)
     os.makedirs(d, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="mediacache-") as tmpdir:
         out = os.path.join(tmpdir, "video.%(ext)s")
@@ -107,70 +266,13 @@ async def ensure_derivatives(video_url: str) -> Optional[dict]:
             log.warning("media fetch failed for %s (rc=%s): %s",
                         video_url, rc, err.strip()[:300])
             return None
-
-        # Keyframe pts + duration via packet flags (no decode).
-        probe = subprocess.run(
-            ["ffprobe", "-v", "error", "-select_streams", "v:0",
-             "-show_packets", "-show_entries", "packet=pts_time,flags",
-             "-of", "csv=p=0", video],
-            capture_output=True, text=True,
+        ok = await _derive_from_file(
+            video, paths, source="youtube", video_url=video_url,
+            identity={"video_id": video_id, "format": VIDEO_FORMAT},
+            vtt_text=vtt_text,
         )
-        times = []
-        for line in probe.stdout.splitlines():
-            parts = line.strip().split(",")
-            if len(parts) >= 2 and "K" in parts[1]:
-                try:
-                    times.append(float(parts[0]))
-                except ValueError:
-                    pass
-        dur_out = subprocess.run(
-            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-             "-of", "csv=p=0", video],
-            capture_output=True, text=True,
-        ).stdout.strip()
-        duration = float(dur_out) if dur_out else None
-
-        # ONE ffmpeg pass: keyframes (video, decode keyframes only) +
-        # 16 kHz mono opus (audio) — this is what removes the second
-        # YouTube fetch the voice pipeline used to make.
-        frames_dir = paths["frames_dir"]
-        os.makedirs(frames_dir, exist_ok=True)
-        res = subprocess.run(
-            ["ffmpeg", "-v", "error", "-skip_frame", "nokey", "-i", video,
-             "-map", "0:v", "-vsync", "0", "-q:v", "4",
-             os.path.join(frames_dir, "f%06d.jpg"),
-             "-map", "0:a", "-ac", "1", "-ar", "16000",
-             "-c:a", "libopus", "-b:a", "24k", paths["audio"]],
-            capture_output=True, text=True,
-        )
-        if res.returncode != 0:
-            log.warning("derivative pass failed for %s: %s", video_url, res.stderr[:300])
+        if not ok:
             return None
-
-        n_frames = len(os.listdir(frames_dir))
-        # Keyframe-alignment sanity (review fragility B7): fail loudly.
-        if abs(len(times) - n_frames) > 2 or (
-            duration and times and times[-1] < duration * 0.9
-        ):
-            log.error("keyframe alignment unsafe for %s: %d pts / %d frames / "
-                      "last %.0fs of %.0fs — cache aborted",
-                      video_id, len(times), n_frames,
-                      times[-1] if times else -1, duration or -1)
-            return None
-
-        with open(paths["times"], "w") as fh:
-            json.dump({"keyframe_pts": times, "duration": duration}, fh)
-        with open(paths["meta"], "w") as fh:
-            json.dump({
-                "version": 1,
-                "source": "youtube",
-                "video_id": video_id,
-                "video_url": video_url,
-                "format": VIDEO_FORMAT,
-                "fetched_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                "duration": duration,
-                "n_frames": n_frames,
-            }, fh)
     return paths
 
 

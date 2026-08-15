@@ -184,20 +184,54 @@ class _FrameReader:
         self.workdir = workdir
         self._crop_cache: dict[str, str] = {}
 
-    def read(self, frame_path: str) -> tuple[Optional[str], float, Optional[str], Optional[str]]:
-        """→ (roster_name, score, raw_ocr_text, timer_str). roster_name is
-        None for no-detection AND for non-roster (staff) names — check
-        raw_ocr_text for the latter."""
+    @staticmethod
+    def load_norm(frame_path: str):
+        """Decode + normalise to 480-height. Every geometry constant here
+        (band heights 7-40px, x-run minimums, crop pads, timer-region
+        offsets) was calibrated at 480p; ISI frames arrive at 720p where
+        panel text bands run ~52px and fell straight through the height
+        gate (dual-source validation caught it: 27 vs 60 intervals)."""
+        from PIL import Image
+        img = Image.open(frame_path).convert("RGB")
+        if img.height > 520:
+            w = round(img.width * 480 / img.height)
+            img = img.resize((w, 480), Image.LANCZOS)
+        return img
+
+    def region_sig(self, frame_path: str, box):
+        """Cheap change-detector signature for the known panel region —
+        the user's scene-detection idea, scoped to the panel so the
+        constantly-moving camera tiles can't defeat it."""
+        import numpy as np
+        from PIL import Image
+        img = self.load_norm(frame_path)
+        x0, y0, x1, y1 = box
+        crop = img.crop((max(0, x0 - 8), max(0, y0 - 8), x1 + 8, y1 + 8)).convert("L")
+        thumb = crop.resize((32, 8), Image.BILINEAR)
+        return (np.asarray(thumb).astype(np.int16) // 8)
+
+    def read_timer_only(self, frame_path: str, box) -> Optional[str]:
+        img = self.load_norm(frame_path)
+        return self._read_timer(img, (img.height, img.width), box)
+
+    def read(self, frame_path: str) -> tuple[Optional[str], float, Optional[str], Optional[str], Optional[tuple]]:
+        """→ (roster_name, score, raw_ocr_text, timer_str, best_box).
+        roster_name is None for no-detection AND for non-roster (staff)
+        names — check raw_ocr_text for the latter."""
         from PIL import Image
         import numpy as np
 
-        img = Image.open(frame_path).convert("RGB")
+        img = self.load_norm(frame_path)
         arr = np.asarray(img).astype(int)
         best_name, best_score, best_raw, best_box = None, 0.0, None, None
         for box in _frame_candidates(arr):
             x0, y0, x1, y1 = box
             crop = img.crop((max(0, x0 - 5), max(0, y0 - 5), x1 + 5, y1 + 5)).convert("L")
-            h = hashlib.md5(crop.tobytes()).hexdigest()
+            # Jitter-proof dedup key: JPEG noise defeats raw-byte hashing
+            # (1,196 "unique" crops in 1,991 frames were mostly identical
+            # text re-encoded). Downsample + quantise before hashing.
+            thumb = crop.resize((64, 16), Image.BILINEAR)
+            h = hashlib.md5((np.asarray(thumb) // 16).tobytes()).hexdigest()
             if h in self._crop_cache:
                 txt = self._crop_cache[h]
             else:
@@ -210,11 +244,11 @@ class _FrameReader:
             if score > best_score:
                 best_name, best_score, best_raw, best_box = name, score, txt, box
         if best_box is None:
-            return None, 0.0, None, None
+            return None, 0.0, None, None, None
         timer = self._read_timer(img, arr.shape, best_box)
         if best_score >= ROSTER_MATCH_THRESHOLD:
-            return best_name, best_score, best_raw, timer
-        return None, best_score, best_raw, timer
+            return best_name, best_score, best_raw, timer, best_box
+        return None, best_score, best_raw, timer, best_box
 
     def _read_timer(self, img, shape, box) -> Optional[str]:
         """Countdown digits sit above the name box."""
@@ -317,12 +351,142 @@ async def _roster_names(
     return [r["name"] for r in rows if r["name"]]
 
 
+# Panel-region change gating: force a full analysis at least every N
+# gated frames (drift/reflow safety net — a moved panel also changes the
+# old region, but belt and braces), and read the timer every Mth gated
+# frame so the ticking gate still gets >=2 distinct values per run.
+_GATE_FORCE_FULL_EVERY = 24
+_GATE_TIMER_EVERY = 6
+_GATE_DIFF_THRESHOLD = 1.0
+
+
+def _ocr_frames_sync(frames_dir: str, times: list, roster: list) -> tuple:
+    """CPU-bound frame loop, safe to run in a worker thread (tesseract is a
+    subprocess; PIL/numpy release the GIL for the heavy parts). Returns
+    (samples, n_unique_crops).
+
+    Scene-detection gating (2026-08-15): the panel is static for ~85-90%
+    of frames, so per frame we first diff just the last-known panel region
+    (cheap decode + 32x8 thumbnail compare). Unchanged → carry the
+    previous identity forward and skip colour-search/OCR entirely; the
+    timer is still sampled every few gated frames for the ticking gate.
+    """
+    import numpy as np
+    import tempfile as _tempfile
+    samples = []
+    with _tempfile.TemporaryDirectory(prefix="panelocr-") as tmpdir:
+        reader = _FrameReader(roster, tmpdir)
+        frame_files = sorted(os.listdir(frames_dir))
+        last_box = None
+        last_sig = None
+        last_name = None
+        last_staff = None
+        gated_run = 0
+        for t, fname in zip(times, frame_files):
+            path = os.path.join(frames_dir, fname)
+            if last_box is not None and gated_run < _GATE_FORCE_FULL_EVERY:
+                sig = reader.region_sig(path, last_box)
+                if (last_sig is not None and sig.shape == last_sig.shape
+                        and float(np.abs(sig - last_sig).mean()) < _GATE_DIFF_THRESHOLD):
+                    gated_run += 1
+                    timer = None
+                    if last_name and gated_run % _GATE_TIMER_EVERY == 0:
+                        timer = reader.read_timer_only(path, last_box)
+                    samples.append({
+                        "t": round(t, 1), "name": last_name,
+                        "raw": last_staff, "timer": timer,
+                    })
+                    continue
+            name, score, raw, timer, box = reader.read(path)
+            staff_raw = None
+            if name is None and raw:
+                cleaned = _clean_ocr(raw)
+                if _NAME_SHAPE_RE.match(cleaned):
+                    staff_raw = cleaned
+            samples.append({
+                "t": round(t, 1), "name": name, "raw": staff_raw, "timer": timer,
+            })
+            last_box = box
+            last_sig = reader.region_sig(path, box) if box else None
+            last_name = name
+            last_staff = staff_raw
+            gated_run = 0
+        n_crops = len(reader._crop_cache)
+    return samples, n_crops
+
+
+async def cache_edmonton_media(
+    db: Database, *, city_slug: str = "edmonton", limit: Optional[int] = None,
+) -> PanelStats:
+    """Acquisition-only pass: build derivative caches (audio + frames +
+    alignment) for every speeches-bearing meeting, WITHOUT running OCR.
+
+    Exists because voice attribution — the proven 16-point lever — needs
+    only the audio derivative; OCR trails later as cheap gated CPU. Serial
+    single-connection politeness (ISI-first ladder); failures memoized."""
+    stats = PanelStats()
+    city = CITIES[city_slug]
+    caption_source = f"{city.source_system.split('-')[0]}-youtube-captions"
+    rows = await db.fetch(
+        f"""
+        SELECT m.id::text AS id, m.video_url, m.source_meeting_id,
+               m.raw->'fetch' AS fetch_memo,
+               m.raw_captions_vtt AS vtt,
+               m.raw->'media'->'isi' AS isi
+        FROM meetings m
+        WHERE m.source_system = $1
+          AND m.video_url IS NOT NULL
+          AND EXISTS (SELECT 1 FROM speeches s WHERE s.source_system = $2
+                      AND s.meeting_id = m.id)
+        ORDER BY m.started_at DESC
+        {"LIMIT $3" if limit else ""}
+        """,
+        *([city.source_system, caption_source, limit] if limit
+          else [city.source_system, caption_source]),
+    )
+    from .media_cache import (
+        ensure_derivatives, fetch_backoff_active, record_fetch_outcome,
+        find_cache,
+    )
+    for r in rows:
+        stats.meetings_seen += 1
+        isi = r["isi"]
+        if isinstance(isi, str):
+            isi = orjson.loads(isi)
+        video_id = r["video_url"].split("v=")[-1].split("&")[0]
+        if find_cache(video_id, (isi or {}).get("etag")):
+            stats.timelines_built += 1  # reused as cached counter here
+            continue
+        memo = r["fetch_memo"]
+        if isinstance(memo, str):
+            memo = orjson.loads(memo)
+        if fetch_backoff_active(memo):
+            stats.skipped_no_interval += 1
+            continue
+        paths = await ensure_derivatives(r["video_url"], isi=isi, vtt_text=r["vtt"])
+        if not paths:
+            await record_fetch_outcome(db, r["id"], ok=False, error="media fetch failed")
+            stats.download_failures += 1
+            continue
+        await record_fetch_outcome(db, r["id"], ok=True)
+        stats.timelines_built += 1
+        log.info("cached media for meeting=%s (%s)", r["source_meeting_id"],
+                 "isi" if "/isi/" in paths["dir"] else "youtube")
+    return stats
+
+
 async def ocr_speaker_timeline(
     db: Database, *, city_slug: str = "edmonton", limit: Optional[int] = None,
-    force: bool = False,
+    force: bool = False, workers: int = 3,
 ) -> PanelStats:
     """Stage 8 — build the on-screen speaker timeline for meetings that
-    have a video and caption speeches but no timeline yet."""
+    have a video and caption speeches but no timeline yet.
+
+    Pipelined: ONE producer acquires media serially (single-connection
+    politeness toward both ISI and YouTube) while `workers` consumer
+    threads OCR already-cached meetings concurrently — downloads and CPU
+    overlap instead of serialising (~12 CPU-min/meeting OCR was the wall).
+    """
     stats = PanelStats()
     city = CITIES[city_slug]
     caption_source = f"{city.source_system.split('-')[0]}-youtube-captions"
@@ -331,7 +495,9 @@ async def ocr_speaker_timeline(
     rows = await db.fetch(
         f"""
         SELECT m.id::text AS id, m.video_url, m.source_meeting_id,
-               m.started_at, m.raw->'fetch' AS fetch_memo
+               m.started_at, m.raw->'fetch' AS fetch_memo,
+               m.raw_captions_vtt AS vtt,
+               m.raw->'media'->'isi' AS isi
         FROM meetings m
         WHERE m.source_system = $1
           AND m.video_url IS NOT NULL
@@ -347,70 +513,89 @@ async def ocr_speaker_timeline(
 
     from .media_cache import (
         ensure_derivatives, fetch_backoff_active, record_fetch_outcome,
+        load_meta_from,
     )
-    for r in rows:
-        stats.meetings_seen += 1
-        memo = r["fetch_memo"]
-        if isinstance(memo, str):
-            memo = orjson.loads(memo)
-        if fetch_backoff_active(memo):
-            stats.skipped_no_interval += 1  # reused as skip counter here
-            continue
-        # Media comes from the derivative cache: one fetch per meeting,
-        # ever; frames + audio persist for every future iteration.
-        paths = await ensure_derivatives(r["video_url"])
-        if not paths:
-            await record_fetch_outcome(db, r["id"], ok=False, error="media fetch failed")
-            stats.download_failures += 1
-            continue
-        await record_fetch_outcome(db, r["id"], ok=True)
-        with open(paths["times"]) as fh:
-            times = json.load(fh)["keyframe_pts"]
-        frames_dir = paths["frames_dir"]
-        frame_files = sorted(os.listdir(frames_dir))
-        n_frames = len(frame_files)
-        # Date-aware OCR roster (a 2022 panel must match Sohi-era names).
-        rkey = r["started_at"].date() if r["started_at"] else None
-        if rkey not in roster_by_date:
-            roster_by_date[rkey] = await _roster_names(db, city, when=r["started_at"])
-        roster = roster_by_date[rkey]
-        with tempfile.TemporaryDirectory(prefix="panelocr-") as tmpdir:
-            reader = _FrameReader(roster, tmpdir)
-            samples = []
-            for t, fname in zip(times, frame_files):
-                name, score, raw, timer = reader.read(os.path.join(frames_dir, fname))
-                staff_raw = None
-                if name is None and raw:
-                    cleaned = _clean_ocr(raw)
-                    if _NAME_SHAPE_RE.match(cleaned):
-                        staff_raw = cleaned
-                samples.append({
-                    "t": round(t, 1), "name": name, "raw": staff_raw, "timer": timer,
-                })
-                stats.frames_processed += 1
-            stats.unique_crops_ocrd += len(reader._crop_cache)
-        intervals = _samples_to_intervals(samples)
+    import concurrent.futures
 
-        timeline = {
-            "version": 1,
-            "frames": n_frames,
-            "cadence_secs": 5,
-            "intervals": intervals,
-        }
-        await db.execute(
-            """
-            UPDATE meetings
-            SET raw = raw || jsonb_build_object('speaker_timeline', $1::jsonb),
-                updated_at = now()
-            WHERE id = $2::uuid
-            """,
-            orjson.dumps(timeline).decode(), r["id"],
-        )
-        stats.timelines_built += 1
-        stats.intervals_stored += len(intervals)
-        speaking = sum(1 for iv in intervals if iv["state"] == "speaking")
-        log.info("timeline for meeting=%s: %d intervals (%d speaking) from %d frames",
-                 r["source_meeting_id"], len(intervals), speaking, n_frames)
+    queue: asyncio.Queue = asyncio.Queue(maxsize=workers * 2)
+    loop = asyncio.get_running_loop()
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=workers)
+
+    async def producer():
+        for r in rows:
+            stats.meetings_seen += 1
+            memo = r["fetch_memo"]
+            if isinstance(memo, str):
+                memo = orjson.loads(memo)
+            if fetch_backoff_active(memo):
+                stats.skipped_no_interval += 1
+                continue
+            isi = r["isi"]
+            if isinstance(isi, str):
+                isi = orjson.loads(isi)
+            paths = await ensure_derivatives(
+                r["video_url"], isi=isi, vtt_text=r["vtt"],
+            )
+            if not paths:
+                await record_fetch_outcome(db, r["id"], ok=False, error="media fetch failed")
+                stats.download_failures += 1
+                continue
+            await record_fetch_outcome(db, r["id"], ok=True)
+            await queue.put((r, paths))
+        for _ in range(workers):
+            await queue.put(None)
+
+    async def consumer():
+        while True:
+            item = await queue.get()
+            if item is None:
+                return
+            r, paths = item
+            with open(paths["times"]) as fh:
+                times = json.load(fh)["keyframe_pts"]
+            rkey = r["started_at"].date() if r["started_at"] else None
+            if rkey not in roster_by_date:
+                roster_by_date[rkey] = await _roster_names(db, city, when=r["started_at"])
+            roster = roster_by_date[rkey]
+            samples, n_crops = await loop.run_in_executor(
+                pool, _ocr_frames_sync, paths["frames_dir"], times, roster,
+            )
+            stats.frames_processed += len(samples)
+            stats.unique_crops_ocrd += n_crops
+            intervals = _samples_to_intervals(samples)
+            cache_meta = load_meta_from(paths) or {}
+            timeline = {
+                "version": 2,
+                "frames": len(samples),
+                "cadence_secs": 5,
+                # Interval times are in the SOURCE video's timebase;
+                # consumers convert caption timestamps with this offset
+                # (audio/video_time = caption_time + offset). None →
+                # legacy +8s lead assumption.
+                "media_source": cache_meta.get("source", "youtube"),
+                "caption_offset_s": cache_meta.get("caption_offset_s"),
+                "intervals": intervals,
+            }
+            await db.execute(
+                """
+                UPDATE meetings
+                SET raw = raw || jsonb_build_object('speaker_timeline', $1::jsonb),
+                    updated_at = now()
+                WHERE id = $2::uuid
+                """,
+                orjson.dumps(timeline).decode(), r["id"],
+            )
+            stats.timelines_built += 1
+            stats.intervals_stored += len(intervals)
+            speaking = sum(1 for iv in intervals if iv["state"] == "speaking")
+            log.info("timeline for meeting=%s (%s): %d intervals (%d speaking)",
+                     r["source_meeting_id"], timeline["media_source"],
+                     len(intervals), speaking)
+
+    try:
+        await asyncio.gather(producer(), *[consumer() for _ in range(workers)])
+    finally:
+        pool.shutdown(wait=True)
     return stats
 
 
@@ -464,6 +649,10 @@ async def apply_panel_attribution(
         speaking = [iv for iv in timeline["intervals"] if iv["state"] == "speaking"]
         if not speaking:
             continue
+        # Same dynamic lead as make_panel_owner_lookup: offset + 13, with
+        # the legacy +8 fallback for timelines without a measured offset.
+        _off = timeline.get("caption_offset_s")
+        panel_lead = (_off + 13.0) if _off is not None else PANEL_LEAD_SECS
 
         turns = await db.fetch(
             """
@@ -478,7 +667,7 @@ async def apply_panel_attribution(
             caption_source, m["id"],
         )
         for t in turns:
-            probe_t = (t["start_s"] or 0) + PANEL_LEAD_SECS
+            probe_t = (t["start_s"] or 0) + panel_lead
             iv = next((iv for iv in speaking if iv["start"] <= probe_t <= iv["end"]), None)
             if iv is None:
                 stats.skipped_no_interval += 1

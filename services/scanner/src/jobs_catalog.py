@@ -1380,8 +1380,20 @@ COMMANDS: dict[str, dict[str, Any]] = {
              "choices": ["edmonton"]},
             {"name": "limit", "type": "int", "required": False,
              "help": "Max meetings this run. Each is ~280MB download + ~10-15 CPU-min."},
+            {"name": "workers", "type": "int", "required": False,
+             "help": "Concurrent OCR worker threads (default 3)."},
             {"name": "force", "type": "bool", "required": False, "default": False,
              "help": "Rebuild timelines that already exist."},
+        ],
+    },
+    "cache-edmonton-media": {
+        "description": "Acquisition-only — build media derivative caches (audio + frames + caption alignment) for speeches-bearing meetings, no OCR. ISI CDN first, YouTube fallback; serial single-connection politeness; failures memoized with backoff. Voice attribution needs only this leg.",
+        "cli": "cache-edmonton-media", "category": "hansard",
+        "args": [
+            {"name": "city", "type": "enum", "required": False, "default": "edmonton",
+             "choices": ["edmonton"]},
+            {"name": "limit", "type": "int", "required": False,
+             "help": "Max meetings this run (default: all with speeches)."},
         ],
     },
     "apply-panel-attribution": {

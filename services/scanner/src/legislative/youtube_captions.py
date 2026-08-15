@@ -794,9 +794,14 @@ def make_panel_owner_lookup(timeline: Optional[dict]):
     ]
     if not speaking:
         return None
+    # Interval times are in the SOURCE video's timebase. With a measured
+    # caption offset o (audio_time = caption_time + o), the empirical +8s
+    # YouTube probe lead generalises to o + 13 (o≈-5 on YouTube caches).
+    offset = timeline.get("caption_offset_s")
+    lead = (offset + 13.0) if offset is not None else _PANEL_PROBE_LEAD_SECS
 
     def lookup(start_seconds: float) -> Optional[str]:
-        probe = start_seconds + _PANEL_PROBE_LEAD_SECS
+        probe = start_seconds + lead
         for iv in speaking:
             if iv["start"] + _PANEL_START_MARGIN_SECS <= probe <= iv["end"]:
                 return iv["name"].split()[-1].upper()
