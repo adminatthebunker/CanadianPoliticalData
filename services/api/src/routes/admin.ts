@@ -317,7 +317,11 @@ const COMMAND_CATALOG = [
   },
   { key: "chunk-speeches", category: "hansard",
     description: "Split speeches.text into retrievable `speech_chunks` rows (idempotent).",
-    args: [{ name: "limit", type: "int", required: false, help: "Max speeches to chunk (default: all pending)." }],
+    args: [
+      { name: "limit", type: "int", required: false, help: "Max speeches to chunk (default: all pending)." },
+      { name: "source_system", type: "str", required: false, help: "Restrict to one source_system (bypasses the global queue order)." },
+      { name: "speech_type", type: "str", required: false, help: "Restrict to one speech_type (e.g. committee/floor)." },
+    ],
   },
   { key: "embed-speech-chunks", category: "hansard",
     description: "Fill speech_chunks.embedding via TEI (Qwen3-Embedding-0.6B). ~50 c/s end-to-end.",

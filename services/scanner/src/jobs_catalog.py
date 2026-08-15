@@ -550,6 +550,10 @@ COMMANDS: dict[str, dict[str, Any]] = {
         "args": [
             {"name": "limit", "type": "int", "required": False,
              "help": "Max speeches to chunk this run (default: all pending)."},
+            {"name": "source_system", "type": "str", "required": False,
+             "help": "Restrict to one source_system (bypasses the global queue order)."},
+            {"name": "speech_type", "type": "str", "required": False,
+             "help": "Restrict to one speech_type (e.g. committee/floor)."},
         ],
     },
     "embed-speech-chunks": {
@@ -1472,8 +1476,14 @@ def build_cli_args(key: str, args: dict[str, Any]) -> list[str]:
         if arg.get("required") and arg["name"] not in args:
             raise ValueError(f"missing required arg: {arg['name']}")
 
-    # Translate
+    # Translate. Reserved keys are worker directives, not CLI flags:
+    # run_job reads args['timeout_seconds'] for the subprocess timeout and
+    # the stuck-job reaper uses it as the staleness threshold — it must
+    # never reach the Click command line.
+    RESERVED_ARGS = {"timeout_seconds"}
     for name, value in args.items():
+        if name in RESERVED_ARGS:
+            continue
         if name not in schema:
             raise ValueError(f"unknown arg for {key}: {name}")
         if value is None:
