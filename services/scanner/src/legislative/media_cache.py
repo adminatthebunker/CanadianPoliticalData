@@ -44,7 +44,10 @@ from .youtube_captions import _run_ytdlp, YTDLP_POLITE_ARGS, YTDLP_POT_ARGS
 log = logging.getLogger(__name__)
 
 CACHE_ROOT = os.environ.get("MEDIA_CACHE_DIR", "/media-cache")
-VIDEO_FORMAT = os.environ.get("PANEL_OCR_YT_FORMAT", "135/244/136")
+# DASH video itags (135/244/136) carry NO audio — pin video+audio pairs so
+# the single cached fetch serves both derivative streams (itag 140 = m4a
+# audio; 18 = muxed 360p last-resort).
+VIDEO_FORMAT = os.environ.get("PANEL_OCR_YT_FORMAT", "135+140/244+140/136+140/18")
 JS_RUNTIME = os.environ.get("PANEL_OCR_JS_RUNTIME", "node")
 DOWNLOAD_TIMEOUT_SECS = 1800
 
@@ -87,6 +90,7 @@ async def ensure_derivatives(video_url: str) -> Optional[dict]:
         out = os.path.join(tmpdir, "video.%(ext)s")
         args = [
             "-f", VIDEO_FORMAT,
+            "--merge-output-format", "mp4",
             "--js-runtimes", JS_RUNTIME,
             "--no-warnings",
             *YTDLP_POLITE_ARGS,
