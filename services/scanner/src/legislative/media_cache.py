@@ -226,18 +226,21 @@ async def ensure_derivatives(
         d = isi_cache_dir_for(isi["etag"])
         paths = _paths_for(d)
         os.makedirs(d, exist_ok=True)
-        with tempfile.TemporaryDirectory(prefix="mediacache-") as tmpdir:
-            video = os.path.join(tmpdir, "video.mp4")
-            if await _download_isi(isi, video):
-                ok = await _derive_from_file(
-                    video, paths, source="isi", video_url=video_url,
-                    identity={"isi_etag": isi["etag"], "isi_url": isi["url"]},
-                    vtt_text=vtt_text,
-                )
-                if ok:
-                    return paths
-        # ISI failed (download, derive, or untrusted alignment): clean the
-        # namespace dir and fall through to the YouTube lane.
+        try:
+            with tempfile.TemporaryDirectory(prefix="mediacache-") as tmpdir:
+                video = os.path.join(tmpdir, "video.mp4")
+                if await _download_isi(isi, video):
+                    ok = await _derive_from_file(
+                        video, paths, source="isi", video_url=video_url,
+                        identity={"isi_etag": isi["etag"], "isi_url": isi["url"]},
+                        vtt_text=vtt_text,
+                    )
+                    if ok:
+                        return paths
+        except Exception as exc:
+            log.warning("ISI derivation crashed for %s: %s", video_id, exc)
+        # ISI failed (download, derive, crash, or untrusted alignment):
+        # clean the namespace dir and fall through to the YouTube lane.
         import shutil as _shutil
         _shutil.rmtree(d, ignore_errors=True)
         log.info("ISI lane failed for %s — falling back to YouTube", video_id)

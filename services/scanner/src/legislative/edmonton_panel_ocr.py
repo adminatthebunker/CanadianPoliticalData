@@ -463,7 +463,13 @@ async def cache_edmonton_media(
         if fetch_backoff_active(memo):
             stats.skipped_no_interval += 1
             continue
-        paths = await ensure_derivatives(r["video_url"], isi=isi, vtt_text=r["vtt"])
+        # One bad meeting (corrupt download, odd codec) must not kill a
+        # multi-day acquisition run — degrade to a memoized failure.
+        try:
+            paths = await ensure_derivatives(r["video_url"], isi=isi, vtt_text=r["vtt"])
+        except Exception as exc:
+            log.warning("derivation crashed for meeting=%s: %s", r["source_meeting_id"], exc)
+            paths = None
         if not paths:
             await record_fetch_outcome(db, r["id"], ok=False, error="media fetch failed")
             stats.download_failures += 1
@@ -533,9 +539,14 @@ async def ocr_speaker_timeline(
             isi = r["isi"]
             if isinstance(isi, str):
                 isi = orjson.loads(isi)
-            paths = await ensure_derivatives(
-                r["video_url"], isi=isi, vtt_text=r["vtt"],
-            )
+            try:
+                paths = await ensure_derivatives(
+                    r["video_url"], isi=isi, vtt_text=r["vtt"],
+                )
+            except Exception as exc:
+                log.warning("derivation crashed for meeting=%s: %s",
+                            r["source_meeting_id"], exc)
+                paths = None
             if not paths:
                 await record_fetch_outcome(db, r["id"], ok=False, error="media fetch failed")
                 stats.download_failures += 1
