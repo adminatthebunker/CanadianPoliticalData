@@ -632,7 +632,10 @@ export default function HansardSearchPage() {
         </h2>
         <p className="hansard-search__subtitle">
           Search Canadian parliamentary speeches by meaning, not just exact words. Try{" "}
-          <em>"rising cost of groceries"</em> — you'll find speeches that say "food prices" too.
+          <em>"rising cost of groceries"</em> and you will also find speeches that say
+          "food prices". Full sentences and questions work. Search never writes
+          anything: every result is a word-for-word quote from the official record,
+          not AI-generated text.
           {" "}
           <a
             className="hansard-search__how-link"

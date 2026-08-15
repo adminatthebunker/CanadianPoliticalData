@@ -1868,6 +1868,12 @@ button.active { background: var(--accent); border-color: var(--accent); }
 .lander__find-hint {
   margin: 0; color: rgba(148, 163, 184, 0.7); font-size: .78rem; line-height: 1.4;
 }
+.lander__find-hint-link {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  white-space: nowrap;
+}
 
 .lander__btn {
   display: inline-flex; align-items: center; justify-content: center;

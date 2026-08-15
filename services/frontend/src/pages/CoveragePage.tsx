@@ -16,6 +16,21 @@ const STATUS_SYMBOL: Record<CoverageJurisdiction["bills_status"], string> = {
   none: "…",
 };
 
+// jurisdiction_sources.blockers stores short operator slugs (greppable,
+// stable). Map them to plain-language chip labels for the public page;
+// unknown slugs fall through as-is.
+const BLOCKER_LABEL: Record<string, string> = {
+  "pdf-only": "PDF only",
+  "waf-budget": "Limited by site protections",
+  "consensus-govt": "Consensus government",
+  "radware-shieldsquare": "Blocked by CAPTCHA",
+  "cloudflare-bot-mgmt": "Blocked by bot protection",
+};
+
+function blockerLabel(slug: string): string {
+  return BLOCKER_LABEL[slug] ?? slug;
+}
+
 function StatusPill({ status }: { status: CoverageJurisdiction["bills_status"] }) {
   return (
     <span className={`coverage__pill coverage__pill--${status}`}>
@@ -64,9 +79,11 @@ export default function CoveragePage() {
       <header className="coverage__header">
         <h2 className="coverage__title">Coverage</h2>
         <p className="coverage__subtitle">
-          Every Canadian legislature we track, with the current status of each data layer — bills,{" "}
+          The current status of every Canadian legislature we track, across four kinds
+          of data: bills,{" "}
           <abbr title="The official transcript of what was said in the legislature">Hansard</abbr>,{" "}
-          votes, committees. Blocked jurisdictions are flagged with the specific reason.
+          votes, and committees. Where something is missing or blocked, the notes
+          explain why.
         </p>
         <div className="coverage__summary" role="group" aria-label="Coverage summary">
           <CountCell value={summary.live} label="live" />
@@ -115,7 +132,7 @@ export default function CoveragePage() {
                 <td><StatusPill status={j.votes_status} /></td>
                 <td><StatusPill status={j.committees_status} /></td>
                 <td className="coverage__notes">
-                  {j.blockers && <div className="coverage__blocker">{j.blockers}</div>}
+                  {j.blockers && <div className="coverage__blocker">{blockerLabel(j.blockers)}</div>}
                   {j.notes}
                 </td>
               </tr>
@@ -156,7 +173,7 @@ export default function CoveragePage() {
             </dl>
             {(j.blockers || j.notes) && (
               <div className="coverage__card-notes">
-                {j.blockers && <span className="coverage__blocker">{j.blockers}</span>}
+                {j.blockers && <span className="coverage__blocker">{blockerLabel(j.blockers)}</span>}
                 {j.notes && <p>{j.notes}</p>}
               </div>
             )}

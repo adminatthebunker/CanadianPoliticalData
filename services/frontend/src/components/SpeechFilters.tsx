@@ -531,8 +531,8 @@ function PostcodePicker({ value, apply }: PickerProps) {
     <>
       <PickerHeader title="My reps" />
       <p className="cpd-filter-popover__help">
-        Only show speeches by the representatives for this postal code —
-        your MP, MLA, and municipal reps.
+        Only show speeches by this postal code's representatives: your MP,
+        MLA, and municipal reps.
       </p>
       <input
         type="text"

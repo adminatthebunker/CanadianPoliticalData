@@ -114,14 +114,14 @@ export default function Lander() {
 
   // Explicit, state-aware hint so the two-input bar explains itself.
   const searchHint = repsOnlyMode
-    ? `Finds the representatives for ${formatPostal(searchPostal.trim())} — your MP, MLA, and municipal councillors.`
+    ? `Finds the representatives for ${formatPostal(searchPostal.trim())}: your MP, MLA, and municipal councillors.`
     : postalValid && trimmedQ
-      ? `Searches speeches by ${formatPostal(searchPostal.trim())}'s representatives only.`
+      ? `Only shows speeches by ${formatPostal(searchPostal.trim())}'s representatives.`
       : trimmedQ
         ? (stats
             ? `Semantic search across ${nf.format(stats.speeches)} speeches.`
             : "Search what every politician has said on the record.")
-        : "Search term, postal code, or both — a postal code alone finds your reps; add a search term to see what your reps have said about it.";
+        : "Enter a search term, a postal code, or both. A postal code on its own finds your representatives. Add a search term to see what they have said about it.";
 
   return (
     <div className="lander">
@@ -172,10 +172,10 @@ export default function Lander() {
                 type="text"
                 className="lander__postal-inline"
                 placeholder="Postal code (K1A 0A6)"
-                title="Postal code alone finds your reps; with a search term it filters speeches to your reps"
+                title="A postal code on its own finds your reps. Add a search term to see their speeches."
                 value={searchPostal}
                 onChange={e => { setSearchPostal(e.target.value); setSearchPostalError(null); }}
-                aria-label="Postal code — alone it finds your representatives; with a search term it filters speeches to them"
+                aria-label="Postal code. On its own it finds your representatives. With a search term it limits results to their speeches."
                 aria-invalid={searchPostalError ? true : undefined}
                 aria-describedby={searchPostalError ? "lander-hansard-postal-error" : undefined}
                 maxLength={7}
@@ -190,6 +190,19 @@ export default function Lander() {
               </div>
             )}
             <p className="lander__find-hint" aria-live="polite">{searchHint}</p>
+            <p className="lander__find-hint">
+              Search understands meaning, so you can type plain language, full
+              sentences, or questions. Every result is a real speech, quoted
+              word for word from the official record. Nothing is written by AI.{" "}
+              <a
+                className="lander__find-hint-link"
+                href="https://docs.canadianpoliticaldata.org/searching/how-it-works/"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                How search works ↗
+              </a>
+            </p>
           </form>
         </div>
       </div>
