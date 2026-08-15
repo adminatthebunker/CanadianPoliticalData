@@ -78,7 +78,10 @@ class EscribeCity:
     host: str                     # 'pub-calgary.escribemeetings.com'
     province_territory: str       # 'AB'
     source_system: str            # 'calgary-escribemeetings'
-    youtube_channel: str          # 'https://www.youtube.com/@CityofCalgary'
+    # Official meeting-room livestream channels (a city may stream different
+    # rooms on different channels — Edmonton has three). Empty tuple = no
+    # known council video channel (Calgary's video lives inside eScribe only).
+    youtube_channels: tuple[str, ...] = ()
 
     @property
     def base_url(self) -> str:
@@ -98,14 +101,20 @@ CITIES: dict[str, EscribeCity] = {
         host="pub-calgary.escribemeetings.com",
         province_territory="AB",
         source_system="calgary-escribemeetings",
-        youtube_channel="https://www.youtube.com/@CityofCalgary",
+        youtube_channels=(),
     ),
     "edmonton": EscribeCity(
         slug="edmonton",
         host="pub-edmonton.escribemeetings.com",
         province_territory="AB",
         source_system="edmonton-escribemeetings",
-        youtube_channel="https://www.youtube.com/@cityofedmonton",
+        # Three meeting rooms, three channels (probe 2026-08-14). The /streams
+        # tab is what carries the council/committee livestream VODs.
+        youtube_channels=(
+            "https://www.youtube.com/@councilchamber-cityofedmo9617/streams",
+            "https://www.youtube.com/@CouncillorsBoardroom-coejo7gs/streams",
+            "https://www.youtube.com/channel/UC6mgjEniA-4qOlCL30qGYJw/streams",  # River Valley Room
+        ),
     ),
 }
 

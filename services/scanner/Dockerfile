@@ -7,11 +7,18 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+# ffmpeg + tesseract + nodejs: Edmonton panel-OCR speaker-timeline stage
+# (video keyframe extraction, on-screen name OCR; node is yt-dlp's JS
+# runtime for YouTube signature deciphering on video formats).
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
         poppler-utils \
         build-essential \
+        ffmpeg \
+        tesseract-ocr \
+        tesseract-ocr-eng \
+        nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .

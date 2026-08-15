@@ -93,3 +93,4 @@ mkdocs/site/*
 # alias, rsync dest). Kept local-only, out of version control. backup-database.sh
 # calls it via a guarded `if` that no-ops if the file is absent on a checkout.
 /scripts/replicate-to-offsite.sh
+/media-cache/

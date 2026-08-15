@@ -5550,19 +5550,42 @@ def cmd_resolve_escribe_motion_movers(ctx: click.Context, city) -> None:
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 
 
+@cli.command("ingest-edmonton-meetings")
+@click.pass_context
+def cmd_ingest_edmonton_meetings(ctx: click.Context) -> None:
+    """Stage 1 (Edmonton) — meetings spine from the city's Socrata portal.
+
+    data.edmonton.ca publishes the full eScribe meeting record 2011-present
+    as open datasets; this bypasses the JS-walled eScribe calendar entirely.
+    Idempotent on (source_system, source_meeting_id); safe to run daily.
+    """
+    from .legislative.edmonton_socrata import ingest_edmonton_meetings as _ingest
+
+    async def _wrap(db: Database) -> None:
+        stats = await _ingest(db)
+        console.print(
+            f"[green]ingest-edmonton-meetings[/green]: fetched={stats.rows_fetched} "
+            f"meetings={stats.meetings_seen} inserted={stats.meetings_inserted} "
+            f"updated={stats.meetings_updated} sessions_seeded={stats.sessions_seeded} "
+            f"skipped(no-id={stats.skipped_no_id} no-dt={stats.skipped_no_datetime}) "
+            f"per-term={stats.per_term}"
+        )
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
 @cli.command("match-meetings-to-youtube")
 @click.option("--city", type=click.Choice(_ESCRIBE_CITY_CHOICES), default="all")
 @click.option("--limit", type=int, default=None)
-@click.option("--max-channel-videos", type=int, default=200)
-@click.option("--max-date-drift-days", type=int, default=3)
+@click.option("--max-channel-videos", type=int, default=800)
 @click.pass_context
 def cmd_match_meetings_to_youtube(
-    ctx: click.Context, city, limit, max_channel_videos, max_date_drift_days,
+    ctx: click.Context, city, limit, max_channel_videos,
 ) -> None:
-    """Stage 5 — list city's YouTube channel via yt-dlp; match each meeting to a video.
+    """Stage 5 — attach stream VODs from the city's room channels to meetings.
 
-    Sets meetings.video_url when a date-proximity + body-name match lands
-    within max_date_drift_days.
+    Stream titles carry the meeting date + body verbatim
+    ('July 7, 2026 - City Council'); the join is (title-date, normalized
+    body) against the structured meetings spine. Sets meetings.video_url.
     """
     from .legislative.youtube_captions import match_meetings_to_youtube as _match
 
@@ -5570,12 +5593,135 @@ def cmd_match_meetings_to_youtube(
         stats = await _match(
             db, city_slug=city, limit=limit,
             max_channel_videos=max_channel_videos,
-            max_date_drift_days=max_date_drift_days,
         )
         console.print(
             f"[green]match-meetings-to-youtube[/green]: cities={stats.cities_processed} "
-            f"seen={stats.meetings_seen} matched={stats.matched_videos} "
-            f"skipped_no_match={stats.skipped_no_match} fails={len(stats.fetch_failures)}"
+            f"matched={stats.matched_videos} "
+            f"unmatched={stats.skipped_no_match} fails={len(stats.fetch_failures)}"
+        )
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
+@cli.command("probe-edmonton-media")
+@click.option("--limit", type=int, default=None)
+@click.option("--force", is_flag=True, default=False,
+              help="Re-probe meetings that already have a media record.")
+@click.pass_context
+def cmd_probe_edmonton_media(ctx: click.Context, limit, force) -> None:
+    """Map meetings to their ISI CDN recordings (metadata only, no media).
+
+    2-3 small requests per meeting: eScribe player page for the filename,
+    HEAD on video.isilive.ca for etag/size (the media identity key).
+    Results in meetings.raw->'media'; ~25% of meetings are ISI-empty and
+    keep YouTube as their media source.
+    """
+    from .legislative.edmonton_media import probe_media_assets as _probe
+
+    async def _wrap(db: Database) -> None:
+        stats = await _probe(db, limit=limit, force=force)
+        console.print(
+            f"[green]probe-edmonton-media[/green]: seen={stats.meetings_seen} "
+            f"isi={stats.isi_found} empty={stats.isi_empty} errors={stats.errors}"
+        )
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
+@cli.command("ocr-speaker-timeline")
+@click.option("--city", type=click.Choice(("edmonton",)), default="edmonton")
+@click.option("--limit", type=int, default=None,
+              help="Max meetings this run. Each is ~280MB download + ~10-15 CPU-min.")
+@click.option("--force", is_flag=True, default=False,
+              help="Rebuild timelines that already exist.")
+@click.pass_context
+def cmd_ocr_speaker_timeline(ctx: click.Context, city, limit, force) -> None:
+    """Stage 8 — OCR the clerk's on-screen speaker panel into a timeline.
+
+    Downloads the meeting video at 480p, reads the ~5s YouTube keyframes,
+    colour-searches the clerk panel, OCRs the current-speaker entry gated
+    on the ticking countdown, and stores interval JSON in
+    meetings.raw->'speaker_timeline'. Video and frames are transient.
+    """
+    from .legislative.edmonton_panel_ocr import ocr_speaker_timeline as _ocr
+
+    async def _wrap(db: Database) -> None:
+        stats = await _ocr(db, city_slug=city, limit=limit, force=force)
+        console.print(
+            f"[green]ocr-speaker-timeline[/green]: meetings={stats.meetings_seen} "
+            f"built={stats.timelines_built} dl_fails={stats.download_failures} "
+            f"frames={stats.frames_processed} crops={stats.unique_crops_ocrd} "
+            f"intervals={stats.intervals_stored}"
+        )
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
+@cli.command("apply-panel-attribution")
+@click.option("--city", type=click.Choice(("edmonton",)), default="edmonton")
+@click.pass_context
+def cmd_apply_panel_attribution(ctx: click.Context, city) -> None:
+    """Stage 9 — AUDIT caption attributions against the panel timeline.
+
+    Attribution from the panel happens inside the collapse pipeline (the
+    timeline feeds block-alternation as a floor-owner source during
+    reparse/fetch); this stage only compares direct text attributions
+    against the covering interval and logs disagreements for review. It
+    never writes.
+    """
+    from .legislative.edmonton_panel_ocr import apply_panel_attribution as _apply
+
+    async def _wrap(db: Database) -> None:
+        stats = await _apply(db, city_slug=city)
+        console.print(
+            f"[green]apply-panel-attribution[/green]: meetings={stats.meetings_seen} "
+            f"disagreements={stats.disagreements} no_interval={stats.skipped_no_interval}"
+        )
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
+@cli.command("enrich-edmonton-minutes")
+@click.option("--limit", type=int, default=None,
+              help="Max meetings to process (default: all video-matched).")
+@click.option("--delay", type=float, default=1.0)
+@click.pass_context
+def cmd_enrich_edmonton_minutes(ctx: click.Context, limit, delay) -> None:
+    """Hydrate + parse eScribe minutes; FK-resolve 'The Chair' caption turns.
+
+    Fetches each video-matched meeting's server-rendered minutes page once
+    (cached in raw_minutes_html), parses chair/attendance/delegation into
+    meetings.raw->'minutes', and attributes Chair-macro caption speeches to
+    the roll-call-conducting member at confidence 0.8.
+    """
+    from .legislative.edmonton_minutes import enrich_minutes as _enrich
+
+    async def _wrap(db: Database) -> None:
+        stats = await _enrich(db, limit=limit, delay=delay)
+        console.print(
+            f"[green]enrich-edmonton-minutes[/green]: seen={stats.meetings_seen} "
+            f"fetched={stats.fetched} fails={stats.fetch_failures} "
+            f"chairs={stats.chairs_found} chair_turns_resolved={stats.chair_turns_resolved} "
+            f"per_chair={stats.per_chair}"
+        )
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
+@cli.command("reparse-meeting-captions")
+@click.option("--city", type=click.Choice(_ESCRIBE_CITY_CHOICES), default="all")
+@click.pass_context
+def cmd_reparse_meeting_captions(ctx: click.Context, city) -> None:
+    """Rebuild caption speeches from stored VTTs (no network).
+
+    Use after parser / segmentation / truecasing changes. Deletes and
+    re-inserts each meeting's speeches (chunks cascade; new rows re-enter
+    the chunk queue). Re-run resolve-meeting-caption-speakers after.
+    """
+    from .legislative.youtube_captions import reparse_meeting_captions as _reparse
+
+    async def _wrap(db: Database) -> None:
+        stats = await _reparse(db, city_slug=city)
+        console.print(
+            f"[green]reparse-meeting-captions[/green]: cities={stats.cities_processed} "
+            f"meetings={stats.meetings_seen} reparsed={stats.captions_fetched} "
+            f"speeches={stats.speeches_inserted} warns={stats.parse_warnings} "
+            f"attribution={stats.attribution_counts}"
         )
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 

@@ -264,6 +264,7 @@ async def sync_chunk_politician_scoped(
     source_system: str,
     min_date: date,
     batch_rows: int = 1000,
+    level: str = "provincial",
 ) -> int:
     """Batched politician_id denorm sync for one province's recent chunks.
 
@@ -289,10 +290,10 @@ async def sync_chunk_politician_scoped(
                     SELECT sc2.id
                       FROM speech_chunks sc2
                       JOIN speeches s2 ON s2.id = sc2.speech_id
-                     WHERE sc2.level = 'provincial'
+                     WHERE sc2.level = $4
                        AND sc2.province_territory = $1
                        AND sc2.spoken_at >= $2::date
-                       AND s2.level = 'provincial'
+                       AND s2.level = $4
                        AND s2.province_territory = $1
                        AND s2.source_system = $3
                        AND sc2.politician_id IS DISTINCT FROM s2.politician_id
@@ -304,6 +305,7 @@ async def sync_chunk_politician_scoped(
             province,
             min_date,
             source_system,
+            level,
             timeout=300,
         )
         try:
