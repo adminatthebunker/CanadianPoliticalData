@@ -963,6 +963,41 @@ async def roster_for_date(
     return (roster, mayor) if roster else None
 
 
+async def fullname_roster_for_date(
+    db: Database, city: EscribeCity, when,
+) -> dict[str, str]:
+    """Full-name → politician_id valid at `when` (voice maps store full
+    names, not surnames). Empty dict when no roster covers the date —
+    callers must then refuse to attribute rather than guess. Doubles as a
+    seat check: a pooled current-era voice name can't be applied to a
+    meeting where that person held no seat."""
+    if when is None:
+        return {}
+    d = when.date() if hasattr(when, "date") else when
+    if _roster_valid_for(city.slug, when):
+        rows = await db.fetch(
+            """
+            SELECT id::text AS id, name FROM politicians
+            WHERE level = 'municipal' AND province_territory = $1 AND source_id LIKE $2
+            """,
+            city.province_territory, f"opennorth:{city.slug}-city-council:%",
+        )
+    else:
+        rows = await db.fetch(
+            """
+            SELECT DISTINCT p.id::text AS id, p.name
+            FROM politician_terms t JOIN politicians p ON p.id = t.politician_id
+            WHERE t.level = 'municipal' AND t.province_territory = $1
+              AND (p.source_id LIKE 'opennorth:' || $2 || '-city-council:%'
+                   OR p.source_id LIKE 'edmonton-socrata:%')
+              AND t.started_at <= $3::date
+              AND (t.ended_at IS NULL OR t.ended_at > $3::date)
+            """,
+            city.province_territory, city.slug, d,
+        )
+    return {r["name"]: r["id"] for r in rows if r["name"]}
+
+
 async def _load_council_roster(db: Database, city: EscribeCity) -> dict[str, str]:
     """Map UPPERCASE-surname → politician_id for the city's Open North roster."""
     council_slug = f"opennorth:{city.slug}-city-council:"
@@ -1744,25 +1779,23 @@ async def resolve_meeting_caption_speakers(
             """,
             city.source_system,
         )
-        # Voice enrollment comes from current-term labelled turns; the map's
-        # names are only meaningful for current-term meetings.
-        voice_meetings = [
-            vm for vm in voice_meetings
-            if _roster_valid_for(city.slug, vm["started_at"])
-        ]
+        # Voice-map names resolve against the roster valid at the
+        # MEETING's date (dated politician_terms for pre-2025 meetings),
+        # both to attribute historical meetings and as a seat check —
+        # a pooled current-era voice can't land in a meeting where that
+        # person held no seat. Uncovered dates get an empty roster and
+        # are skipped (refuse-to-guess).
         import orjson as _orjson
-        name_to_pid: dict[str, str] = {}
-        for r in await db.fetch(
-            """
-            SELECT id::text AS id, name FROM politicians
-            WHERE level = 'municipal' AND province_territory = $1 AND source_id LIKE $2
-            """,
-            city.province_territory, f"opennorth:{city.slug}-city-council:%",
-        ):
-            if r["name"]:
-                name_to_pid[r["name"]] = r["id"]
+        roster_cache: dict[object, dict[str, str]] = {}
         voice_applied = 0
         for vm in voice_meetings:
+            when = vm["started_at"]
+            key = when.date() if hasattr(when, "date") else when
+            if key not in roster_cache:
+                roster_cache[key] = await fullname_roster_for_date(db, city, when)
+            name_to_pid = roster_cache[key]
+            if not name_to_pid:
+                continue
             entries = vm["vmap"]
             if isinstance(entries, str):
                 entries = _orjson.loads(entries)
