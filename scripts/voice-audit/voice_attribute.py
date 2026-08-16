@@ -250,6 +250,12 @@ def process_meeting(video_id: str, clf, cached_only: bool = False) -> str | None
               f"({len(enrol_sample)} enrolment + {len(bare)} bare)…", flush=True)
         embs = embed_turns(audio, embeddable, lag, clf)
     keep = [(t, e) for t, e in zip(embeddable, embs) if e is not None]
+    if not keep:
+        # Fully-attributed (or turn-less) meeting: nothing to enroll or
+        # classify. Skip rather than np.vstack([]) — and leave no npz so
+        # a future run re-checks after reparse changes the turn set.
+        print(f"  {video_id}: no embeddable turns — skipped", flush=True)
+        return None
     np.savez_compressed(
         cache_path,
         embeddings=np.vstack([e for _, e in keep]),
