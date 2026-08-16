@@ -452,7 +452,12 @@ async def cache_edmonton_media(
         ensure_derivatives, fetch_backoff_active, record_fetch_outcome,
         find_cache,
     )
-    sem = asyncio.Semaphore(max(1, workers))
+    # Lane-aware admission: ISI meetings share the parallel pool; ISI-less
+    # meetings (YouTube lane, throttled + serialised by the media_cache
+    # module lock) get exactly one slot so a run of them can't occupy the
+    # pool and collapse ISI concurrency back to serial.
+    sem_isi = asyncio.Semaphore(max(1, workers))
+    sem_yt = asyncio.Semaphore(1)
 
     async def _one(r) -> None:
         stats.meetings_seen += 1
@@ -469,7 +474,8 @@ async def cache_edmonton_media(
         if fetch_backoff_active(memo):
             stats.skipped_no_interval += 1
             return
-        async with sem:
+        lane = sem_isi if (isi and isi.get("url") and isi.get("etag")) else sem_yt
+        async with lane:
             # One bad meeting (corrupt download, odd codec) must not kill a
             # multi-day acquisition run — degrade to a memoized failure.
             try:
