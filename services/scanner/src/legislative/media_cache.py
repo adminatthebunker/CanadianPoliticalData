@@ -31,6 +31,7 @@ being retried at the head of every run.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -104,8 +105,13 @@ async def _derive_from_file(video: str, paths: dict, *, source: str,
                             video_url: str, identity: dict,
                             vtt_text: Optional[str]) -> bool:
     """Shared derivation: local video file → keyframes + opus + times +
-    (when vtt_text given) caption alignment → meta. True on success."""
-    probe = subprocess.run(
+    (when vtt_text given) caption alignment → meta. True on success.
+
+    ffprobe/ffmpeg run via asyncio.to_thread — they take minutes on an
+    8h meeting, and blocking the loop would stall concurrent workers'
+    downloads (cache-edmonton-media --workers N)."""
+    probe = await asyncio.to_thread(
+        subprocess.run,
         ["ffprobe", "-v", "error", "-select_streams", "v:0",
          "-show_packets", "-show_entries", "packet=pts_time,flags",
          "-of", "csv=p=0", video],
@@ -119,16 +125,18 @@ async def _derive_from_file(video: str, paths: dict, *, source: str,
                 times.append(float(parts[0]))
             except ValueError:
                 pass
-    dur_out = subprocess.run(
+    dur_out = (await asyncio.to_thread(
+        subprocess.run,
         ["ffprobe", "-v", "error", "-show_entries", "format=duration",
          "-of", "csv=p=0", video],
         capture_output=True, text=True,
-    ).stdout.strip()
+    )).stdout.strip()
     duration = float(dur_out) if dur_out else None
 
     frames_dir = paths["frames_dir"]
     os.makedirs(frames_dir, exist_ok=True)
-    res = subprocess.run(
+    res = await asyncio.to_thread(
+        subprocess.run,
         ["ffmpeg", "-v", "error", "-skip_frame", "nokey", "-i", video,
          "-map", "0:v", "-vsync", "0", "-q:v", "4",
          os.path.join(frames_dir, "f%06d.jpg"),
@@ -156,7 +164,8 @@ async def _derive_from_file(video: str, paths: dict, *, source: str,
     if vtt_text:
         try:
             from .caption_align import align_captions_to_audio
-            r = align_captions_to_audio(vtt_text, paths["audio"])
+            r = await asyncio.to_thread(
+                align_captions_to_audio, vtt_text, paths["audio"])
             align_score = round(r.score, 1)
             if r.trusted:
                 caption_offset = round(r.offset_s, 2)
@@ -248,6 +257,19 @@ async def ensure_derivatives(
     d = cache_dir_for(video_id)
     paths = _paths_for(d)
     os.makedirs(d, exist_ok=True)
+    # The YouTube lane stays single-file regardless of caller concurrency
+    # (attestation scoring is per-IP; parallel fetches burn goodwill).
+    # ISI (above) has no such lock — the CDN is explicitly unthrottled.
+    async with _YOUTUBE_LANE_LOCK:
+        return await _ensure_youtube(video_url, video_id, paths, vtt_text)
+
+
+_YOUTUBE_LANE_LOCK = asyncio.Lock()
+
+
+async def _ensure_youtube(
+    video_url: str, video_id: str, paths: dict, vtt_text: Optional[str],
+) -> Optional[dict]:
     with tempfile.TemporaryDirectory(prefix="mediacache-") as tmpdir:
         out = os.path.join(tmpdir, "video.%(ext)s")
         args = [

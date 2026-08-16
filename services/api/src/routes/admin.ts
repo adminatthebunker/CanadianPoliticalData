@@ -908,6 +908,7 @@ const COMMAND_CATALOG = [
       { name: "city", type: "enum", required: false, default: "edmonton",
         choices: ["edmonton"] },
       { name: "limit", type: "int", required: false, help: "Max meetings this run (default: all with speeches)." },
+      { name: "workers", type: "int", required: false, help: "Concurrent ISI fetch+derive pipelines (YouTube fallback stays single-file)." },
     ],
   },
   { key: "apply-panel-attribution", category: "hansard",

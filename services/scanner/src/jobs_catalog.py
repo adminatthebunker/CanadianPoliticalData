@@ -1394,6 +1394,8 @@ COMMANDS: dict[str, dict[str, Any]] = {
              "choices": ["edmonton"]},
             {"name": "limit", "type": "int", "required": False,
              "help": "Max meetings this run (default: all with speeches)."},
+            {"name": "workers", "type": "int", "required": False,
+             "help": "Concurrent ISI fetch+derive pipelines (YouTube fallback stays single-file)."},
         ],
     },
     "apply-panel-attribution": {

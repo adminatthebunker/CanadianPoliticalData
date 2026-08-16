@@ -417,13 +417,17 @@ def _ocr_frames_sync(frames_dir: str, times: list, roster: list) -> tuple:
 
 async def cache_edmonton_media(
     db: Database, *, city_slug: str = "edmonton", limit: Optional[int] = None,
+    workers: int = 1,
 ) -> PanelStats:
     """Acquisition-only pass: build derivative caches (audio + frames +
     alignment) for every speeches-bearing meeting, WITHOUT running OCR.
 
     Exists because voice attribution — the proven 16-point lever — needs
-    only the audio derivative; OCR trails later as cheap gated CPU. Serial
-    single-connection politeness (ISI-first ladder); failures memoized."""
+    only the audio derivative; OCR trails later as cheap gated CPU.
+    `workers` parallelises the ISI lane (download of one meeting overlaps
+    ffmpeg derivation of another; the CDN is unthrottled). The YouTube
+    fallback stays single-file regardless — a module lock in media_cache
+    serialises that lane. Failures memoized."""
     stats = PanelStats()
     city = CITIES[city_slug]
     caption_source = f"{city.source_system.split('-')[0]}-youtube-captions"
@@ -448,7 +452,9 @@ async def cache_edmonton_media(
         ensure_derivatives, fetch_backoff_active, record_fetch_outcome,
         find_cache,
     )
-    for r in rows:
+    sem = asyncio.Semaphore(max(1, workers))
+
+    async def _one(r) -> None:
         stats.meetings_seen += 1
         isi = r["isi"]
         if isinstance(isi, str):
@@ -456,28 +462,31 @@ async def cache_edmonton_media(
         video_id = r["video_url"].split("v=")[-1].split("&")[0]
         if find_cache(video_id, (isi or {}).get("etag")):
             stats.timelines_built += 1  # reused as cached counter here
-            continue
+            return
         memo = r["fetch_memo"]
         if isinstance(memo, str):
             memo = orjson.loads(memo)
         if fetch_backoff_active(memo):
             stats.skipped_no_interval += 1
-            continue
-        # One bad meeting (corrupt download, odd codec) must not kill a
-        # multi-day acquisition run — degrade to a memoized failure.
-        try:
-            paths = await ensure_derivatives(r["video_url"], isi=isi, vtt_text=r["vtt"])
-        except Exception as exc:
-            log.warning("derivation crashed for meeting=%s: %s", r["source_meeting_id"], exc)
-            paths = None
+            return
+        async with sem:
+            # One bad meeting (corrupt download, odd codec) must not kill a
+            # multi-day acquisition run — degrade to a memoized failure.
+            try:
+                paths = await ensure_derivatives(r["video_url"], isi=isi, vtt_text=r["vtt"])
+            except Exception as exc:
+                log.warning("derivation crashed for meeting=%s: %s", r["source_meeting_id"], exc)
+                paths = None
         if not paths:
             await record_fetch_outcome(db, r["id"], ok=False, error="media fetch failed")
             stats.download_failures += 1
-            continue
+            return
         await record_fetch_outcome(db, r["id"], ok=True)
         stats.timelines_built += 1
         log.info("cached media for meeting=%s (%s)", r["source_meeting_id"],
                  "isi" if "/isi/" in paths["dir"] else "youtube")
+
+    await asyncio.gather(*(_one(r) for r in rows))
     return stats
 
 

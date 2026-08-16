@@ -5682,8 +5682,11 @@ def cmd_ocr_speaker_timeline(ctx: click.Context, city, limit, force, workers) ->
 @click.option("--city", type=click.Choice(("edmonton",)), default="edmonton")
 @click.option("--limit", type=int, default=None,
               help="Max meetings this run (default: all with speeches).")
+@click.option("--workers", type=int, default=1,
+              help="Concurrent ISI fetch+derive pipelines (YouTube fallback "
+                   "stays single-file regardless).")
 @click.pass_context
-def cmd_cache_edmonton_media(ctx: click.Context, city, limit) -> None:
+def cmd_cache_edmonton_media(ctx: click.Context, city, limit, workers) -> None:
     """Acquisition-only — build media derivative caches, no OCR.
 
     Walks speeches-bearing meetings newest-first and runs the media
@@ -5696,7 +5699,7 @@ def cmd_cache_edmonton_media(ctx: click.Context, city, limit) -> None:
     from .legislative.edmonton_panel_ocr import cache_edmonton_media as _cache
 
     async def _wrap(db: Database) -> None:
-        stats = await _cache(db, city_slug=city, limit=limit)
+        stats = await _cache(db, city_slug=city, limit=limit, workers=workers)
         console.print(
             f"[green]cache-edmonton-media[/green]: meetings={stats.meetings_seen} "
             f"cached={stats.timelines_built} dl_fails={stats.download_failures} "
