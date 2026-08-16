@@ -155,7 +155,7 @@ def measure_lag(audio, turns, clf) -> float:
     return best_lag
 
 
-def process_meeting(video_id: str, clf) -> str | None:
+def process_meeting(video_id: str, clf, cached_only: bool = False) -> str | None:
     """Embed all turns; cache npz. Returns cache path or None."""
     import numpy as np
     import soundfile as sf
@@ -195,6 +195,8 @@ def process_meeting(video_id: str, clf) -> str | None:
                 except (OSError, json.JSONDecodeError):
                     cache_meta = None
                 break
+        if cached_only and not cache_opus:
+            return None
         wav_path = os.path.join(workdir, "a.wav")
         if cache_opus:
             subprocess.run(
@@ -264,6 +266,10 @@ def main():
     ap.add_argument("--cos", type=float, default=0.65)
     ap.add_argument("--margin", type=float, default=0.06)
     ap.add_argument("--device", default="auto", choices=("auto", "cuda", "cpu"))
+    ap.add_argument("--cached-only", action="store_true",
+                    help="skip meetings without a media-cache audio derivative "
+                         "(no YouTube fallback downloads — batch mode while "
+                         "the acquisition job owns the polite YouTube lane)")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
@@ -289,7 +295,7 @@ def main():
     print(f"{len(vids)} meetings")
     caches = {}
     for vid, url in vids:
-        p = process_meeting(vid, clf)
+        p = process_meeting(vid, clf, cached_only=args.cached_only)
         if p:
             caches[vid] = (p, url)
 
