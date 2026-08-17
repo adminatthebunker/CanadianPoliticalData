@@ -135,10 +135,13 @@ async def _derive_from_file(video: str, paths: dict, *, source: str,
 
     frames_dir = paths["frames_dir"]
     os.makedirs(frames_dir, exist_ok=True)
+    # Frames are stored at 480 height: the panel-OCR reader normalizes to
+    # 480 before analysis anyway, and native 720p JPEGs made frames ~92%
+    # of each cache dir (~312MB/meeting → ~140MB).
     res = await asyncio.to_thread(
         subprocess.run,
         ["ffmpeg", "-v", "error", "-skip_frame", "nokey", "-i", video,
-         "-map", "0:v", "-vsync", "0", "-q:v", "4",
+         "-map", "0:v", "-vf", "scale=-2:480", "-vsync", "0", "-q:v", "4",
          os.path.join(frames_dir, "f%06d.jpg"),
          "-map", "0:a", "-ac", "1", "-ar", "16000",
          "-c:a", "libopus", "-b:a", "24k", paths["audio"]],

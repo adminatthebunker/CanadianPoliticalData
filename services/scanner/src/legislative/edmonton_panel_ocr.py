@@ -567,6 +567,15 @@ async def ocr_speaker_timeline(
                 stats.download_failures += 1
                 continue
             await record_fetch_outcome(db, r["id"], ok=True)
+            if not os.path.isdir(paths["frames_dir"]) or not os.listdir(paths["frames_dir"]):
+                # Frames were pruned after a previous successful OCR pass.
+                # A force re-OCR needs a fresh derive: delete the cache
+                # dir (meta included) so the ladder re-fetches from ISI.
+                log.info("frames pruned for meeting=%s — skipping (delete "
+                         "%s to force a re-derive)", r["source_meeting_id"],
+                         paths["dir"])
+                stats.skipped_no_interval += 1
+                continue
             await queue.put((r, paths))
         for _ in range(workers):
             await queue.put(None)
@@ -617,6 +626,12 @@ async def ocr_speaker_timeline(
             log.info("timeline for meeting=%s (%s): %d intervals (%d speaking)",
                      r["source_meeting_id"], timeline["media_source"],
                      len(intervals), speaking)
+            # Frames were only ever OCR input — with the timeline stored
+            # they're dead weight (~140-300MB/meeting; ~92% of the cache
+            # dir). Audio + times + meta stay for voice and audits;
+            # frames re-derive from the ISI CDN if ever needed again.
+            import shutil as _shutil
+            _shutil.rmtree(paths["frames_dir"], ignore_errors=True)
 
     try:
         await asyncio.gather(producer(), *[consumer() for _ in range(workers)])
