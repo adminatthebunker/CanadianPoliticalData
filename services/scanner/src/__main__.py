@@ -5656,8 +5656,12 @@ def cmd_probe_edmonton_media(ctx: click.Context, limit, force) -> None:
               help="Rebuild timelines that already exist.")
 @click.option("--workers", type=int, default=3,
               help="Concurrent OCR worker threads (downloads stay serial).")
+@click.option("--cached-only", is_flag=True, default=False,
+              help="Only OCR meetings whose derivative cache is complete; "
+                   "never fetch media. Safe to run alongside "
+                   "cache-edmonton-media (trail-behind mode).")
 @click.pass_context
-def cmd_ocr_speaker_timeline(ctx: click.Context, city, limit, force, workers) -> None:
+def cmd_ocr_speaker_timeline(ctx: click.Context, city, limit, force, workers, cached_only) -> None:
     """Stage 8 — OCR the clerk's on-screen speaker panel into a timeline.
 
     Downloads the meeting video at 480p, reads the ~5s YouTube keyframes,
@@ -5668,7 +5672,8 @@ def cmd_ocr_speaker_timeline(ctx: click.Context, city, limit, force, workers) ->
     from .legislative.edmonton_panel_ocr import ocr_speaker_timeline as _ocr
 
     async def _wrap(db: Database) -> None:
-        stats = await _ocr(db, city_slug=city, limit=limit, force=force, workers=workers)
+        stats = await _ocr(db, city_slug=city, limit=limit, force=force,
+                           workers=workers, cached_only=cached_only)
         console.print(
             f"[green]ocr-speaker-timeline[/green]: meetings={stats.meetings_seen} "
             f"built={stats.timelines_built} dl_fails={stats.download_failures} "

@@ -900,6 +900,7 @@ const COMMAND_CATALOG = [
       { name: "limit", type: "int", required: false, help: "Max meetings this run (~10-15 CPU-min each, pipelined)." },
       { name: "workers", type: "int", required: false, help: "Concurrent OCR worker threads (default 3)." },
       { name: "force", type: "bool", required: false, default: false, help: "Rebuild timelines that already exist." },
+      { name: "cached_only", type: "bool", required: false, default: false, help: "Only OCR complete caches; never fetch media (safe alongside cache-edmonton-media)." },
     ],
   },
   { key: "cache-edmonton-media", category: "hansard",

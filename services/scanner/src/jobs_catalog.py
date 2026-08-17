@@ -1384,6 +1384,8 @@ COMMANDS: dict[str, dict[str, Any]] = {
              "help": "Concurrent OCR worker threads (default 3)."},
             {"name": "force", "type": "bool", "required": False, "default": False,
              "help": "Rebuild timelines that already exist."},
+            {"name": "cached_only", "type": "bool", "required": False, "default": False,
+             "help": "Only OCR complete caches; never fetch media (safe alongside cache-edmonton-media)."},
         ],
     },
     "cache-edmonton-media": {

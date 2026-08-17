@@ -498,7 +498,7 @@ async def cache_edmonton_media(
 
 async def ocr_speaker_timeline(
     db: Database, *, city_slug: str = "edmonton", limit: Optional[int] = None,
-    force: bool = False, workers: int = 3,
+    force: bool = False, workers: int = 3, cached_only: bool = False,
 ) -> PanelStats:
     """Stage 8 — build the on-screen speaker timeline for meetings that
     have a video and caption speeches but no timeline yet.
@@ -534,7 +534,7 @@ async def ocr_speaker_timeline(
 
     from .media_cache import (
         ensure_derivatives, fetch_backoff_active, record_fetch_outcome,
-        load_meta_from,
+        load_meta_from, find_cache,
     )
     import concurrent.futures
 
@@ -554,19 +554,32 @@ async def ocr_speaker_timeline(
             isi = r["isi"]
             if isinstance(isi, str):
                 isi = orjson.loads(isi)
-            try:
-                paths = await ensure_derivatives(
-                    r["video_url"], isi=isi, vtt_text=r["vtt"],
-                )
-            except Exception as exc:
-                log.warning("derivation crashed for meeting=%s: %s",
-                            r["source_meeting_id"], exc)
-                paths = None
-            if not paths:
-                await record_fetch_outcome(db, r["id"], ok=False, error="media fetch failed")
-                stats.download_failures += 1
-                continue
-            await record_fetch_outcome(db, r["id"], ok=True)
+            if cached_only:
+                # Trail-behind mode: only OCR meetings whose derivative
+                # cache is already complete (meta.json is written last,
+                # so its presence == fully derived). Never derives, so
+                # it can run concurrently with cache-edmonton-media
+                # without dir races; skipped meetings are picked up on
+                # a later pass.
+                video_id = r["video_url"].split("v=")[-1].split("&")[0]
+                paths = find_cache(video_id, (isi or {}).get("etag"))
+                if not paths:
+                    stats.skipped_no_interval += 1
+                    continue
+            else:
+                try:
+                    paths = await ensure_derivatives(
+                        r["video_url"], isi=isi, vtt_text=r["vtt"],
+                    )
+                except Exception as exc:
+                    log.warning("derivation crashed for meeting=%s: %s",
+                                r["source_meeting_id"], exc)
+                    paths = None
+                if not paths:
+                    await record_fetch_outcome(db, r["id"], ok=False, error="media fetch failed")
+                    stats.download_failures += 1
+                    continue
+                await record_fetch_outcome(db, r["id"], ok=True)
             if not os.path.isdir(paths["frames_dir"]) or not os.listdir(paths["frames_dir"]):
                 # Frames were pruned after a previous successful OCR pass.
                 # A force re-OCR needs a fresh derive: delete the cache
