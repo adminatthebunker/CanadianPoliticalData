@@ -11,9 +11,20 @@ import { query } from "../db.js";
 // against the live bills / speeches tables.
 //
 // The frontend renders a table grouped by `bills_status`. No filtering
-// by default — coverage is small (14 rows), so we serve the whole set.
+// by default — coverage is small (16 rows), so we serve the whole set.
 // Optional `?status=live` for future use (e.g. a "what's live" widget
 // on the lander).
+//
+// Municipalities (migration 0060) are rows in the same table, marked
+// `level = 'municipal'` and pointing at their province via
+// `parent_jurisdiction`. They come back in the same flat array,
+// ordered so each city immediately follows its parent province; the
+// frontend indents on `parent_jurisdiction` rather than nesting, which
+// keeps one <table> and one card list.
+//
+// Caveat on `?status=`: filtering can strip a parent while keeping its
+// children, leaving cities visually orphaned. Nothing calls it with a
+// status today; a caller that does should re-add parents client-side.
 
 const listQuery = z.object({
   status: z.enum(["live", "partial", "blocked", "none"]).optional(),
@@ -23,6 +34,9 @@ interface CoverageRow {
   jurisdiction: string;
   legislature_name: string;
   seats: number | null;
+  level: "federal" | "provincial" | "municipal";
+  parent_jurisdiction: string | null;
+  municipality_slug: string | null;
   bills_status: string;
   hansard_status: string;
   votes_status: string;
@@ -50,6 +64,7 @@ export default async function coverageRoutes(app: FastifyInstance) {
 
     const rows = await query<CoverageRow>(
       `SELECT jurisdiction, legislature_name, seats,
+              level, parent_jurisdiction, municipality_slug,
               bills_status, hansard_status, votes_status, committees_status,
               bills_difficulty, hansard_difficulty, votes_difficulty, committees_difficulty,
               blockers, notes, source_urls,
@@ -58,22 +73,34 @@ export default async function coverageRoutes(app: FastifyInstance) {
          FROM jurisdiction_sources
         ${status ? "WHERE bills_status = $1" : ""}
         ORDER BY
-          CASE jurisdiction
-            WHEN 'federal' THEN 0
-            ELSE 1
-          END,
+          -- Sort on the parent's key so a city travels with its province,
+          -- then put the province itself ahead of its cities.
+          CASE WHEN COALESCE(parent_jurisdiction, jurisdiction) = 'federal' THEN 0 ELSE 1 END,
+          COALESCE(parent_jurisdiction, jurisdiction),
+          CASE WHEN parent_jurisdiction IS NULL THEN 0 ELSE 1 END,
           jurisdiction`,
       status ? [status] : []
     );
 
     // Rollup counts — convenient for the page header without a second
-    // round-trip. "live" counts anything with a live bills pipeline.
+    // round-trip. Legislatures are classified by their bills pipeline,
+    // as they always have been.
+    //
+    // Municipalities are classified by Hansard instead. A city council
+    // passes bylaws, not bills, and we ingest none of them — so a
+    // bills-centric rule would file Edmonton under "pending" despite its
+    // 256K transcribed speeches. Hansard is the equivalent primary
+    // pipeline for a council, so it's the honest axis. Legislature
+    // numbers are untouched by this branch.
+    const headline = (r: CoverageRow) =>
+      r.level === "municipal" ? r.hansard_status : r.bills_status;
+
     const summary = {
       total: rows.length,
-      live: rows.filter(r => r.bills_status === "live").length,
-      partial: rows.filter(r => r.bills_status === "partial").length,
-      blocked: rows.filter(r => r.bills_status === "blocked").length,
-      none: rows.filter(r => r.bills_status === "none").length,
+      live: rows.filter(r => headline(r) === "live").length,
+      partial: rows.filter(r => headline(r) === "partial").length,
+      blocked: rows.filter(r => headline(r) === "blocked").length,
+      none: rows.filter(r => headline(r) === "none").length,
     };
 
     return { jurisdictions: rows, summary };

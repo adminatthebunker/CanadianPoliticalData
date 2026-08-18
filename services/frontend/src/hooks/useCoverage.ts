@@ -4,6 +4,12 @@ export interface CoverageJurisdiction {
   jurisdiction: string;
   legislature_name: string;
   seats: number | null;
+  /** Municipalities (migration 0060) arrive in the same flat array as
+   *  legislatures, ordered so each city directly follows its province.
+   *  Indent on `parent_jurisdiction` rather than building a tree. */
+  level: "federal" | "provincial" | "municipal";
+  parent_jurisdiction: string | null;
+  municipality_slug: string | null;
   bills_status: "live" | "partial" | "blocked" | "none";
   hansard_status: "live" | "partial" | "blocked" | "none";
   votes_status: "live" | "partial" | "blocked" | "none";
