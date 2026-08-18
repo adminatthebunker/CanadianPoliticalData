@@ -60,6 +60,11 @@ export interface TimelineSearchResponse {
   capped: boolean | null;
   /** Same nullability as `total` — derived once the count is known. */
   pages: number | null;
+  /** Set by the API when a `postcode` filter was requested but the upstream
+   *  geocoder (Open North) was unreachable. The search ran WITHOUT the postal
+   *  filter, so results are corpus-wide — the UI must say so, or the user
+   *  reads unfiltered results as if they were their reps'. */
+  postcode_filter_unavailable?: boolean;
 }
 
 /** A chunk inside a PoliticianGroup — identical to SpeechSearchItem but
@@ -98,6 +103,11 @@ export interface GroupedSearchResponse {
   per_group_limit: number;
   groups: PoliticianSearchGroup[];
   total_politicians: number;
+  /** Set by the API when a `postcode` filter was requested but the upstream
+   *  geocoder (Open North) was unreachable. The search ran WITHOUT the postal
+   *  filter, so results are corpus-wide — the UI must say so, or the user
+   *  reads unfiltered results as if they were their reps'. */
+  postcode_filter_unavailable?: boolean;
 }
 
 export type SpeechSearchResponse = TimelineSearchResponse | GroupedSearchResponse;

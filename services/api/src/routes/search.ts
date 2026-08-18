@@ -4,6 +4,7 @@ import { config } from "../config.js";
 import { pool, query, queryOne } from "../db.js";
 import { resolvePhotoUrl } from "../lib/photos.js";
 import { politicianIdsForPostcode } from "../lib/postcode-reps.js";
+import { PostcodeUpstreamError } from "../lib/postcode.js";
 import { requireUser, getUser } from "../middleware/user-auth.js";
 import {
   registerSearchTelemetry,
@@ -422,16 +423,62 @@ export async function resolveSearchVector(
  *  happens once per request in the route handler (withPostcodeIds), not in
  *  buildFilterWhere, because the latter is sync and called from several
  *  query builders per request. */
-type FilterWithPostcodeIds = BaseFilter & { postcode_politician_ids?: string[] };
+type FilterWithPostcodeIds = BaseFilter & {
+  postcode_politician_ids?: string[];
+  /** The caller asked for a postal filter we couldn't resolve because the
+   *  upstream geocoder was down. The filter has been dropped; the handler
+   *  reports it so the UI can say the results are unfiltered. */
+  postcode_unavailable?: boolean;
+};
 
 /** Resolve `postcode` → politician IDs and attach them to the filter.
- *  Propagates PostcodeUpstreamError; the app-level setErrorHandler maps it
- *  to stable postcode_* error codes. */
+ *
+ *  A malformed or nonexistent postcode still throws — that's user error and
+ *  deserves a 400. But an upstream OUTAGE degrades instead: the postal filter
+ *  is an optional refinement, and letting a third-party geocoder's downtime
+ *  return 503 for the whole search means "carbon pricing" stops working
+ *  because an unrelated service is unreachable. Open North was down for 10+
+ *  days in Aug 2026 (expired cert + 502 backend), which is what surfaced this.
+ *
+ *  `postcode` must be CLEARED, not merely left unresolved: buildFilterWhere
+ *  pushes `FALSE` for a postcode that resolved to no reps, so leaving it set
+ *  would return zero results rather than unfiltered ones. */
 async function withPostcodeIds<T extends BaseFilter>(
   f: T,
-): Promise<T & { postcode_politician_ids?: string[] }> {
+): Promise<T & { postcode_politician_ids?: string[]; postcode_unavailable?: boolean }> {
   if (!f.postcode) return f;
-  return { ...f, postcode_politician_ids: await politicianIdsForPostcode(f.postcode) };
+  try {
+    return { ...f, postcode_politician_ids: await politicianIdsForPostcode(f.postcode) };
+  } catch (err) {
+    if (err instanceof PostcodeUpstreamError && err.kind === "unavailable") {
+      // Degrading is only honest when something else narrows the search.
+      // For a postcode-ONLY request ("everything my reps said"), dropping the
+      // filter turns it into "everything anyone ever said" — not a broader
+      // answer to the same question but a different question entirely, and a
+      // banner over 7M results is no kind of consolation. Fail loudly there.
+      const withoutPostcode = { ...f, postcode: undefined };
+      const stillSearchable =
+        Boolean(f.q) || Boolean(f.anchor_chunk_id) || hasAnyStructuralFilter(withoutPostcode);
+      if (!stillSearchable) throw err;
+      return { ...withoutPostcode, postcode_unavailable: true };
+    }
+    throw err;
+  }
+}
+
+/** Tag a successful response with the dropped-postal-filter notice.
+ *
+ *  Applied at the route's return site rather than inside each search helper,
+ *  because /speeches has several return paths (timeline, grouped, recent) and
+ *  they'd each need the same edit. The prototype check is load-bearing: some
+ *  of those paths return a FastifyReply (from `reply.badRequest(...)`), and
+ *  spreading one of those produces a broken response object. Only plain
+ *  object literals — the actual result payloads — get the field. */
+function withPostcodeNotice<R>(out: R, f: { postcode_unavailable?: boolean }): R {
+  if (!f.postcode_unavailable) return out;
+  if (out === null || typeof out !== "object") return out;
+  if (Object.getPrototypeOf(out) !== Object.prototype) return out;
+  return { ...(out as object), postcode_filter_unavailable: true } as R;
 }
 
 /** Build the WHERE clause + filter params shared by /speeches and /facets.
@@ -1064,9 +1111,12 @@ export default async function searchRoutes(app: FastifyInstance) {
 
     const input = await withPostcodeIds(parsed.data);
     const { group_by } = input;
+    // Header mirrors the body field for non-browser API consumers and for
+    // monitoring — it survives every return path below.
+    if (input.postcode_unavailable) reply.header("x-postcode-filter", "unavailable");
 
     if (group_by === "politician") {
-      return handleGroupedByPolitician(app, reply, input);
+      return withPostcodeNotice(await handleGroupedByPolitician(app, reply, input), input);
     }
 
     if (
@@ -1089,11 +1139,11 @@ export default async function searchRoutes(app: FastifyInstance) {
     // 0.5 floor — the anchor chunk's neighbourhood beyond ~0.5 cosine
     // becomes weak signal under Qwen3.
     const effectiveMin = input.min_similarity ?? 0.5;
-    return runTimelineSearch(input, {
+    return withPostcodeNotice(await runTimelineSearch(input, {
       minSimilarity: effectiveMin,
       includeCount: input.include_count,
       reply,
-    });
+    }), input);
   });
 
   // Count-only sibling of /speeches. Same filter shape, but runs only
@@ -1118,6 +1168,7 @@ export default async function searchRoutes(app: FastifyInstance) {
     markHasFilters(hasAnyStructuralFilter(parsed.data));
 
     const input = await withPostcodeIds(parsed.data);
+    if (input.postcode_unavailable) reply.header("x-postcode-filter", "unavailable");
     const { whereSql: baseWhereSql, filterParams } = buildFilterWhere(input);
     const effectiveMin = parsed.data.min_similarity ?? 0.5;
 
@@ -1139,13 +1190,13 @@ export default async function searchRoutes(app: FastifyInstance) {
         toPgVector(resolved.vec),
         1 - effectiveMin,
       );
-      return result;
+      return withPostcodeNotice(result, input);
     }
     const row = await queryOne<{ n: number }>(
       `SELECT COUNT(*)::int AS n FROM speech_chunks sc WHERE ${whereSql}`,
       countParams,
     );
-    return { total: row?.n ?? 0, capped: false };
+    return withPostcodeNotice({ total: row?.n ?? 0, capped: false }, input);
   });
 
   // Authenticated deep-dive: every quote one politician has on the query.
@@ -1229,6 +1280,7 @@ export default async function searchRoutes(app: FastifyInstance) {
     markHasFilters(hasAnyStructuralFilter(parsed.data));
 
     const input = await withPostcodeIds(parsed.data);
+    if (input.postcode_unavailable) reply.header("x-postcode-filter", "unavailable");
     const { whereSql: baseWhereSql, filterParams } = buildFilterWhere(input);
     const params: (string | number | string[])[] = [...filterParams];
 
@@ -1407,7 +1459,7 @@ export default async function searchRoutes(app: FastifyInstance) {
       client.release();
     }
 
-    return {
+    return withPostcodeNotice({
       analyzed_count: row?.analyzed_count ?? 0,
       analysis_limit: ANALYSIS_LIMIT,
       chunk_ids: row?.chunk_ids ?? [],
@@ -1423,7 +1475,7 @@ export default async function searchRoutes(app: FastifyInstance) {
       by_language: row?.by_language ?? [],
       keyword_overlap: row?.keyword_overlap ?? null,
       mode: q ? "semantic" : "recent",
-    };
+    }, input);
   });
 
   // Session list for the cascading parliament/session dropdown on the

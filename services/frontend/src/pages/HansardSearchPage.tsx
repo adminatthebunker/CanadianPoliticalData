@@ -656,6 +656,19 @@ export default function HansardSearchPage() {
         )}
       </header>
 
+      {/* The API drops the postal filter rather than 503-ing the whole search
+          when the upstream geocoder is down. Without this notice the user
+          would read corpus-wide results as if they were their reps'. */}
+      {data?.postcode_filter_unavailable && (
+        <p className="hansard-search__banner hansard-search__banner--warn" role="alert">
+          Couldn&rsquo;t look up{" "}
+          {appliedFilter.postcode ? <strong>{appliedFilter.postcode}</strong> : "that postal code"}
+          {" "}&mdash; the postal-code service we rely on is down right now, so these results
+          cover <strong>all of Canada</strong> rather than just your representatives.
+          Everything else about your search still applies.
+        </p>
+      )}
+
       {appliedFilter.anchor_chunk_id && (
         <AnchorChunkBanner
           chunkId={appliedFilter.anchor_chunk_id}

@@ -54,6 +54,15 @@
   line-height: 1.45;
 }
 
+/* Degraded-result warning: the search ran but a filter the user asked for
+   was silently dropped. Amber rather than red — the results are valid, just
+   broader than requested. */
+.hansard-search__banner--warn {
+  border-left-color: #f59e0b;
+  color: var(--ink);
+}
+.hansard-search__banner--warn strong { color: #fbbf24; font-weight: 600; }
+
 /* Search input and Save-search button live on the same row. When the
  * save-search form is expanded its extra width pushes it onto its own
  * flex line automatically, so we don't need to manage "collapsed vs

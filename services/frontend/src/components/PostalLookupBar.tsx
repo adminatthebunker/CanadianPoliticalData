@@ -72,7 +72,18 @@ export function PostalLookupBar({ activePostalCode, autoSubmitCode, onResult }: 
       const ids = res.representatives.map(r => r.politician_id).filter((x): x is string => !!x);
       onResult(res, ids.length ? ids : null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Lookup failed");
+      // fetchJson throws `"<status> <statusText>: <path>"`, which is a
+      // developer string — during the Aug 2026 Open North outage users were
+      // shown a literal "503 Service Unavailable: /lookup/postcode/…".
+      // Translate the one status that has a real-world cause worth naming;
+      // anything else keeps the original text so we don't mask novel errors.
+      const msg = e instanceof Error ? e.message : "";
+      const status = Number(/^(\d{3})\b/.exec(msg)?.[1]);
+      setError(
+        status === 503
+          ? "The postal-code service we depend on is down right now, so we can't look up your representatives. This is a third-party outage, not something you did — searching by topic still works."
+          : msg || "Lookup failed",
+      );
       onResult(null, null);
     } finally {
       setLoading(false);
