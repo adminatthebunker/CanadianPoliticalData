@@ -158,31 +158,46 @@ export default function Lander() {
             <h2 className="lander__form-heading">
               <span aria-hidden="true">🔎</span> Search the record
             </h2>
-            <div className="lander__find-row">
-              <input
-                id="lander-hansard"
-                type="search"
-                placeholder='Try "carbon pricing" or "housing crisis"'
-                value={hansard}
-                onChange={e => setHansard(e.target.value)}
-                aria-label="Search Canadian parliamentary speeches"
-              />
-              <input
-                id="lander-hansard-postal"
-                type="text"
-                className="lander__postal-inline"
-                placeholder="Postal code (K1A 0A6)"
-                title="A postal code on its own finds your reps. Add a search term to see their speeches."
-                value={searchPostal}
-                onChange={e => { setSearchPostal(e.target.value); setSearchPostalError(null); }}
-                aria-label="Postal code. On its own it finds your representatives. With a search term it limits results to their speeches."
-                aria-invalid={searchPostalError ? true : undefined}
-                aria-describedby={searchPostalError ? "lander-hansard-postal-error" : undefined}
-                maxLength={7}
-              />
-              <button type="submit" className="lander__btn lander__btn--primary">
-                {repsOnlyMode ? "Find my reps →" : "Search →"}
-              </button>
+            {/* Two rows, each permanently flex-direction: row. The query gets a
+                row to itself; the optional postal code shares row two with the
+                submit button, which both reads as "secondary refinement" and
+                keeps the action next to the field you just typed. On desktop
+                CSS collapses the two rows side by side into one bar. */}
+            <div className="lander__find-rows">
+              <div className="lander__find-row lander__find-row--query">
+                <input
+                  id="lander-hansard"
+                  type="search"
+                  placeholder='Try "carbon pricing" or "housing crisis"'
+                  value={hansard}
+                  onChange={e => setHansard(e.target.value)}
+                  aria-label="Search Canadian parliamentary speeches"
+                  enterKeyHint="search"
+                />
+              </div>
+              <div className="lander__find-row lander__find-row--postal">
+                <input
+                  id="lander-hansard-postal"
+                  type="text"
+                  className="lander__postal-inline"
+                  placeholder="Postal code"
+                  title="A postal code on its own finds your reps. Add a search term to see their speeches."
+                  value={searchPostal}
+                  onChange={e => { setSearchPostal(e.target.value); setSearchPostalError(null); }}
+                  aria-label="Postal code, for example K1A 0A6. On its own it finds your representatives. With a search term it limits results to their speeches."
+                  aria-invalid={searchPostalError ? true : undefined}
+                  aria-describedby={searchPostalError ? "lander-hansard-postal-error" : undefined}
+                  maxLength={7}
+                  autoComplete="postal-code"
+                  autoCapitalize="characters"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  enterKeyHint="search"
+                />
+                <button type="submit" className="lander__btn lander__btn--primary">
+                  {repsOnlyMode ? "Find my reps →" : "Search →"}
+                </button>
+              </div>
             </div>
             {searchPostalError && (
               <div id="lander-hansard-postal-error" className="lander__find-error" role="alert">
@@ -191,9 +206,16 @@ export default function Lander() {
             )}
             <p className="lander__find-hint" aria-live="polite">{searchHint}</p>
             <p className="lander__find-hint">
-              Search understands meaning, so you can type plain language, full
-              sentences, or questions. Every result is a real speech, quoted
-              word for word from the official record. Nothing is written by AI.{" "}
+              {/* The first sentence is explanatory nice-to-have and gets hidden
+                  on phones to keep the card compact; the provenance claim
+                  ("real speech… nothing written by AI") is load-bearing for how
+                  this project positions itself, so it stays at every width. */}
+              <span className="lander__find-hint-long">
+                Search understands meaning, so you can type plain language, full
+                sentences, or questions.{" "}
+              </span>
+              Every result is a real speech, quoted word for word from the
+              official record. Nothing is written by AI.{" "}
               <a
                 className="lander__find-hint-link"
                 href="https://docs.canadianpoliticaldata.org/searching/how-it-works/"

@@ -1837,16 +1837,43 @@ button.active { background: var(--accent); border-color: var(--accent); }
   font-size: .95rem; font-weight: 600;
   color: var(--ink);
 }
+/* Search bar — written mobile-first on purpose.
+ *
+ * History: this was one flex container holding all three controls, whose
+ * `flex-direction` was flipped to `column` by a `max-width: 760px` query
+ * while a *separate* `max-width: 720px` query set a width-oriented
+ * `flex-basis` on the postcode input. In a column container a basis
+ * resolves against the vertical axis, so `flex: 1 1 8rem` rendered the
+ * postcode field 128px TALL, and the 721-760px band (column direction,
+ * base `0 1 10.5rem` basis) made it 168px tall.
+ *
+ * The structural fix is two containers that are each permanently
+ * `flex-direction: row`, so no basis is ever reinterpreted across an axis
+ * flip. Row one is the query; row two pairs the optional postcode with the
+ * submit button. A single `min-width` query collapses them side by side on
+ * desktop — one threshold rather than two overlapping ones, which is what
+ * let the original band bug exist. */
+.lander__find-rows {
+  display: flex; flex-direction: column; gap: .5rem;
+}
 .lander__find-row {
-  display: flex; gap: .5rem;
+  display: flex; flex-direction: row; gap: .5rem; min-width: 0;
 }
 .lander__find-row input {
   flex: 1 1 auto; min-width: 0;
   padding: .75rem .9rem; border-radius: 8px;
+  min-height: 48px;
   background: rgba(15, 23, 42, 0.8); color: var(--ink);
   border: 1px solid rgba(148, 163, 184, 0.25);
-  font-size: .95rem;
+  /* Must stay >= 16px: below that, iOS Safari zooms the viewport on focus
+     and the user is left scrolled sideways after typing. */
+  font-size: 1rem;
   transition: border-color .15s, background .15s;
+}
+/* iOS Safari gives type="search" native pill chrome that overrides the
+   border-radius above; opt out so both inputs render as the same box. */
+.lander__find-row input[type="search"] {
+  -webkit-appearance: none; appearance: none;
 }
 .lander__find-row input:focus {
   outline: 2px solid var(--accent); outline-offset: 2px;
@@ -1854,13 +1881,31 @@ button.active { background: var(--accent); border-color: var(--accent); }
   background: rgba(15, 23, 42, 0.95);
 }
 .lander__find-row input::placeholder { color: rgba(148, 163, 184, 0.55); }
-.lander__find-row .lander__btn { flex: 0 0 auto; padding: .75rem 1.1rem; }
-/* Optional "my reps" postcode on the search card: compact fixed-width
-   sibling of the flexible query input. */
-.lander__find-row input.lander__postal-inline { flex: 0 1 10.5rem; }
-@media (max-width: 720px) {
-  .lander__find-row { flex-wrap: wrap; }
-  .lander__find-row input.lander__postal-inline { flex: 1 1 8rem; }
+.lander__find-row .lander__btn {
+  flex: 0 0 auto; padding: .75rem 1.1rem;
+  min-height: 48px; white-space: nowrap;
+}
+/* Phone: the optional postcode shares row two with the button, so it takes
+   whatever width the button leaves. `wrap` is a safety valve for very narrow
+   screens — the button label grows to "Find my reps →" once a valid postcode
+   is typed, and on a ~320px phone that plus the input can exceed the row.
+   Wrapping is safe here in a way the old code's `column` flip was not: the
+   direction stays `row`, so the basis below is still a width. */
+.lander__find-row--postal { flex-wrap: wrap; }
+.lander__find-row input.lander__postal-inline { flex: 999 1 7rem; }
+/* Lopsided grow factors so one rule covers both states: sharing a line, the
+   999:1 split gives essentially all slack to the input and leaves the button
+   at its natural width; wrapped onto a line of its own, the button's grow:1
+   has no competition and it fills the row instead of sitting stranded
+   half-width. */
+.lander__find-row--postal .lander__btn { flex: 1 0 auto; }
+
+@media (min-width: 641px) {
+  /* Desktop: collapse the two rows back into a single search bar. */
+  .lander__find-rows { flex-direction: row; align-items: flex-start; }
+  .lander__find-row--query { flex: 1 1 auto; }
+  .lander__find-row--postal { flex: 0 0 auto; }
+  .lander__find-row input.lander__postal-inline { flex: 0 1 10.5rem; }
 }
 .lander__find-error {
   color: #fca5a5; font-size: .82rem;
@@ -1895,9 +1940,6 @@ button.active { background: var(--accent); border-color: var(--accent); }
   background: #e11d48; border-color: #e11d48;
 }
 
-@media (max-width: 720px) {
-  .lander__forms { grid-template-columns: 1fr; gap: .75rem; }
-}
 @media (max-width: 760px) {
   .lander { min-height: calc(100vh - 240px); }
   .lander__inner { padding: 1rem .5rem 1.5rem; margin: 1rem .5rem; max-width: none; }
@@ -1910,9 +1952,16 @@ button.active { background: var(--accent); border-color: var(--accent); }
   .lander__stats-fresh { font-size: .68rem; }
   .lander__form-card { padding: .9rem .85rem 1rem; }
   .lander__form-heading { font-size: .9rem; }
-  .lander__find-row { flex-direction: column; gap: .5rem; }
-  .lander__find-row .lander__btn { width: 100%; padding: .7rem 1rem; }
+  /* No .lander__find-row overrides here on purpose — the search bar is
+     mobile-first above and switches at its own 641px threshold. Adding a
+     second breakpoint over the same element is what caused the 721-760px
+     oversized-postcode band. */
   .lander__find-hint { font-size: .75rem; }
+}
+@media (max-width: 640px) {
+  /* Trim the explanatory lead sentence on phones; the provenance claim and
+     the "How search works" link stay. */
+  .lander__find-hint-long { display: none; }
 }
 @media (max-width: 540px) {
   /* On narrow phones the comma-separated bullet line gets too crowded.
