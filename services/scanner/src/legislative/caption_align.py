@@ -42,8 +42,20 @@ from typing import Optional
 log = logging.getLogger(__name__)
 
 TRACK_HZ = 4                 # 250 ms resolution — plenty for ±1-2 s targets
-SEARCH_WINDOW_S = 600.0      # offsets beyond ±10 min are asset mismatches
+MIN_OVERLAP_S = 600.0        # caption span and audio must share this much
 MIN_SCORE = 3.0              # peak must stand this far above track noise
+MIN_PROMINENCE = 1.25        # peak must beat the best rival peak by this
+GUARD_S = 30.0               # rival peaks are measured outside ±this
+
+# 2026-08-19: the search range used to be a fixed ±600 s ("offsets beyond
+# ±10 min are asset mismatches"). That is false for ISI, whose assets are
+# raw encoder streams that start long before the meeting — 216 of 405
+# Edmonton ISI meetings had a feasible offset OUTSIDE ±600 s, so the true
+# peak was unreachable, argmax returned the best wrong peak, and
+# peak/median still cleared MIN_SCORE. The range is now derived per
+# meeting from the audio duration and caption span, and a prominence gate
+# distinguishes "right peak" from "tallest wrong peak" — which a
+# peak-over-noise ratio structurally cannot do.
 
 _CUE_RE = re.compile(
     r"^(\d+):(\d{2}):(\d{2})\.(\d{3})\s+-->\s+(\d+):(\d{2}):(\d{2})\.(\d{3})",
@@ -55,10 +67,11 @@ _CUE_RE = re.compile(
 class AlignResult:
     offset_s: float
     score: float
+    prominence: float = 0.0
 
     @property
     def trusted(self) -> bool:
-        return self.score >= MIN_SCORE
+        return self.score >= MIN_SCORE and self.prominence >= MIN_PROMINENCE
 
 
 def _highpass(track, window_s: float = 60.0):
@@ -73,6 +86,12 @@ def _highpass(track, window_s: float = 60.0):
     kernel = np.ones(w, dtype=np.float32) / w
     baseline = np.convolve(track, kernel, mode="same")
     return track - baseline
+
+
+def _cue_end_s(m) -> float:
+    """End time of a matched cue, in seconds."""
+    return (int(m.group(5)) * 3600 + int(m.group(6)) * 60
+            + int(m.group(7)) + int(m.group(8)) / 1000)
 
 
 def vtt_speech_track(vtt_text: str, n_samples: int):
@@ -141,13 +160,48 @@ def align_captions_to_audio(vtt_text: str, audio_path: str) -> AlignResult:
     # misreading that region cost a debugging round via the synthetic-
     # shift property test). offset = +k/HZ means captions must be shifted
     # right to match audio, i.e. audio_time = caption_time + offset.
-    window = int(SEARCH_WINDOW_S * TRACK_HZ)
-    lags_w = np.arange(-window, window + 1)
+    # Feasible lag range, derived per meeting rather than hard-coded: the
+    # caption span and the audio must overlap by at least MIN_OVERLAP_S.
+    # An ISI encoder stream can run hours longer than the meeting, so the
+    # true offset is routinely far outside any fixed window.
+    cap_end = max((_cue_end_s(m) for m in _CUE_RE.finditer(vtt_text)),
+                  default=0.0)
+    dur_s = n / TRACK_HZ
+    lo_s = -(cap_end - MIN_OVERLAP_S)
+    hi_s = dur_s - MIN_OVERLAP_S
+    if hi_s <= lo_s:
+        log.warning("caption span (%.0fs) and audio (%.0fs) cannot overlap by "
+                    "%.0fs — alignment refused", cap_end, dur_s, MIN_OVERLAP_S)
+        return AlignResult(0.0, 0.0)
+    # Clamp to lags the correlation can actually represent. Clamping can
+    # invert the range (captions far longer than the audio), which leaves
+    # nothing to search — refuse rather than argmax an empty array.
+    lo = max(int(lo_s * TRACK_HZ), -(n - 1))
+    hi = min(int(hi_s * TRACK_HZ), n - 1)
+    if hi < lo:
+        log.warning("no representable lag range (caption span %.0fs vs audio "
+                    "%.0fs) — alignment refused", cap_end, dur_s)
+        return AlignResult(0.0, 0.0)
+    lags_w = np.arange(lo, hi + 1)
     idx = np.where(lags_w >= 0, lags_w, size + lags_w)
     corr_w = corr[idx]
     peak_i = int(np.argmax(corr_w))
     peak = float(corr_w[peak_i])
     noise = float(np.median(np.abs(corr_w))) + 1e-9
     score = peak / noise
+
+    # Prominence: how far the winner stands above the best RIVAL peak
+    # outside a guard band. peak/noise says "this beats the floor"; it
+    # cannot say "this beats the other candidate", which is exactly how a
+    # confidently-wrong lock used to pass.
+    guard = int(GUARD_S * TRACK_HZ)
+    rivals = np.concatenate([corr_w[:max(0, peak_i - guard)],
+                             corr_w[peak_i + guard + 1:]])
+    if rivals.size:
+        runner_up = float(rivals.max())
+        prominence = peak / runner_up if runner_up > 1e-9 else float("inf")
+    else:
+        prominence = float("inf")   # window too narrow to host a rival
+
     offset = float(lags_w[peak_i]) / TRACK_HZ
-    return AlignResult(offset_s=offset, score=score)
+    return AlignResult(offset_s=offset, score=score, prominence=prominence)
