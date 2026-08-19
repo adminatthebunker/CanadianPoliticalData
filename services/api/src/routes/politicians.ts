@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { query, queryOne } from "../db.js";
 import { resolvePhotoUrl } from "../lib/photos.js";
+import { currentBoundary } from "../lib/boundary-temporal.js";
 
 /** Collapse whitespace and cap at `max` chars on a word boundary, appending ellipsis. */
 function truncateQuote(raw: string, max: number): string {
@@ -475,7 +476,8 @@ export default async function politicianRoutes(app: FastifyInstance) {
       ? await queryOne(
           `SELECT constituency_id, name, level, ST_AsGeoJSON(boundary_simple)::jsonb AS boundary_geojson,
                   ST_X(centroid) AS centroid_lng, ST_Y(centroid) AS centroid_lat
-           FROM constituency_boundaries WHERE constituency_id = $1`,
+           FROM constituency_boundaries
+           WHERE constituency_id = $1 AND ${currentBoundary()}`,
            [(pol as { constituency_id: string }).constituency_id])
       : null;
 

@@ -91,8 +91,10 @@ the more important ones:
 :   Required for AI report generation. Without it, the "Generate
     report" UI is hidden.
 
-`HTTP_PORT` / `HTTPS_PORT`
-:   Override the host ports nginx binds. Defaults: `8088` / `8443`.
+`HTTP_PORT`
+:   Override the host port nginx binds. Default: `8088`, bound to
+    `127.0.0.1` only. There is no HTTPS host port — nginx listens on `:80`
+    inside the container and TLS terminates at Pangolin.
 
 `DOCS_PREVIEW_PORT`
 :   Override the host port the docs preview binds. Default: `8000`.
@@ -339,10 +341,10 @@ The `-v` flag removes them.
     [`nvidia-container-toolkit`](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
     and restart Docker.
 
-??? note "Port 8088 / 8443 already in use"
+??? note "Port 8088 already in use"
 
-    Set `HTTP_PORT` and `HTTPS_PORT` in your `.env` to free ports
-    before bringing the stack up.
+    Set `HTTP_PORT` in your `.env` to a free port before bringing the
+    stack up.
 
 ??? note "Magic-link emails aren't arriving"
 

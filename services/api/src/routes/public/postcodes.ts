@@ -8,9 +8,14 @@ import {
 import { query } from "../../db.js";
 import { requireApiKey } from "../../middleware/api-key-auth.js";
 import { publicRateLimitConfig } from "../../middleware/api-rate-limit.js";
-import { resolvePostcode, PostcodeUpstreamError } from "../../lib/postcode.js";
+import {
+  resolvePostcode,
+  districtsForFsa,
+  PostcodeUpstreamError,
+} from "../../lib/postcode.js";
 import { lookupBoundariesAtPoint } from "./boundaries.js";
 import { resolvePhotoUrl } from "../../lib/photos.js";
+import { currentBoundary } from "../../lib/boundary-temporal.js";
 
 /**
  * Public postcode endpoint (/api/public/v1/postcodes/:postcode).
@@ -54,20 +59,26 @@ export default async function publicV1PostcodesRoutes(app: FastifyInstance) {
           "centroid so the `boundaries.*` slots are byte-identical to " +
           "what /boundaries/lookup returns. Accepts either a 6-char " +
           "postcode (K1A0A6, K1A 0A6, K1A-0A6) or a 3-char FSA (K1A). " +
-          "For FSAs the centroid is a representative point inside the " +
-          "FSA polygon and the boundary lookup uses that point — good " +
-          "enough for 'what's the dominant riding for this FSA' but " +
-          "not authoritative for FSAs that straddle riding boundaries. " +
           "Response: `{ postcode, is_fsa, latlng: { lat, lng }, city, " +
-          "province, source: 'cache'|'cache_stale'|'live', fetched_at, " +
+          "province, source: 'nar'|'cache'|'fsa_derived', fetched_at, " +
+          "address_points, approximate, " +
           "boundaries: { federal: {...}|null, provincial: {...}|null, " +
-          "municipal: {...}|null } }`. The `source` field indicates " +
-          "whether this came from the local cache (fresh within 30 " +
-          "days), a stale cache served because Open North was " +
-          "unreachable, or a live Open North fetch. Returns 400 on " +
-          "malformed input, 404 when Open North doesn't know the " +
-          "postcode (the cache row is evicted on confirmed 404), 503 " +
-          "only when Open North is unreachable AND no cache row exists. " +
+          "municipal: {...}|null } }`. Resolution is fully local as of " +
+          "2026-08-18 — no upstream call. `source` is `nar` for an exact " +
+          "match in the Statistics Canada National Address Register " +
+          "(855,905 codes), `cache` for a code the register cannot supply " +
+          "(PO-box-only, rural-route-only and government codes such as " +
+          "K1A 0A6), and `fsa_derived` when the answer was averaged from " +
+          "other codes in the same forward sortation area. " +
+          "⚠ `approximate: true` accompanies every `fsa_derived` answer " +
+          "and must not be presented as an exact location: 33-71% of FSAs " +
+          "cross a federal riding boundary, and FSA-level resolution " +
+          "picks the correct federal district only ~68% of the time for " +
+          "rural codes (against 98% for an exact match). `address_points` " +
+          "is how many civic addresses were averaged; 1 is positionally " +
+          "weaker than a high count. Returns 400 on malformed input and " +
+          "404 when neither the register, the override table, nor the " +
+          "FSA has any location on file. No 503 path remains. " +
           "Cache-Control: public, max-age=86400.",
         params: postcodeParam,
       },
@@ -92,8 +103,19 @@ export default async function publicV1PostcodesRoutes(app: FastifyInstance) {
         resolved.latlng.lat,
       );
 
+      // ⚠ When the point is FSA-derived rather than an exact code, `boundaries`
+      // is only the district containing a *representative* point, and research
+      // measured that 33-71% of FSAs cross a federal riding boundary. Returning
+      // that single district would present a coin flip as an answer. So for
+      // approximate resolutions we also return every district the FSA touches,
+      // computed by point-in-polygon from each known member code.
+      const spans = resolved.approximate
+        ? await districtsForFsa(resolved.postcode.slice(0, 3))
+        : null;
+
       reply.header("Cache-Control", "public, max-age=86400");
       reply.header("X-Cache-Source", resolved.source);
+      if (resolved.approximate) reply.header("X-Postcode-Approximate", "true");
       return {
         postcode: resolved.postcode,
         is_fsa: resolved.is_fsa,
@@ -102,7 +124,12 @@ export default async function publicV1PostcodesRoutes(app: FastifyInstance) {
         province: resolved.province,
         source: resolved.source,
         fetched_at: resolved.fetched_at,
+        address_points: resolved.address_points,
+        approximate: resolved.approximate,
         boundaries,
+        // Null for exact matches. For approximate ones, EVERY district the FSA
+        // overlaps — `boundaries` above is only the most likely of these.
+        spans_districts: spans,
       };
     },
   );
@@ -215,7 +242,7 @@ export default async function publicV1PostcodesRoutes(app: FastifyInstance) {
            JOIN politicians p
              ON p.constituency_id = b.constituency_id
             AND p.level = b.level
-          WHERE b.effective_to IS NULL
+          WHERE ${currentBoundary("b")}
             AND ST_Contains(b.boundary,
                             ST_SetSRID(ST_MakePoint($1, $2), 4326))
             AND p.is_active = true

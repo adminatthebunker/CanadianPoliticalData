@@ -3885,6 +3885,255 @@ def cmd_check_bc_committees_freshness(
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 
 
+def _print_problems(problems: list, show: int = 10) -> None:
+    """Print boundary-loader problems, always disclosing the total.
+
+    ⚠ The previous form was `for p in problems[:10]` with no count, so a run
+    with 400 rejections looked identical to one with 10. A truncation that hides
+    how much it truncated is worse than no output.
+    """
+    if not problems:
+        return
+    console.print(f"[yellow]problems[/yellow]: {len(problems)}")
+    for p in problems[:show]:
+        console.print(f"[dim]  - {p}[/dim]")
+    if len(problems) > show:
+        console.print(f"[dim]  … and {len(problems) - show} more[/dim]")
+
+
+@cli.command("load-boundaries")
+@click.option("--jurisdiction", type=str, default=None,
+              help="Registry key from boundary_loader.SPECS (e.g. 'ontario'). "
+                   "Omit only when --spec-file is given.")
+@click.option("--spec-file", "spec_file", type=str, default=None,
+              help="Path to a standalone Python file defining SPEC = "
+                   "BoundarySpec(...). Used instead of the SPECS registry so a "
+                   "spec can be drafted and --compare'd without editing the "
+                   "shared registry — which is what lets several jurisdictions "
+                   "be worked on at once without stepping on each other.")
+@click.option("--data-root", type=str, default="/data/boundaries",
+              help="Root of the staged boundary tree inside the container.")
+@click.option("--dry-run", is_flag=True,
+              help="Parse, reconcile and report without writing.")
+@click.option("--compare", is_flag=True,
+              help="Ruling A7 vintage check: measure the staged authoritative "
+                   "geometry against what we already hold, without writing. A "
+                   "matching district count proves nothing — only overlap does.")
+@click.pass_context
+def cmd_load_boundaries(
+    ctx: click.Context, jurisdiction: Optional[str], spec_file: Optional[str],
+    data_root: str, dry_run: bool, compare: bool,
+) -> None:
+    """Load authoritative electoral boundaries for one jurisdiction.
+
+    Boundary-first: unlike the Open North path this does not require a sitting
+    representative to exist before a district gets a polygon. Reprojects via
+    PostGIS from the spec's DECLARED source EPSG — never ST_SetSRID.
+
+    A rejected geometry aborts the run rather than logging and continuing.
+    """
+    from .legislative.boundary_loader import (
+        SPECS, compare_boundaries, load_boundaries,
+    )
+
+    if spec_file:
+        # A draft spec living outside the registry. The file is executed with
+        # boundary_loader's namespace pre-populated, so it can name BoundarySpec
+        # and date() without importing them.
+        import runpy
+        from datetime import date as _date
+        from .legislative import boundary_loader as _bl
+
+        ns = dict(vars(_bl))
+        ns["date"] = _date
+        try:
+            result = runpy.run_path(spec_file, init_globals=ns)
+        except FileNotFoundError:
+            raise SystemExit(f"--spec-file: no such file {spec_file!r}")
+        spec = result.get("SPEC")
+        if spec is None or not isinstance(spec, _bl.BoundarySpec):
+            raise SystemExit(
+                f"--spec-file {spec_file!r} must define SPEC = BoundarySpec(...)"
+            )
+        if jurisdiction and jurisdiction != spec.jurisdiction:
+            raise SystemExit(
+                f"--jurisdiction {jurisdiction!r} contradicts the spec file's "
+                f"{spec.jurisdiction!r}"
+            )
+        console.print(
+            f"[dim]using draft spec from {spec_file} "
+            f"(jurisdiction={spec.jurisdiction})[/dim]"
+        )
+    else:
+        if not jurisdiction:
+            raise SystemExit("give either --jurisdiction or --spec-file")
+        spec = SPECS.get(jurisdiction)
+        if spec is None:
+            raise SystemExit(
+                f"unknown jurisdiction {jurisdiction!r}. "
+                f"Known: {', '.join(sorted(SPECS))}"
+            )
+
+    async def _wrap(db: Database) -> None:
+        if compare:
+            c = await compare_boundaries(db, spec, data_root=data_root)
+            console.print(
+                f"[green]load-boundaries --compare[/green]: "
+                f"jurisdiction={c.jurisdiction} authoritative={c.authoritative} "
+                f"held={c.held} matched={c.matched} "
+                f"mean_overlap={c.mean_overlap:.4%} min={c.min_overlap:.4%} "
+                f"below_95%={c.below_95}"
+            )
+            if c.only_authoritative:
+                console.print(
+                    f"[yellow]absent from our table[/yellow] "
+                    f"({len(c.only_authoritative)}): "
+                    f"{', '.join(c.only_authoritative[:8])}"
+                )
+            if c.only_held:
+                console.print(
+                    f"[yellow]we hold, authority does not[/yellow] "
+                    f"({len(c.only_held)}): {', '.join(c.only_held[:8])}"
+                )
+            if c.worst:
+                console.print("[dim]lowest-overlap districts:[/dim] " + ", ".join(
+                    f"{n} {v:.2%}" for n, v in c.worst))
+            # The grouping that produced `authoritative` can reject or filter
+            # features. Reporting it here is what makes --compare a real
+            # rehearsal of the load rather than a geometry-only check.
+            if c.rejected or c.filtered_out:
+                console.print(
+                    f"[yellow]grouping[/yellow]: rejected={c.rejected} "
+                    f"filtered_out={c.filtered_out}"
+                )
+            _print_problems(c.problems)
+            return
+        st = await load_boundaries(db, spec, data_root=data_root, dry_run=dry_run)
+        console.print(
+            f"[green]load-boundaries[/green]: jurisdiction={st.jurisdiction} "
+            f"features={st.features_read} districts={st.distinct_ids} "
+            f"inserted={st.inserted} updated={st.updated} rejected={st.rejected} "
+            f"filtered_out={st.filtered_out} parts_merged={st.parts_merged} "
+            + (f"name_fixups={st.name_fixups_applied} "
+               if spec.name_fixups else "") +
+            f"slug_matches_existing={st.slug_matches_existing} slug_new={st.slug_new} "
+            # ⚠ Ontario declares src_proj4 and no EPSG, so printing src_epsg
+            # alone rendered `epsg=None` with no mention of the CRS actually used.
+            f"crs={spec.src_epsg if spec.src_epsg else 'proj4'} "
+            f"version={spec.boundaries_version}"
+            + (" [yellow](dry run)[/yellow]" if dry_run else "")
+        )
+        if st.features_read != st.distinct_ids:
+            console.print(
+                f"[yellow]note[/yellow]: {st.features_read} features collapsed to "
+                f"{st.distinct_ids} districts (multi-part districts merged)."
+            )
+        _print_problems(st.problems)
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
+@cli.command("ingest-nar-postcodes")
+@click.option("--zip-path", "zip_path", type=str,
+              default="/data/boundaries/_geocoding/nar/202606.zip",
+              help="Path to the staged StatCan NAR archive. The compose file "
+                   "mounts ./data at /data (read-only), so the repo path "
+                   "data/boundaries/... is /data/boundaries/... in-container.")
+@click.option("--provinces", "provinces_csv", type=str, default=None,
+              help="Comma-separated StatCan PR codes (e.g. '35,24'). Default: all 13.")
+@click.option("--vintage", type=str, default=None,
+              help="NAR release tag recorded on each row. Default: the zip's stem.")
+@click.option("--dry-run", is_flag=True,
+              help="Parse and report counts without writing.")
+@click.pass_context
+def cmd_ingest_nar_postcodes(
+    ctx: click.Context, zip_path: str, provinces_csv: Optional[str],
+    vintage: Optional[str], dry_run: bool,
+) -> None:
+    """Build postcode_centroids from the StatCan National Address Register.
+
+    Replaces the Open North geocode, which has been down since 2026-08-07.
+    Idempotent per province (upsert on postcode), so a single province can be
+    refreshed without disturbing the rest.
+
+    ~5 min and ~1 GB RSS for all 13 provinces; Ontario alone is ~40 s.
+    """
+    from .legislative.nar_postcodes import ingest_nar_postcodes
+
+    provinces = (
+        [s.strip() for s in provinces_csv.split(",")] if provinces_csv else None
+    )
+
+    async def _wrap(db: Database) -> None:
+        st = await ingest_nar_postcodes(
+            db, zip_path=zip_path, provinces=provinces,
+            vintage=vintage, dry_run=dry_run,
+        )
+        miss_pct = (100.0 * st.no_geometry / st.address_rows) if st.address_rows else 0.0
+        console.print(
+            f"[green]ingest-nar-postcodes[/green]: "
+            f"provinces={st.provinces} postcodes={st.postcodes:,} "
+            f"written={st.written:,} rural={st.rural_postcodes:,} "
+            f"address_rows={st.address_rows:,} no_geometry={st.no_geometry:,} "
+            f"({miss_pct:.2f}%) reppoint_fallbacks={st.reppoint_fallbacks:,}"
+            + (" [yellow](dry run)[/yellow]" if dry_run else "")
+        )
+        if st.by_province:
+            console.print(f"[dim]postcodes by province:[/dim] {st.by_province}")
+        # The reppoint fallback is load-bearing: without it Ontario loses 12.9%
+        # of address rows. A sudden drop to zero means the column moved.
+        if st.address_rows and miss_pct > 5.0:
+            console.print(
+                f"[yellow]warning[/yellow]: {miss_pct:.1f}% of address rows had no "
+                f"resolvable geometry (expected <1%). Check BG_/BF_REPPOINT_ columns."
+            )
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
+@cli.command("check-boundary-coverage")
+@click.option("--no-area", is_flag=True,
+              help="Skip the area-drift half. Use immediately after a "
+                   "deliberate re-load, before BASELINES is updated.")
+@click.pass_context
+def cmd_check_boundary_coverage(ctx: click.Context, no_area: bool) -> None:
+    """Sentinel: does every jurisdiction's electoral geography still add up?
+
+    Checks district count against the agency seat count, roster size against
+    seats, unattached members, orphaned constituency_ids, and area drift.
+
+    ⚠ A shortfall of members is a VACANCY and is reported, not failed — Ontario
+    legitimately sits 2 short today. Only an EXCESS is a breach, because that
+    means duplicate rows. Exits non-zero on any breach so the scheduled run
+    surfaces as a FAILED job in the admin panel.
+    """
+    from .legislative.boundary_coverage import check_boundary_coverage
+
+    async def _wrap(db: Database) -> None:
+        rows = await check_boundary_coverage(db, check_area=not no_area)
+        breaches = [r for r in rows if r.breached]
+        for r in rows:
+            marker = "[red]BREACH[/red]" if r.breached else "[green]ok[/green]"
+            vac = f" vacancies={r.vacancies}" if r.vacancies else ""
+            console.print(
+                f"{marker} {r.level}/{r.jurisdiction}: districts={r.districts} "
+                f"seats={r.seats} members={r.actives} attached={r.attached}{vac}"
+            )
+            for b in r.breaches:
+                console.print(f"[red]    - {b}[/red]")
+        total_vac = sum(r.vacancies for r in rows)
+        console.print(
+            f"check-boundary-coverage: jurisdictions={len(rows)} "
+            f"breaches={len(breaches)} vacancies={total_vac}"
+        )
+        if breaches:
+            raise SystemExit(
+                f"check-boundary-coverage: {len(breaches)} jurisdiction(s) "
+                f"breached: {[r.level + '/' + r.jurisdiction for r in breaches]}. "
+                f"A district count that matches its seat count proves nothing on "
+                f"its own — read the per-jurisdiction lines above."
+            )
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
 @cli.command("check-ingest-freshness")
 @click.option("--threshold-days", type=int, default=None,
               help="Default breach threshold in days for jurisdictions "

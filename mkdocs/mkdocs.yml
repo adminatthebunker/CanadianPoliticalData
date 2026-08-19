@@ -178,6 +178,7 @@ nav:
       - Contact info: developers/contact.md
       - Politician socials: developers/socials.md
       - Constituency boundaries: developers/boundaries.md
+      - Boundary licences: developers/licences.md
       - Postcodes: developers/postcodes.md
       - Errors: developers/errors.md
   - Contributors:

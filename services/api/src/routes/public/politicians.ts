@@ -9,6 +9,7 @@ import { query, queryOne } from "../../db.js";
 import { requireApiKey } from "../../middleware/api-key-auth.js";
 import { publicRateLimitConfig } from "../../middleware/api-rate-limit.js";
 import { resolvePhotoUrl } from "../../lib/photos.js";
+import { currentBoundary } from "../../lib/boundary-temporal.js";
 
 /**
  * Public politicians endpoints (/api/public/v1/politicians/*).
@@ -472,7 +473,7 @@ export default async function publicV1PoliticiansRoutes(app: FastifyInstance) {
                     ST_X(centroid) AS centroid_lng,
                     ST_Y(centroid) AS centroid_lat
                FROM constituency_boundaries
-              WHERE constituency_id = $1`,
+              WHERE constituency_id = $1 AND ${currentBoundary()}`,
             [detail.pol.constituency_id],
           )
         : null;

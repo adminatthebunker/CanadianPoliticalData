@@ -182,17 +182,28 @@ async def _postcode_politician_ids(db: Database, postcode: str) -> list[str] | N
     rows = await db.fetch(
         """
         WITH hits AS (
-          SELECT constituency_id, name, level
+          SELECT constituency_id, name, level, province_territory
             FROM constituency_boundaries
-           WHERE effective_to IS NULL
+           -- Generation in force today. Mirrors currentBoundary() in
+           -- services/api/src/lib/boundary-temporal.ts. NOT `effective_to IS
+           -- NULL`: once an outgoing generation is end-dated, a future-dated
+           -- incoming one becomes the only NULL and would go live early.
+           WHERE effective_from <= CURRENT_DATE
+             AND (effective_to IS NULL OR effective_to >= CURRENT_DATE)
              AND ST_Contains(boundary, ST_SetSRID(ST_MakePoint($1, $2), 4326))
         )
         SELECT DISTINCT p.id
           FROM politicians p
           JOIN hits h
             ON p.constituency_id = h.constituency_id
+            -- Name fallback, scoped. Excludes municipal ("Ward 1" names 48
+            -- polygons across 48 sets; 34 municipal names collide) and requires
+            -- the province to agree (provincial "Richmond" exists in both BC
+            -- and NS). Verified lossless: 30 matches before and after.
             OR (p.constituency_id IS NULL
+                AND h.level <> 'municipal'
                 AND p.level = h.level
+                AND p.province_territory IS NOT DISTINCT FROM h.province_territory
                 AND lower(p.constituency_name) = lower(h.name))
          WHERE p.is_active = true
         """,

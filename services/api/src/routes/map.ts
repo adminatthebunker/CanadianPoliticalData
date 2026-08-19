@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { query } from "../db.js";
 import { resolvePhotoUrl } from "../lib/photos.js";
+import { currentBoundary } from "../lib/boundary-temporal.js";
 import type { MapRow } from "../types.js";
 
 const geoQuery = z.object({
@@ -216,7 +217,9 @@ export default async function mapRoutes(app: FastifyInstance) {
                   cb.constituency_id, p.constituency_name,
                   ST_AsGeoJSON(cb.boundary_simple)::jsonb AS boundary_geojson
            FROM politicians p
-           JOIN constituency_boundaries cb ON cb.constituency_id = p.constituency_id
+           JOIN constituency_boundaries cb
+             ON cb.constituency_id = p.constituency_id
+            AND ${currentBoundary("cb")}
            WHERE ${noDataWhere.join(" AND ")}`,
           ndParams
         );
@@ -317,7 +320,9 @@ export default async function mapRoutes(app: FastifyInstance) {
     // Alberta boundary as context — union all AB provincial boundaries
     const abRow = await query<{ geojson: unknown }>(
       `SELECT ST_AsGeoJSON(ST_Union(boundary_simple))::jsonb AS geojson
-       FROM constituency_boundaries WHERE province_territory = 'AB' AND level = 'provincial'`
+       FROM constituency_boundaries
+       WHERE province_territory = 'AB' AND level = 'provincial'
+         AND ${currentBoundary()}`
     );
     if (abRow[0]?.geojson) {
       features.unshift({

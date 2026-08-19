@@ -9,6 +9,8 @@ import { query, queryOne } from "../../db.js";
 import { requireApiKey } from "../../middleware/api-key-auth.js";
 import { publicRateLimitConfig } from "../../middleware/api-rate-limit.js";
 import { resolvePostcode, PostcodeUpstreamError } from "../../lib/postcode.js";
+import { currentBoundary } from "../../lib/boundary-temporal.js";
+import { boundaryLicence } from "../../lib/boundary-licence.js";
 
 /**
  * Public constituency-boundaries endpoints
@@ -25,9 +27,12 @@ import { resolvePostcode, PostcodeUpstreamError } from "../../lib/postcode.js";
  * /:source_set/:slug so Fastify's literal-path-first matching keeps
  * /lookup from being captured by the wildcard.
  *
- * "Current" boundary filter: effective_to IS NULL. This matches the
- * partial unique index idx_constituency_boundaries_current and the
- * temporal-versioning model from migration 0021. boundaries_version
+ * "Current" boundary filter: the date predicate from `lib/boundary-temporal.ts`
+ * (`effective_from <= CURRENT_DATE AND (effective_to IS NULL OR effective_to >=
+ * CURRENT_DATE)`), which is the contract migration 0021 documents. It replaced a
+ * bare `effective_to IS NULL` on 2026-08-18: that older form silently activates a
+ * future-dated incoming generation the moment the outgoing one is end-dated,
+ * because the incoming rows are then the only ones with a NULL effective_to. boundaries_version
  * is exposed in responses as a string but isn't currently filterable
  * — all live rows share version='current'.
  */
@@ -136,9 +141,12 @@ export async function lookupBoundariesAtPoint(
             effective_from, effective_to, boundaries_version,
             ST_AsGeoJSON(boundary_simple)::jsonb AS boundary_geojson
        FROM constituency_boundaries
-      WHERE effective_to IS NULL
+      WHERE ${currentBoundary()}
         AND level = ANY($1::text[])
-        AND ST_Contains(boundary, ST_SetSRID(ST_MakePoint($2, $3), 4326))`,
+        AND ST_Contains(boundary, ST_SetSRID(ST_MakePoint($2, $3), 4326))
+      -- Smallest-first, so the per-level pick below is the most specific
+      -- polygon rather than whichever row the planner returned last.
+      ORDER BY level, area_sqkm ASC NULLS LAST`,
     [lvls as string[], lng, lat],
   );
   const out: {
@@ -146,9 +154,28 @@ export async function lookupBoundariesAtPoint(
     provincial: ReturnType<typeof shapeBoundaryWithGeoJson> | null;
     municipal: ReturnType<typeof shapeBoundaryWithGeoJson> | null;
   } = { federal: null, provincial: null, municipal: null };
+  // Keep the FIRST row per level — i.e. the smallest containing polygon.
+  //
+  // This previously overwrote, so the survivor was whichever row came last and
+  // the result was non-deterministic. It matters most at the municipal level,
+  // where a single point legitimately sits inside several nested polygons:
+  // 62 of 72 ON/QC ward sets file a whole-municipality `census-subdivisions`
+  // row alongside their wards, and four upper-tier `census-divisions` regions
+  // sit above those again. Measured worst cases — a downtown Halifax address
+  // is inside both its 8.5 km² district and the 5,957 km² Regional
+  // Municipality (703×); Wood Buffalo is 597×; a Mississauga address returns
+  // four polygons including the 1,256 km² Region of Peel, which elects nobody
+  // to a ward. Smallest-first returns the ward.
+  //
+  // ⚠ The larger polygons are NOT junk and must not be filtered out: all 115
+  // whole-municipality rows carry sitting officials (326 nationally), and in
+  // BC — where at-large is the statutory default and no ward polygons exist —
+  // they are the only geometry attaching 104 officials to anything. They are
+  // the right answer when nothing smaller contains the point, which this
+  // ordering preserves for free.
   for (const row of rows) {
     if (row.level === "federal" || row.level === "provincial" || row.level === "municipal") {
-      out[row.level] = shapeBoundaryWithGeoJson(row);
+      if (out[row.level] === null) out[row.level] = shapeBoundaryWithGeoJson(row);
     }
   }
   return out;
@@ -189,7 +216,7 @@ export default async function publicV1BoundariesRoutes(app: FastifyInstance) {
       const limit = req.query.limit ?? 50;
       const offset = (page - 1) * limit;
 
-      const where: string[] = ["effective_to IS NULL"];
+      const where: string[] = [currentBoundary()];
       const params: (string | number)[] = [];
       if (level) {
         params.push(level);
@@ -366,7 +393,7 @@ export default async function publicV1BoundariesRoutes(app: FastifyInstance) {
                 ST_AsGeoJSON(boundary_simple, $2)::jsonb AS boundary_geojson
            FROM constituency_boundaries
           WHERE constituency_id = $1
-            AND effective_to IS NULL`,
+            AND ${currentBoundary()}`,
         [constituencyId, precision],
       );
 
@@ -393,6 +420,10 @@ function shapeBoundary(row: BoundaryMetaRow) {
     effective_from: row.effective_from,
     effective_to: row.effective_to,
     boundaries_version: row.boundaries_version,
+    // One line covers the ENTIRE public boundary surface: this is the only
+    // shaping function, and shapeBoundaryWithGeoJson spreads it — so list,
+    // lookup and detail all inherit the licence without further plumbing.
+    licence: boundaryLicence(row.source_set),
   };
 }
 

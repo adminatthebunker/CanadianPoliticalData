@@ -213,6 +213,16 @@ COMMANDS: dict[str, dict[str, Any]] = {
              "help": "Send email even when no committees are stale (audit cadence)."},
         ],
     },
+    "check-boundary-coverage": {
+        "description": "Sentinel: does every jurisdiction's electoral geography still add up? Compares current district count against the agency seat count, roster size against seats, unattached sitting members, orphaned constituency_ids, and total-area drift against a recorded baseline. Exits non-zero (job shows FAILED) on any breach. NOTE a member SHORTFALL is a vacancy and is reported, not failed (Ontario legitimately sits 2 short); only an EXCESS is a breach, because that means duplicate roster rows — the defect that had BC serving two MLAs for five districts. Added after the 2026-08-19 boundary programme, in which four jurisdictions had a perfect district count over wrong or incomplete geometry.",
+        "cli": "check-boundary-coverage",
+        "category": "maintenance",
+        "args": [
+            {"name": "no_area", "type": "bool", "required": False,
+             "help": "Skip the area-drift half. Use right after a deliberate "
+                     "re-load, before BASELINES is updated."},
+        ],
+    },
     "check-ingest-freshness": {
         "description": "Sentinel: per jurisdiction, compare MAX(bill_events.event_date) against MAX(speeches.spoken_at). A recess quiets both surfaces; a broken Hansard pipeline shows bills advancing with no speeches behind them. Exits non-zero (job shows FAILED) when any jurisdiction's lag exceeds its threshold (default 30 days; publication-lag overrides for NB/NU live in legislative/freshness.py). Added after the 2026-08-02 audit found QC/NB/NU holes hidden behind 'succeeded, sittings=0' daily runs.",
         "cli": "check-ingest-freshness",

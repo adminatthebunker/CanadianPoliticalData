@@ -450,6 +450,16 @@ INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) V
  'check-ingest-freshness', '{}'::jsonb,
  '37 13 * * 1', true, 'daily-ingest-rollout'),
 
+-- Boundary coverage sentinel. Weekly Monday, 20 minutes after the ingest
+-- freshness check so the two maintenance sentinels do not overlap.
+-- ⚠ Catches what a district count alone cannot: duplicate roster rows, members
+-- with no district, orphaned constituency_ids, and geometry drift. Four
+-- jurisdictions in the 2026 boundary programme had a PERFECT count over wrong
+-- data. A member shortfall is reported as a vacancy, never failed.
+('Boundary coverage sentinel (weekly)',
+ 'check-boundary-coverage', '{}'::jsonb,
+ '57 13 * * 1', true, 'daily-ingest-rollout'),
+
 -- Roster enrichment + slug-stamping additions (MEDIUM-bucket triage,
 -- same audit cycle, later in the day). Slotted into the Sunday
 -- weekly-enrichment block right after the historical-roster

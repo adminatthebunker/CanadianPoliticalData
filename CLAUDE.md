@@ -18,7 +18,7 @@ Project goal: **the definitive source of Canadian political data** — who repre
 2. `docs/timeline.md` — current direction in horizons (Now / Next / Later) + the four standing priorities, in order
 3. `docs/gotchas.md` — codebase-wide guardrails distilled from past incidents. Every "do not X" rule lives here with rule + why + how to apply. Read before any non-trivial change.
 4. `docs/plans/semantic-layer.md` — schema, vector store, embedding plan, phased rollout
-5. `docs/research/` — one self-contained research dossier per jurisdiction (federal + 13 provinces/territories), plus `overview.md` for cross-cutting schema log, probe hierarchy, research-handoff protocol, and known blockers
+5. `docs/research/` — one self-contained research dossier per jurisdiction (federal + 13 provinces/territories), plus `overview.md` for cross-cutting schema log, probe hierarchy, research-handoff protocol, and known blockers. Two sub-directories carry their own `overview.md` and their own conventions: `cities/` (municipal transcript sources, tier-1 ten) and `boundaries/` (electoral-boundary + roster sources per jurisdiction, the `constituency_id` re-key strategy, licence/coverage matrices, and open-licence postal geocoding)
 6. `docs/architecture.md` — service-by-service runtime architecture
 7. `docs/scanner.md`, `docs/api.md`, `docs/operations.md` — per-component references
 

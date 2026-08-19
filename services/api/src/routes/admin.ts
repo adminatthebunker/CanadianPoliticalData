@@ -132,6 +132,12 @@ const COMMAND_CATALOG = [
       { name: "always_email", type: "bool", required: false, help: "Send email even when no committees are stale (audit cadence)." },
     ],
   },
+  { key: "check-boundary-coverage", category: "maintenance",
+    description: "Sentinel: does every jurisdiction's electoral geography still add up? Compares current district count against the agency seat count, roster size against seats, unattached sitting members, orphaned constituency_ids, and total-area drift against a recorded baseline. Exits non-zero (job shows FAILED) on any breach. NOTE a member SHORTFALL is a vacancy and is reported, not failed (Ontario legitimately sits 2 short); only an EXCESS is a breach, because that means duplicate roster rows — the defect that had BC serving two MLAs for five districts. Added after the 2026-08-19 boundary programme, in which four jurisdictions had a perfect district count over wrong or incomplete geometry.",
+    args: [
+      { name: "no_area", type: "bool", required: false, help: "Skip the area-drift half; use right after a deliberate re-load, before BASELINES is updated." },
+    ],
+  },
   { key: "check-ingest-freshness", category: "maintenance",
     description: "Sentinel: per jurisdiction, compare MAX(bill_events.event_date) vs MAX(speeches.spoken_at). Exits non-zero (job shows FAILED) when lag exceeds threshold (default 30d; NB/NU publication-lag overrides in scanner freshness.py). Catches 'succeeded, sittings=0' Hansard holes.",
     args: [

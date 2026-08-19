@@ -9,8 +9,8 @@ description: Resolve a Canadian postcode or FSA to lat/lng plus the containing f
 3-character FSA) to a lat/lng centroid plus the containing electoral
 ridings at every level — the missing geocoding leg that turns a user-
 typed postcode into something `/boundaries/lookup` can act on.
-**Free-tier** — postcode geocoding is freely redistributable through
-Open North; we proxy them in real time.
+**Free-tier.** Resolution is **fully local** — no upstream call is made
+while serving your request.
 
 ## Endpoints
 
@@ -36,8 +36,11 @@ Open North; we proxy them in real time.
   "latlng": { "lat": 45.423781, "lng": -75.6974 },
   "city": "OTTAWA",
   "province": "ON",
-  "source": "cache",
-  "fetched_at": "2026-05-24T18:30:00Z",
+  "source": "nar",
+  "fetched_at": "2026-08-18T04:12:00Z",
+  "address_points": 42,
+  "approximate": false,
+  "spans_districts": null,
   "boundaries": {
     "federal":    { "constituency_id": "federal-electoral-districts-2023-representation-order/35079", "name": "Ottawa Centre", "level": "federal", "...": "..." },
     "provincial": { "constituency_id": "ontario-electoral-districts-representation-act-2015/ottawa-centre", "name": "Ottawa Centre", "level": "provincial", "...": "..." },
@@ -48,9 +51,39 @@ Open North; we proxy them in real time.
 
 `source` is one of:
 
-- `cache` — fresh row served from our local cache (within 30 days of the last upstream fetch).
-- `cache_stale` — cache row was older than 30 days, we tried to refresh it from Open North, but Open North was unreachable so we returned the stale row anyway. Postcodes don't move; stale data is still correct.
-- `live` — fresh upstream fetch (either no cache row existed, or the cache row was stale and the upstream succeeded). The cache row is updated on the way out.
+- `nar` — exact match in our copy of the Statistics Canada **National
+  Address Register** (catalogue 46-26-0002, Statistics Canada Open
+  Licence). 855,905 postal codes. This is the normal case.
+- `cache` — exact match in a small override table holding codes the
+  register cannot supply. The register is built from **civic
+  addresses**, so PO-box-only, rural-route-only and large-volume-receiver
+  codes are absent by construction — `K1A 0A6` (House of Commons) is the
+  canonical example.
+- `fsa_derived` — no exact match anywhere, so the point was averaged
+  from the other known codes in the same forward sortation area.
+  **Always accompanied by `approximate: true`. Read the next section
+  before using it.**
+
+!!! warning "`approximate: true` means the answer may be wrong"
+
+    An FSA is not a riding, and half of them are not even *inside* one
+    riding. Measured against our own boundary data: **50.1% of Canadian
+    FSAs span more than one federal riding.** Toronto's `M5V` spans
+    **five**.
+
+    So when `approximate` is true, the single district in `boundaries`
+    is the most likely answer, not a reliable one. Use
+    **`spans_districts`** — present only for approximate resolutions —
+    which lists *every* district the FSA touches, computed by
+    point-in-polygon from each known member code. Show the user the set,
+    or ask them for a full postcode.
+
+    For exact matches (`nar` / `cache`), `approximate` is `false` and
+    `spans_districts` is `null`.
+
+- `address_points` — how many civic addresses were averaged to produce
+  the centroid. `1` means a single address, which is positionally
+  weaker than a high count. `null` for non-register sources.
 
 - `boundaries.{level}` has the **byte-identical shape** to what
   `/boundaries/lookup` returns for that level — including the
@@ -67,10 +100,14 @@ Returns:
 
 | Status | When |
 |---|---|
-| 200 | Postcode or FSA resolved + boundaries computed (from cache or live upstream) |
+| 200 | Postcode or FSA resolved + boundaries computed |
 | 400 | Malformed postcode (doesn't match `A1A 1A1` or `A1A` shape) |
-| 404 | Open North confirmed the postcode doesn't exist (cache row evicted if any) |
-| 503 | Open North is unreachable AND no cache row exists to fall back on |
+| 404 | No location on file — not in the register, not in the override table, and its FSA has no known member codes |
+
+There is **no 503 path.** Resolution is local, so there is no upstream
+that can be unavailable. (Before 2026-08-18 this endpoint proxied Open
+North and returned 503 when that host was down — which it was, for
+eleven days in August 2026. That is what prompted the change.)
 
 Cache-Control: `public, max-age=86400` (one day — postcodes don't move).
 
@@ -111,19 +148,28 @@ curl -s -H 'Authorization: Bearer cpd_live_…' \
 
 ## FSA support — how it works
 
-Open North's `/postcodes/:code/` endpoint only accepts **6-character
-postcodes**; passing a 3-character FSA returns 404 directly. To give
-you FSA support we probe Open North with three fallback suffixes in
-order — `1A1`, `0A0`, `1B1` — and use the centroid from the first one
-that resolves.
+Pass a 3-character FSA and we average the coordinates of every
+6-character code we hold in that FSA, weighted by how many civic
+addresses each represents. The response carries `source: "fsa_derived"`
+and `approximate: true`.
 
-This means an FSA's `latlng` is technically the centroid of a single
-postcode within that FSA, not the FSA's geometric centroid. For the
-"which dominant federal/provincial/municipal ridings cover this FSA"
-use case this is almost always fine — within an FSA the spread is
-kilometers, not riding-borders. But if you need FSA-polygon centroids
-exactly, plug in Statistics Canada's free FSA centroid file
-client-side instead.
+**Read `spans_districts`, not `boundaries`.** An FSA is a mail-sorting
+area, not an electoral one, and the two agree less often than people
+expect. Measured against our own boundary data:
+
+| | |
+|---|---:|
+| Canadian FSAs we hold codes for | 1,668 |
+| …that span **more than one** federal riding | **835 (50.1%)** |
+| Toronto `M5V` alone spans | **5 federal ridings** |
+
+So for an FSA query, `boundaries.federal` is the riding containing the
+weighted centroid — a reasonable single guess, and wrong about half the
+time. `spans_districts` lists every district the FSA actually touches.
+Show the set, or ask the user for their full postcode.
+
+Exact 6-character codes do not have this problem and are marked
+`approximate: false`.
 
 ## "Find my representatives" recipe
 
@@ -145,63 +191,65 @@ Two calls total — postcode → riding → representative. Repeat for the
 provincial and municipal levels to populate all three "who's my X"
 slots.
 
-## Caching and the upstream relationship
+## Where the data comes from
 
-Postcode resolutions are cached server-side in `public.postcode_cache`
-(migration `0055`) — a small table keyed on the normalized postcode
-with the centroid + city + province + a `fetched_at` timestamp.
+Resolution reads two local tables. There is no upstream in the request
+path.
 
-Cache semantics:
+**`postcode_centroids`** — 855,905 codes derived from the Statistics
+Canada **National Address Register** (catalogue 46-26-0002), under the
+[Statistics Canada Open Licence](https://www.statcan.gc.ca/en/reference/licence),
+which grants the explicit right to reproduce, distribute and
+sublicence. We join the register's address and location files on
+`LOC_GUID`, group by mailing postal code, and average the WGS84
+coordinates — so a centroid is the centre of the civic addresses that
+actually share that code, not a single sampled point. `address_points`
+tells you how many were averaged.
 
-- **Fresh** (cache row younger than 30 days): served from cache,
-  no upstream call. Sub-millisecond response.
-- **Stale** (row older than 30 days): we refetch from Open North in
-  the request path. On success we overwrite the row; on Open North
-  5xx / network failure we serve the stale row anyway (postcodes
-  don't actually move — a stale row is still correct, we just
-  haven't double-checked it lately). The response `source` field is
-  `cache_stale` in this case so callers can see what happened.
-- **Confirmed 404**: cache row evicted; subsequent calls re-resolve
-  to a 404.
-- **Cold + upstream down**: no cache fallback available, return 503.
+**`postcode_cache`** — a small override table for codes the register
+cannot supply, since the register is built from civic addresses.
+PO-box-only, rural-route-only and large-volume-receiver codes have
+none. `K1A 0A6` resolves from here.
 
-The `source` field in every response is one of `cache` / `cache_stale`
-/ `live`, plus a `fetched_at` timestamp showing when the underlying
-data was last pulled from upstream. The `X-Cache-Source` response
-header mirrors the same value for monitoring tools that look at
-headers rather than bodies.
+Coverage is roughly 73–92% of active Canadian postal codes by exact
+match; the remainder fall through to the FSA path above rather than
+failing.
 
-### About the upstream
+`X-Cache-Source` mirrors `source` for monitoring tools that read
+headers rather than bodies, and `X-Postcode-Approximate: true` is set
+on approximate resolutions.
 
-[Open North](https://represent.opennorth.ca/) is the Canadian civic-
-tech organization that maintains the Represent API. They aggregate
-postcode-to-geography mappings from community-submitted CC0 data, not
-from Canada Post's licensed PCAD file. They've redistributed this
-data publicly without authentication for over a decade.
+### Why this changed
 
-The 2012 Canada Post lawsuit against Geocoder.ca over postcode
-geocoding was abandoned by Canada Post in 2016 with no judicial
-finding, and Canadian copyright law doesn't recognize a sui-generis
-database right. The practical landscape: civic-tech projects across
-Canada cache postcode data routinely; we do the same. Caching
-responses to queries our users made is no different in legal
-substance from the `Cache-Control: max-age=86400` HTTP header we
-already emit, except that it survives client-side cache eviction.
+This endpoint used to proxy [Open North's](https://represent.opennorth.ca/)
+Represent API with a 30-day cache in front. On 2026-08-07 that host's
+TLS certificate expired *and* its origin began returning 502, and it
+stayed down for eleven days. Our cache held eight rows, so effectively
+every postal code in Canada returned 503 for the duration.
+
+Rebuilding on an openly-licensed dataset we hold ourselves removes the
+failure mode rather than mitigating it. We did not keep Open North as a
+fallback: a fallback that is only exercised during an outage is a
+fallback that fails during an outage.
 
 ## Caveats
 
-- **No FSA polygons.** We return a representative postcode centroid
-  for FSAs, not the FSA polygon. If you need the polygon itself,
-  Statistics Canada publishes a free FSA boundary file at
-  [`statcan.gc.ca/.../lfsa000a21a_e.zip`](https://www150.statcan.gc.ca/n1/en/catalogue/92-179-X).
-- **Postcode → boundaries is centroid-based.** A postcode that
-  straddles a riding boundary will resolve to whichever riding
-  contains the *centroid*. For postcodes-on-the-line edge cases,
-  multiple-point sampling client-side is the right approach.
-- **`city` and `province` come from Open North.** They're cosmetic;
-  use the structured boundary fields for anything programmatic.
-- **Open North's data quality is best-effort.** Some unknown
-  postcode shapes still return 200 with an FSA-level centroid
-  (Open North falls back to FSA centroid for unrecognized 6-char
-  inputs). If you need strict postcode-existence checking, validate
-  against PCAD client-side.
+- **Coverage is not complete, by construction.** The National Address
+  Register lists civic addresses. A postal code with no civic address —
+  PO-box-only, rural-route-only, some government and large-volume-receiver
+  codes — is absent unless it is in our small override table. Those fall
+  through to the FSA path and are marked `approximate: true`.
+- **Postcode → boundaries is centroid-based.** A postal code that
+  straddles a riding boundary resolves to whichever riding contains the
+  centroid. `address_points: 1` is the weakest case — a single address
+  with no averaging.
+- **Coordinates are blockface centroids**, per the register's own
+  documentation, not rooftop points. Ample for riding assignment; not a
+  substitute for a rooftop geocoder.
+- **No FSA polygons.** We derive FSA answers from member postal codes.
+  If you need the polygon, Statistics Canada publishes a free FSA
+  boundary file at
+  [catalogue 92-179-X](https://www150.statcan.gc.ca/n1/en/catalogue/92-179-X).
+- **`city` is the modal municipality** across the addresses sharing the
+  code — a code spanning two municipalities reports the more common one.
+  Cosmetic; use the structured boundary fields for anything programmatic.

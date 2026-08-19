@@ -1,5 +1,6 @@
 import { query } from "../db.js";
 import { resolvePostcode } from "./postcode.js";
+import { currentBoundary } from "./boundary-temporal.js";
 
 /**
  * Postcode → current-representative politician IDs.
@@ -42,17 +43,36 @@ export async function politicianIdsForPostcode(input: string): Promise<string[]>
 
   const rows = await query<{ id: string }>(
     `WITH hits AS (
-       SELECT constituency_id, name, level
+       SELECT constituency_id, name, level, province_territory
          FROM constituency_boundaries
-        WHERE effective_to IS NULL
+        WHERE ${currentBoundary()}
           AND ST_Contains(boundary, ST_SetSRID(ST_MakePoint($1, $2), 4326))
      )
      SELECT DISTINCT p.id
        FROM politicians p
        JOIN hits h
          ON p.constituency_id = h.constituency_id
+         -- Name fallback for politicians ingested without a constituency_id
+         -- (senators, hand-curated rosters, gap-fillers). Scoped deliberately:
+         --
+         --   * NOT at municipal level. Ward names are not unique — "Ward 1"
+         --     names 48 polygons across 48 sets nationally, "Ward 3" 47,
+         --     "Ward 2" 46, and 34 municipal names collide in total. An
+         --     unscoped match would attribute one city's councillors to up to
+         --     47 others. Verified lossless: the only 5 active municipal
+         --     politicians with a NULL constituency_id are QC rows whose names
+         --     match ZERO boundaries, so this fallback rescues nothing here.
+         --   * province_territory must agree. Federal district names are unique
+         --     nationally (0 collisions) but provincial ones are not — the sole
+         --     case is "Richmond", which exists in both BC and NS.
+         --
+         -- Today this is latent rather than live (only those 5 rows have a NULL
+         -- constituency_id), but a missing upstream boundary_url sets that
+         -- column NULL, which is exactly how 41 BC districts lost their link.
          OR (p.constituency_id IS NULL
+             AND h.level <> 'municipal'
              AND p.level = h.level
+             AND p.province_territory IS NOT DISTINCT FROM h.province_territory
              AND lower(p.constituency_name) = lower(h.name))
       WHERE p.is_active = true`,
     [lng, lat],

@@ -160,13 +160,25 @@ export default async function publicV1Routes(app: FastifyInstance) {
   });
 
   // Permissive CORS via hook.
-  app.addHook("onSend", async (_req, reply, _payload) => {
+  app.addHook("onSend", async (req, reply, _payload) => {
     reply.header("Access-Control-Allow-Origin", "*");
     reply.header("Access-Control-Allow-Methods", "GET, OPTIONS");
     reply.header(
       "Access-Control-Allow-Headers",
       "Authorization, Content-Type",
     );
+    // Boundary responses carry per-source licence terms in the body
+    // (`licence` on every boundary object). This advertises the same thing to
+    // clients that read headers rather than parsing bodies — required because
+    // we serve polygons under permissive CORS with, until now, no terms
+    // attached at all. Per-source detail is in lib/boundary-licence.ts; the
+    // page below explains why it varies by province.
+    if (req.url.includes("/boundaries") || req.url.includes("/postcodes")) {
+      reply.header(
+        "Link",
+        '<https://docs.canadianpoliticaldata.org/developers/licences/>; rel="license"',
+      );
+    }
   });
   // Cheap OPTIONS preflight responder so browsers don't get a 404.
   // Hidden from the OpenAPI spec — it's mechanical CORS plumbing,

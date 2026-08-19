@@ -94,3 +94,10 @@ mkdocs/site/*
 # calls it via a guarded `if` that no-ops if the file is absent on a checkout.
 /scripts/replicate-to-offsite.sh
 /media-cache/
+# Staged geospatial source files (boundary research). Exclude the CONTENTS,
+# not the directory itself: git never descends into an excluded directory, so
+# a negation under `data/boundaries/` can never fire. PROVENANCE.md files are
+# the committed audit trail for the workstream and must stay trackable.
+data/boundaries/**
+!data/boundaries/**/
+!data/boundaries/**/PROVENANCE.md
