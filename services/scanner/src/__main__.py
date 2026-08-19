@@ -5962,6 +5962,69 @@ def cmd_cache_edmonton_media(ctx: click.Context, city, limit, workers) -> None:
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 
 
+@cli.command("realign-media-offsets")
+@click.option("--city", type=click.Choice(("edmonton",)), default="edmonton")
+@click.option("--limit", type=int, default=None)
+@click.option("--force", is_flag=True, default=False,
+              help="also recompute offsets already verified by identity "
+                   "(normally left alone — identity outranks VAD)")
+@click.pass_context
+def cmd_realign_media_offsets(ctx: click.Context, city, limit, force) -> None:
+    """Recompute caption offsets from cached audio — no re-download.
+
+    Offsets written before 2026-08-19 came from an aligner that searched a
+    fixed ±600s window; ISI encoder streams start long before the meeting,
+    so for 216 of 405 Edmonton meetings the true offset was outside the
+    searched range and a confidently-wrong value was stored. This re-runs
+    the fixed aligner against audio already on disk and patches meta.json
+    in place, leaving anything still untrusted untouched.
+    """
+    from .legislative.media_cache import find_cache, realign_from_cache
+
+    async def _wrap(db: Database) -> None:
+        rows = await db.fetch(
+            """
+            SELECT regexp_replace(video_url, '^.*v=', '') AS vid,
+                   raw_captions_vtt AS vtt,
+                   raw->'media'->'isi'->>'etag' AS etag
+            FROM meetings
+            WHERE municipality_slug = $1 AND video_url IS NOT NULL
+              AND raw_captions_vtt IS NOT NULL
+            ORDER BY started_at DESC
+            """,
+            city,
+        )
+        if limit:
+            rows = rows[:limit]
+        seen = patched = skipped = 0
+        for r in rows:
+            paths = find_cache(r["vid"], r["etag"])
+            if not paths:
+                continue
+            seen += 1
+            try:
+                meta = await asyncio.to_thread(
+                    realign_from_cache, paths, r["vtt"], force)
+            except Exception as exc:
+                console.print(f"[yellow]realign {r['vid']}: {exc}[/yellow]")
+                skipped += 1
+                continue
+            if meta is None:
+                skipped += 1
+                continue
+            patched += 1
+            console.print(
+                f"  {r['vid']}: {meta.get('align_offset_previous')} -> "
+                f"{meta['caption_offset_s']}s "
+                f"(score={meta['align_score']} prom={meta['align_prominence']})"
+            )
+        console.print(
+            f"[green]realign-media-offsets[/green]: cached={seen} "
+            f"patched={patched} left_alone={skipped}"
+        )
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
 @cli.command("apply-panel-attribution")
 @click.option("--city", type=click.Choice(("edmonton",)), default="edmonton")
 @click.pass_context

@@ -101,6 +101,51 @@ def load_meta(video_id: str) -> Optional[dict]:
     return load_meta_from(_paths_for(cache_dir_for(video_id)))
 
 
+def realign_from_cache(paths: dict, vtt_text: str,
+                       force: bool = False) -> Optional[dict]:
+    """Recompute the caption offset from ALREADY-CACHED audio.
+
+    Before this existed the only way to fix a bad ``caption_offset_s`` was
+    to delete meta.json, which made ``find_cache`` report "no cache" and
+    forced a full re-download plus re-derive of frames and audio. That
+    cost is why 216 meetings carried a knowably-wrong offset for months.
+    Audio, frames and times.json are siblings of meta.json, so alignment
+    can be redone on its own.
+
+    Returns the patched meta dict, or None when the new alignment is not
+    trustworthy (the old value is then left alone — an untrusted
+    recompute is not an improvement over an untrusted original).
+    """
+    from .caption_align import align_captions_to_audio
+
+    meta = load_meta_from(paths)
+    if meta is None:
+        return None
+    if meta.get("align_method") == "identity" and not force:
+        # An identity-verified offset outranks anything VAD can produce;
+        # never silently downgrade one.
+        return None
+    if not os.path.exists(paths["audio"]):
+        return None
+
+    r = align_captions_to_audio(vtt_text, paths["audio"])
+    if not r.trusted:
+        log.info("realign: still untrusted (score=%.1f prominence=%.2f) — "
+                 "leaving %s alone", r.score, r.prominence, paths["dir"])
+        return None
+
+    meta["align_offset_previous"] = meta.get("caption_offset_s")
+    meta["caption_offset_s"] = round(r.offset_s, 2)
+    meta["align_score"] = round(r.score, 1)
+    meta["align_prominence"] = round(r.prominence, 2)
+    meta["align_method"] = "vad"
+    tmp = paths["meta"] + ".tmp"
+    with open(tmp, "w") as fh:
+        json.dump(meta, fh)
+    os.replace(tmp, paths["meta"])   # atomic: meta.json presence IS validity
+    return meta
+
+
 async def _derive_from_file(video: str, paths: dict, *, source: str,
                             video_url: str, identity: dict,
                             vtt_text: Optional[str]) -> bool:

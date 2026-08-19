@@ -622,6 +622,15 @@ async def ocr_speaker_timeline(
                 # legacy +8s lead assumption.
                 "media_source": cache_meta.get("source", "youtube"),
                 "caption_offset_s": cache_meta.get("caption_offset_s"),
+                # Carry the alignment's provenance, not just its answer.
+                # Until 2026-08-19 the score that justified trusting an
+                # offset lived only in on-disk meta.json and never reached
+                # Postgres, so a corpus-wide misalignment (216 ISI meetings
+                # whose true offset sat outside the old ±600s search window)
+                # was invisible to SQL and took a GPU study to find.
+                "align_score": cache_meta.get("align_score"),
+                "align_method": cache_meta.get("align_method", "vad"),
+                "identity_peak": cache_meta.get("identity_peak"),
                 "intervals": intervals,
             }
             await db.execute(

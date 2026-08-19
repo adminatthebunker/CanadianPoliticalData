@@ -33,6 +33,7 @@ import os
 import re
 import subprocess
 import sys
+from collections import Counter
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CACHE = os.path.join(HERE, "cache")
@@ -75,11 +76,16 @@ def main():
 
     rows = json.load(open(args.report))
     corrected = [r for r in rows if r["verdict"] == "corrected"]
-    unconfirmed = [r for r in rows if r["verdict"] == "unconfirmed"]
     confirmed = [r for r in rows if r["verdict"] == "confirmed"]
+    # Anything we could not decide gets flagged, not just the meetings that
+    # scored too weakly: "too_few_labels" / "no_npz" / "no_overlap" are
+    # equally unverified, and leaving them silently trusted is the exact
+    # failure mode this whole exercise exists to fix.
+    unverified = [r for r in rows
+                  if r["verdict"] not in ("confirmed", "corrected")]
     print(f"report: {len(rows)} meetings — {len(confirmed)} confirmed, "
-          f"{len(corrected)} corrected, {len(unconfirmed)} unconfirmed, "
-          f"{len(rows)-len(confirmed)-len(corrected)-len(unconfirmed)} undecidable")
+          f"{len(corrected)} corrected, {len(unverified)} unverified "
+          f"({Counter(r['verdict'] for r in unverified).most_common()})")
     if not args.apply:
         print("\n*** DRY RUN — nothing written (pass --apply) ***")
 
@@ -163,7 +169,7 @@ def main():
         print(f"  voice_map cleared; {n} voice speeches reset to bare")
 
     # ---- 4. unconfirmed: flag rather than delete ------------------------
-    if unconfirmed and args.apply:
+    if unverified and args.apply:
         n = psql(f"""
         with t as (
           update speeches s set confidence = 0.3,
@@ -172,12 +178,12 @@ def main():
           from meetings m
           where m.id = s.meeting_id and m.municipality_slug='edmonton'
             and s.raw->>'attribution' = 'voice'
-            and m.video_url in ({vid_list(unconfirmed)})
+            and m.video_url in ({vid_list(unverified)})
           returning 1)
         select count(*) from t""")
-        print(f"unconfirmed: {n} voice speeches flagged voice_unverified")
-    elif unconfirmed:
-        print(f"unconfirmed: {len(unconfirmed)} meetings would be flagged")
+        print(f"unverified: {n} voice speeches flagged voice_unverified")
+    elif unverified:
+        print(f"unverified: {len(unverified)} meetings would be flagged")
 
     if args.apply:
         print("\nnext: ./.venv/bin/python voice_attribute.py --cached-only")

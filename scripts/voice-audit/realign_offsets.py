@@ -52,7 +52,12 @@ FINE_HOP = 3.0       # stride for the refinement pass
 FINE_SPAN = 150.0    # +- around the coarse winner to refine
 MIN_OVERLAP = 600.0  # caption span and audio must overlap by at least this
 MIN_LABELS = 8       # meetings with fewer labelled turns are not decidable
-HALF_MIN_LABELS = 4  # per-half minimum for the drift check
+HALF_MIN_LABELS = 8  # per-half minimum for the drift check. Below this the
+                     # half-sweep argmax is dominated by ties (agreement is
+                     # quantised to n-ths), so "drift" is noise, not signal —
+                     # calibration showed it falsely rejecting 4 meetings whose
+                     # recovered offset was within 0.6-4.1s of an already-correct
+                     # stored value.
 ENROL_ATTR = ("macro", "recognition")
 MIN_ENROL = 5        # samples needed before a councillor gets a centroid
 
@@ -264,18 +269,26 @@ def probe(vid, media, mdir, bank, clf, dev, exclude_self):
 
     stored = media.get("caption_offset_s")
     ratio = peak / baseline if baseline > 1e-6 else float("inf")
-    # A meeting with too few labels to split cannot be drift-checked. That
-    # is a reason to demand a stronger peak, not to reject outright —
-    # rejecting on an unevaluable check threw away good alignments in the
-    # first calibration pass.
-    if drift is None:
-        decisive = peak >= max(ACCEPT_PEAK, 0.6) and ratio >= ACCEPT_RATIO
-    else:
+    agrees_with_stored = (stored is not None
+                          and abs(best - float(stored)) <= CONFIRM_TOL)
+
+    # Accept rule. A meeting with too few labels to split cannot be
+    # drift-checked; that is a reason to demand a stronger peak, not to
+    # reject outright (rejecting on an unevaluable check threw away good
+    # alignments in the first calibration pass). Changing a stored offset
+    # is riskier than confirming one, so an undrift-checkable CORRECTION
+    # has to clear a higher bar than an undrift-checkable confirmation.
+    if drift is not None:
         decisive = (peak >= ACCEPT_PEAK and ratio >= ACCEPT_RATIO
                     and abs(drift) <= ACCEPT_DRIFT)
+    elif agrees_with_stored:
+        decisive = peak >= max(ACCEPT_PEAK, 0.6) and ratio >= ACCEPT_RATIO
+    else:
+        decisive = peak >= 0.75 and ratio >= 5.0
+
     if not decisive:
         verdict = "unconfirmed"
-    elif stored is not None and abs(best - float(stored)) <= CONFIRM_TOL:
+    elif agrees_with_stored:
         verdict = "confirmed"
     else:
         verdict = "corrected"
