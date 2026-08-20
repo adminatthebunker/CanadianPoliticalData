@@ -155,9 +155,68 @@ class BoundarySpec:
     # Given the feature's attributes, return a province code (or None). Takes
     # precedence over `province_territory` whenever it returns a value.
     province_resolver: Optional[Callable[[dict], Optional[str]]] = None
+    # ⛔ Per-row `source_set` / `id_prefix`, for AGGREGATOR files whose rows span
+    # more than one owning body. `source_set` above is a SCALAR written to every
+    # row, which is right for one agency publishing one jurisdiction and wrong
+    # for a province publishing all of its municipalities at once: Nova Scotia
+    # ships 238 districts across 49 municipalities in ONE file, New Brunswick 330
+    # wards across 90 local governments.
+    #
+    # Same shape as `province_resolver`, and for the same reason. Given the
+    # feature's attributes, return the set slug that owns it — used for BOTH
+    # `source_set` and the `constituency_id` prefix, which is the invariant every
+    # municipal set in the table already satisfies. Return None to reject the
+    # feature loudly (NB has one ward whose `elect_comm` is null and which cannot
+    # be attributed to any local government).
+    #
+    # ⛔ It also widens the GROUP KEY. Without that, "Ward 1" in Fredericton and
+    # "Ward 1" in Moncton are one group, and 90 local governments dissolve into
+    # a single set of ward numbers. The resolver runs before grouping for exactly
+    # that reason.
+    #
+    # ⚠ Do not write 139 near-identical specs instead. The per-municipality
+    # naming exceptions belong in the resolver, where they are one dict.
+    set_resolver: Optional[Callable[[dict], Optional[str]]] = None
+    # ⛔ Build the display name where the agency publishes NONE. Distinct from
+    # `name_fixups`, which overrides a name the agency did publish and is
+    # deliberately hostile territory. Nova Scotia's province-wide file carries
+    # `mun`, `poll_dist`, `mu_code`, `co_code`, `reg_num`, `shape_leng`,
+    # `shape_area` — and no district name in any of them. `poll_dist` is a code
+    # (`AN01`, `TUW1`, `WOAL`), not a label.
+    #
+    # So there is nothing to override and nothing to preserve: without this the
+    # only options are a district displayed to the public as "AN01", or 210
+    # hand-written `name_fixups` entries.
+    #
+    # Return None to fall back to `name_field`.
+    name_builder: Optional[Callable[[dict], Optional[str]]] = None
     # Assert the district count after filtering and dissolving. A mismatch aborts
     # the run rather than loading a plausible-looking wrong number of rows.
     expect_districts: Optional[int] = None
+    # ⛔ With `set_resolver`, `expect_districts` alone goes half-blind: it counts
+    # districts across every set at once, so a municipality mapped to the wrong
+    # set slug moves rows between sets without changing the total. These two are
+    # what keeps the one assertion that has caught every silent partial load.
+    #
+    # `expect_sets` — how many distinct sets the file must produce.
+    # `expect_per_set` — exact district counts for named sets. A SUBSET is fine:
+    # assert the ones whose true count is independently known (the sets we
+    # already hold, or a published council size) and leave the rest.
+    expect_sets: Optional[int] = None
+    expect_per_set: Optional[dict] = None
+    # ⚠ Whether the agency INTENDS `authority_district_id` to be unique across
+    # the whole aggregator. Only meaningful with `set_resolver`.
+    #
+    # True for Nova Scotia, whose `poll_dist` embeds the municipal code
+    # (`TUW1`, `AN01`) and is therefore province-wide by construction — so a
+    # duplicate is an upstream defect worth reporting, and NS has one (`BWAL`
+    # for both Bridgewater and Berwick).
+    #
+    # ⛔ False by default, because the common case is the opposite: New
+    # Brunswick's id is the bare ward NUMBER, so ward 8 exists in Fredericton and
+    # Tracadie and "At-Large / Général" in sixteen bodies. Reporting those as
+    # duplicates buries a real finding under 300 lines of non-findings.
+    authority_id_unique_across_sets: bool = False
     licence: Optional[str] = None
     notes: str = ""
 
@@ -397,6 +456,11 @@ def group_features(
                 st.name_fixups_applied += 1
                 raw_name = fixed
         split_fr: Optional[str] = None
+        if spec.name_builder:
+            built = spec.name_builder(props)
+            if built:
+                raw_name = built
+
         if spec.name_split and raw_name:
             bits = [b.strip() for b in raw_name.split(spec.name_split)]
             bits = [b for b in bits if b]
@@ -424,6 +488,21 @@ def group_features(
         #     and leave a district quietly missing a piece — which
         #     `expect_districts` cannot see, because the district still exists via
         #     its other rows.
+        # ⛔ Resolve the owning set FIRST — it widens the group key. Two
+        # municipalities in the same aggregator both having a "Ward 1" is the
+        # normal case, not the exception.
+        if spec.set_resolver:
+            row_set = spec.set_resolver(props)
+            if not row_set:
+                st.rejected += 1
+                st.problems.append(
+                    f"feature (name={raw_name!r}) resolves to no owning set — "
+                    f"it cannot be attributed to a municipality"
+                )
+                continue
+        else:
+            row_set = spec.source_set
+
         if spec.dissolve_by:
             key_raw = props.get(spec.dissolve_by)
             if key_raw is None or str(key_raw).strip() == "":
@@ -433,13 +512,14 @@ def group_features(
                     f"— cannot be attributed to a district"
                 )
                 continue
-            gkey = str(key_raw).strip()
+            gkey = f"{row_set}\x00{str(key_raw).strip()}"
         else:
             if not raw_name:
                 st.rejected += 1
                 st.problems.append(f"feature with empty {spec.name_field}")
                 continue
-            gkey = slugify(str(props.get(spec.slug_field) or raw_name))
+            gkey = (f"{row_set}\x00"
+                    f"{slugify(str(props.get(spec.slug_field) or raw_name))}")
 
         # ⛔ What the constituency_id slug is built FROM. Usually the district
         # name, but `slug_field` overrides it: federal ids are keyed on the
@@ -456,6 +536,7 @@ def group_features(
         if existing is None:
             existing = rows[gkey] = {
                 "group_key": gkey,
+                "source_set": row_set,
                 "name": None,
                 "name_fr": None,
                 "authority_district_id": None,
@@ -521,7 +602,10 @@ def group_features(
         # here silently ignored slug_field and would have minted 343 name-based
         # federal ids matching none of the 342 FED_NUM-keyed rows we hold.
         row["name"] = names.most_common(1)[0][0]
-        cid = f"{spec.id_prefix}/{slugify((slugs.most_common(1)[0][0]) if slugs else row['name'])}"
+        # ⚠ With `set_resolver` the prefix is the row's own set, not the spec's
+        # scalar — an aggregator has no single correct prefix.
+        prefix = row["source_set"] if spec.set_resolver else spec.id_prefix
+        cid = f"{prefix}/{slugify((slugs.most_common(1)[0][0]) if slugs else row['name'])}"
 
         # ⛔ Two dissolve groups slugifying to the same id would union into one
         # district and take `distinct_ids` BELOW expectation — the failure mode
@@ -530,7 +614,9 @@ def group_features(
         if cid in out:
             raise RuntimeError(
                 f"{spec.jurisdiction}: {spec.dissolve_by or 'name'} values "
-                f"{out[cid]['group_key']!r} and {gkey!r} both slugify to {cid!r}. "
+                f"{out[cid]['group_key'].split(chr(0))[-1]!r} and "
+                f"{gkey.split(chr(0))[-1]!r} (set {row['source_set']!r}) "
+                f"both slugify to {cid!r}. "
                 f"Two distinct districts cannot share a constituency_id — the "
                 f"dissolve key or the name field is wrong."
             )
@@ -564,6 +650,50 @@ async def load_boundaries(
             f"(filtered {st.filtered_out}, rejected {st.rejected}). "
             f"Check row_filter / dissolve_by / name_field."
         )
+
+    # ⛔ Aggregator assertions. `expect_districts` counts across every set at
+    # once, so a municipality mapped to the wrong slug moves rows between sets
+    # without moving the total — invisible to the total-count check alone.
+    if spec.set_resolver:
+        per_set: Counter = Counter(r["source_set"] for r in rows.values())
+        if spec.expect_sets is not None and len(per_set) != spec.expect_sets:
+            raise RuntimeError(
+                f"{spec.jurisdiction}: expected {spec.expect_sets} owning sets, "
+                f"resolved {len(per_set)} from {st.features_read} features. "
+                f"Check set_resolver — a name it does not recognise either "
+                f"collapses into another set or mints a new one."
+            )
+        # ⚠ Report, do not fail: an authority id reused across two owning bodies
+        # is the PUBLISHER's defect, and it does not threaten our identity —
+        # `constituency_id` is per-set and still distinct. Nova Scotia issues
+        # `BWAL` to both Bridgewater and Berwick, and both also carry
+        # `mu_code = BW`. 0091 scoped the uniqueness index to `source_set` so
+        # this loads; this keeps it from loading *silently*.
+        by_aid: dict = {}
+        for r in (rows.values() if spec.authority_id_unique_across_sets else ()):
+            aid = r.get("authority_district_id")
+            if aid:
+                by_aid.setdefault(aid, set()).add(r["source_set"])
+        for aid, in_sets in sorted(by_aid.items()):
+            if len(in_sets) > 1:
+                st.problems.append(
+                    f"authority id {aid!r} is issued to {len(in_sets)} different "
+                    f"owning sets ({', '.join(sorted(in_sets))}) — an upstream "
+                    f"duplicate; our constituency_ids stay distinct"
+                )
+
+        if spec.expect_per_set:
+            wrong = {
+                k: (per_set.get(k, 0), v)
+                for k, v in spec.expect_per_set.items()
+                if per_set.get(k, 0) != v
+            }
+            if wrong:
+                raise RuntimeError(
+                    f"{spec.jurisdiction}: per-set district counts wrong "
+                    f"(got, expected): {wrong}. A set at 0 means set_resolver "
+                    f"never produced that slug."
+                )
 
     existing = {
         r["constituency_id"]
@@ -658,7 +788,8 @@ async def load_boundaries(
                 [json.dumps(g) for g in r["geometries"]],
                 cid, r["name"], r["name_fr"], spec.level,
                 r.get("province_territory") or spec.province_territory,
-                spec.source_set, spec.authority, r["authority_district_id"],
+                r.get("source_set") or spec.source_set,
+                spec.authority, r["authority_district_id"],
                 spec.boundary_kind,
                 spec.boundaries_version, spec.effective_from, spec.effective_to,
             )
@@ -733,6 +864,19 @@ async def compare_boundaries(
                 "CREATE TEMP TABLE _cmp (slug text primary key, "
                 "g geometry(MultiPolygon,4326)) ON COMMIT DROP"
             )
+            # ⛔ What counts as the same district on both sides.
+            #
+            # Normally the bare SLUG, deliberately: a cutover compares a new
+            # generation against a differently-prefixed old one
+            # (`…-districts-2018/x` vs `…-districts/x`), and keying on the full
+            # id would report every district as new.
+            #
+            # ⚠ For an AGGREGATOR the prefix is the municipality, so the slug
+            # alone is neither unique nor meaningful: 24 Nova Scotian towns elect
+            # at large and all 24 slug to `at-large`, which collides on the
+            # primary key before it can even mis-match. Key on the full id there.
+            key_sql = ("constituency_id" if spec.set_resolver
+                       else "split_part(constituency_id,'/',2)")
             # Same grouping the loader uses — filter, dissolve, accumulate parts.
             # If compare grouped differently, a clean result would not predict
             # what the load writes.
@@ -757,12 +901,12 @@ async def compare_boundaries(
                              ST_MakeValid(ST_UnaryUnion(ST_Collect(g))), 3))
                       FROM parts
                     """,
-                    cid.split("/", 1)[1],
+                    cid if spec.set_resolver else cid.split("/", 1)[1],
                     [json.dumps(g) for g in r["geometries"]],
                 )
 
             rows = await conn.fetch(
-                """
+                f"""
                 WITH held AS (
                   -- ⚠ ST_MakeValid on the HELD side too. The authoritative side
                   -- is repaired when _cmp is built, but our own rows are not
@@ -772,7 +916,7 @@ async def compare_boundaries(
                   -- ST_Intersection raise a TopologyException and abort the whole
                   -- comparison. A vintage check must not be defeated by the
                   -- quality of the data it exists to assess.
-                  SELECT split_part(constituency_id,'/',2) AS slug,
+                  SELECT {key_sql} AS slug,
                          ST_MakeValid(boundary) AS g
                     FROM constituency_boundaries
                    WHERE level = $1
@@ -814,8 +958,8 @@ async def compare_boundaries(
             )
             st.only_authoritative = [
                 r["slug"] for r in await conn.fetch(
-                    """SELECT slug FROM _cmp WHERE slug NOT IN (
-                         SELECT split_part(constituency_id,'/',2)
+                    f"""SELECT slug FROM _cmp WHERE slug NOT IN (
+                         SELECT {key_sql}
                            FROM constituency_boundaries
                           WHERE level=$1
                             AND ($2::text IS NULL
@@ -825,14 +969,13 @@ async def compare_boundaries(
             ]
             st.only_held = [
                 r["slug"] for r in await conn.fetch(
-                    """SELECT split_part(constituency_id,'/',2) AS slug
+                    f"""SELECT {key_sql} AS slug
                          FROM constituency_boundaries
                         WHERE level=$1
                       AND ($2::text IS NULL OR province_territory IS NOT DISTINCT FROM $2)
                           AND effective_from <= CURRENT_DATE
                           AND (effective_to IS NULL OR effective_to >= CURRENT_DATE)
-                          AND split_part(constituency_id,'/',2)
-                              NOT IN (SELECT slug FROM _cmp)
+                          AND {key_sql} NOT IN (SELECT slug FROM _cmp)
                         ORDER BY 1""",
                     spec.level, spec.province_territory)
             ]
@@ -871,6 +1014,236 @@ def _province_from_fed_num(props: dict) -> str:
     }
     code = str(props.get("FED_NUM") or "").strip()
     return pr.get(code[:2])
+
+
+
+
+# ── Municipal aggregator helpers ────────────────────────────────────────────
+# Promoted from `_draft_specs/`; see the two municipal SPECS entries below.
+
+# Nova Scotia municipal polling districts — one province-wide file, 49
+# municipalities, from data.novascotia.ca dataset `gcep-xeci`.
+#
+# ★ The first AGGREGATOR spec: one file fanning out into many source_sets via
+# `set_resolver`. NS ships 238 districts across 49 municipalities and we
+# currently read 2 of them.
+#
+# ⛔ HALIFAX AND CAPE BRETON ARE DELIBERATELY EXCLUDED, and this is the whole
+# reason the spec has a row_filter. The province's file has NO district name
+# field — `poll_dist` is a code (`HX07`), not a label — while the 28 rows we
+# already hold for those two are properly named (`Halifax Peninsula North`,
+# `Dartmouth Centre`) and carry 28 sitting councillors attached by those slugs.
+# Loading codes over them would rename every district to `hx07`-style ids and
+# orphan the entire roster of both councils, to gain nothing: Halifax already
+# reconciles 16 of 16 against the authoritative layer and Cape Breton 12 of 12.
+#
+# ⚠ 24 of the remaining 47 municipalities have exactly ONE polling district —
+# small towns that elect their whole council at large, which the code itself
+# spells out (`WOAL` = Wolfville, at large). They are loaded as one district
+# covering the town, which is what the province publishes.
+#
+# ⓘ We hold no roster for any of the 47, so nothing attaches yet. That is the
+# point: a postcode in Truro or Annapolis Royal currently returns no municipal
+# answer at all.
+#
+# Licence: Nova Scotia Open Government Licence (novascotia.ca/opendata/licence.asp)
+# — one of only two municipal sources in the corpus with a named, linked licence.
+
+
+# `poll_dist` is `<mu_code><suffix>` where suffix is a zero-padded number, `W<n>`
+# for towns that number wards, or `AL` for at-large.
+_NS_SUFFIX = re.compile(r"^(?P<mu>[A-Z]+?)(?P<kind>W?)(?P<num>\d+)$|^(?P<mu2>[A-Z]+)AL$")
+
+
+def _ns_label(props: dict) -> str | None:
+    """
+    `poll_dist` code -> display name. `AN01` -> District 1, `TUW1` -> Ward 1,
+    `WOAL` -> At Large.
+
+    ⛔ The `W` is ambiguous and the ambiguity is not hypothetical: two NS
+    municipal codes END in W (`BW` Bridgewater/Berwick, `SW`). For a code like
+    `SW01` the pattern can read `SW` + `01` (District 1) or `S` + `W` + `01`
+    (Ward 1) — and since the slug is derived from this label, picking wrong is
+    an IDENTITY error, not a cosmetic one: `ward-1` and `district-1` are
+    different constituency_ids.
+
+    So the parse is verified against the province's own `mu_code` and a
+    disagreement aborts the run. Checked across all 238 features at 0 mismatches;
+    this is what keeps that true when NS adds a municipality.
+    """
+    code = (props.get("poll_dist") or "").strip().upper()
+    mu_code = (props.get("mu_code") or "").strip().upper()
+    m = _NS_SUFFIX.match(code)
+    if not m:
+        return None
+    if m.group("mu2"):
+        if mu_code and m.group("mu2") != mu_code:
+            raise RuntimeError(
+                f"nova-scotia-municipal: at-large code {code!r} implies "
+                f"mu_code {m.group('mu2')!r} but the feature declares "
+                f"{mu_code!r} ({props.get('mun')!r})"
+            )
+        return "At Large"
+    if mu_code and m.group("mu") != mu_code:
+        raise RuntimeError(
+            f"nova-scotia-municipal: code {code!r} parses as prefix "
+            f"{m.group('mu')!r} + {'W' if m.group('kind') else ''}"
+            f"{m.group('num')!r}, but the feature declares mu_code {mu_code!r} "
+            f"({props.get('mun')!r}). The W is ambiguous for mu_codes ending in "
+            f"W and the slug derives from this label — refusing to guess."
+        )
+    num = int(m.group("num"))
+    return f"Ward {num}" if m.group("kind") == "W" else f"District {num}"
+
+
+def _ns_slugify_mun(name: str) -> str:
+    """
+    Municipality display name -> our source_set slug.
+
+    ⛔ `-town` IS LOAD-BEARING, not decoration. In Nova Scotia a town and the
+    county surrounding it are SEPARATE municipalities with separate councils and
+    the same name: Antigonish, Digby, Lunenburg, Pictou, Shelburne and Yarmouth
+    each appear twice in this file. Stripping the type merged six pairs of real
+    councils — 49 municipalities resolved to 41 slugs, caught by `expect_sets`.
+
+    ⚠ Applied to every town, not only the six that collide. A rule that fires
+    only on today's collisions silently breaks when NS next incorporates a town
+    named after its county, and the loss would be a merge — the hardest kind of
+    error to notice, because the row count still looks plausible.
+    """
+    s = name.strip()
+    if s.startswith("Town of "):
+        return slugify(s[len("Town of "):]) + "-town"
+    for prefix in (
+        "Municipality of the County of ", "Municipality of the District of ",
+        "Municipality of ", "Region of ", "District of ",
+    ):
+        if s.startswith(prefix):
+            s = s[len(prefix):]
+            break
+    for suffix in (" Regional Municipality", " Municipality"):
+        if s.endswith(suffix):
+            s = s[: -len(suffix)]
+            break
+    return slugify(s)
+
+
+def _ns_set_for(props: dict) -> str | None:
+    mun = (props.get("mun") or "").strip()
+    if not mun:
+        return None
+    return f"{_ns_slugify_mun(mun)}-districts"
+
+
+# New Brunswick local-government and rural-district wards — one province-wide
+# file, from gnb.socrata.com dataset `7zs3-pcvk`.
+#
+# 330 wards across 94 owning bodies (78 local governments + 16 rural districts).
+# We currently read 3 of them.
+#
+# ⛔ THREE TRAPS, all of which silently produce a plausible-looking wrong result.
+#
+# 1. `name_e` IS NOT A NAME. It is the literal string "Ward" on all 330 rows
+#    (`name_f` is "Quartier"). Filtering or naming on it yields one district
+#    called "Ward" for the entire province. The ward number is `ward`; the owning
+#    body is `elect_comm`.
+#
+# 2. `elect_comm` IS NOT UNIQUE. Four names are used by BOTH a local government
+#    and a rural district — Butternut Valley, District of Tobique Valley,
+#    Nouvelle-Arcadie, and Southwest rural district. Keying the set on the name
+#    alone merges four pairs of distinct bodies, which `expect_sets` catches. The
+#    slug therefore carries the type.
+#
+#    ⚠ `eng_label` is no help: the RD codes are not unique either — RD5, RD8 and
+#    RD12 are each shared by two rural districts.
+#
+# 3. ONE ROW HAS NO `elect_comm` AT ALL. See `_set_for` for how it is attributed,
+#    and why that is an inference rather than a lookup.
+#
+# ★ Fredericton is the vintage proof. The authoritative ward labels are
+# 1..12 PLUS `4-Lincoln` — thirteen. We hold twelve. That sub-ward exists because
+# Lincoln was annexed under NB's 2023 local governance reform, so our NB sets are
+# demonstrably pre-reform.
+#
+# ⓘ GeoNB (`geonb.snb.ca/downloads/lg/geonb_lg_gl_wards_quartiers_shp.zip`) is
+# the publisher of record and is live. Socrata is used purely for format —
+# GeoJSON with server-side filtering versus a zipped shapefile. The licence
+# conclusion (Open Government Licence – New Brunswick) is unaffected by that
+# choice.
+
+
+_NB_TYPE_SUFFIX = {"LG": "-wards", "RD": "-rural-district-wards"}
+
+
+def _nb_english(name: str) -> str:
+    """
+    The English half of a bilingual `elect_comm`.
+
+    Rural districts are published as "Kent rural district / District rural de
+    Kent"; local governments are single-form. Splitting unconditionally is safe
+    because no single-form name contains a slash.
+    """
+    return name.split("/")[0].strip()
+
+
+def _nb_core(name: str) -> str:
+    """Drop the legal-status wrapper so the slug is the place, not its status."""
+    s = _nb_english(name)
+    for prefix in (
+        "The City of ", "City of ", "Town of ", "Village of ",
+        "Regional Municipality of ", "Rural Community of ",
+        "Municipality of ", "Municipalité de ", "Municipalité régionale de ",
+        "District of ", "Districts of ",
+    ):
+        if s.startswith(prefix):
+            s = s[len(prefix):]
+            break
+    # "Southwest rural district" -> "Southwest"; the suffix is re-added by type,
+    # so without this the slug reads `…-rural-district-rural-district-wards`.
+    s = re.sub(r"\s+rural district$", "", s, flags=re.IGNORECASE)
+    return s.strip()
+
+
+def _nb_set_for(props: dict) -> str | None:
+    kind = (props.get("type") or "").strip().upper()
+    name = (props.get("elect_comm") or "").strip()
+
+    if not name:
+        # ⛔ THE ONE UNATTRIBUTED ROW. Exactly one feature in the file has a null
+        # `elect_comm`: type RD, `eng_label` RD2, ward 2.
+        #
+        # Attributed to Restigouche on two independent lines of evidence:
+        #
+        #   • RD2 names Restigouche UNIQUELY among the 15 labelled rural
+        #     districts, and Restigouche is published with ward 1 only — so a
+        #     ward 2 labelled RD2 has exactly one home.
+        #   • It shares a 52.0 km border with Restigouche ward 1, its longest by
+        #     a wide margin (Chaleur 40.5 km, Greater Miramichi 34.6 km).
+        #
+        # ⚠ Stated as an INFERENCE, not a lookup. Narrowly conditioned on the row
+        # we actually examined, so a second null row — or a different one —
+        # falls through and is rejected loudly rather than silently inheriting
+        # this attribution.
+        if kind == "RD" and (props.get("eng_label") or "").strip().upper() == "RD2" \
+                and str(props.get("ward") or "").strip() == "2":
+            return "restigouche-rural-district-wards"
+        return None
+
+    suffix = _NB_TYPE_SUFFIX.get(kind)
+    if not suffix:
+        return None
+    return slugify(_nb_core(name)) + suffix
+
+
+def _nb_label(props: dict) -> str | None:
+    ward = str(props.get("ward") or "").strip()
+    if not ward:
+        return None
+    # At-large bodies carry the bilingual literal "At-Large / Général" in the
+    # ward field itself.
+    if ward.lower().startswith("at-large"):
+        return "At Large"
+    return f"Ward {ward}"
 
 
 SPECS: dict[str, BoundarySpec] = {
@@ -2457,5 +2830,95 @@ SPECS: dict[str, BoundarySpec] = {
               "'The Pas-Kameesak'. Roster join is clean: the Legislative Assembly's "
               "constituency listing carries all 57 ED values verbatim.",
 
+    ),
+    "nova-scotia-municipal": BoundarySpec(
+        jurisdiction="nova-scotia-municipal",
+        source_path="municipal-atlantic/current/ns-municipal-polling-districts.geojson",
+        src_epsg=4326,
+        level="municipal",
+        province_territory="NS",
+        # ⚠ Scalars, unused: `set_resolver` supersedes both for every row. Kept
+        # non-empty because BoundarySpec requires them and an empty string would
+        # read as "no set" rather than "resolved per row".
+        source_set="nova-scotia-municipal-districts",
+        id_prefix="nova-scotia-municipal-districts",
+        set_resolver=_ns_set_for,
+        authority="nova-scotia-municipal-affairs",
+        boundaries_version="2023",
+        # Ruling A10.4 — the municipal election the boundaries first governed. Every
+        # `reg_num` in the file is a 2023 N.S. Reg., and NS voted 2024-10-19.
+        effective_from=date(2024, 10, 19),
+        name_field="poll_dist",
+        name_builder=_ns_label,
+        authority_id_field="poll_dist",
+        boundary_kind="district",
+        row_filter=lambda p: (p.get("mu_code") or "").strip().upper() not in ("HX", "CB"),
+        expect_districts=210,
+        expect_sets=47,
+        # Independently known: Truro numbers 3 wards, Wolfville is at large, New
+        # Glasgow 3, Kings County 9. A set at 0 means _slugify_mun produced a slug
+        # nobody expected.
+        expect_per_set={
+            "truro-town-districts": 3,
+            "wolfville-town-districts": 1,
+            "new-glasgow-town-districts": 3,
+            "kings-districts": 9,
+            "west-hants-districts": 11,
+            # ★ The town/county pair, asserted explicitly: 10 districts for the
+            # County of Antigonish and 1 for the Town of Antigonish. Merged, they
+            # would have read as a plausible 11.
+            "antigonish-districts": 10,
+            "antigonish-town-districts": 1,
+        },
+        authority_id_unique_across_sets=True,
+        licence="ns-ogl",
+        notes="data.novascotia.ca gcep-xeci; Halifax + Cape Breton excluded by row_filter"
+    ),
+    "new-brunswick-municipal": BoundarySpec(
+        jurisdiction="new-brunswick-municipal",
+        source_path="municipal-atlantic/current/nb-lg-wards-quartiers.geojson",
+        src_epsg=4326,
+        level="municipal",
+        province_territory="NB",
+        # Unused — `set_resolver` supersedes both per row.
+        source_set="new-brunswick-municipal-wards",
+        id_prefix="new-brunswick-municipal-wards",
+        set_resolver=_nb_set_for,
+        authority="service-new-brunswick-geonb",
+        boundaries_version="2023",
+        # Ruling A10.4 — the municipal election these boundaries first governed. The
+        # 2023 Local Governance Reform restructured every local government in the
+        # province, and the first election under the new structure was 2022-11-28.
+        # ⚠ The file carries no in-force date of its own; this is the reform's, and
+        # `4-Lincoln` (Lincoln annexed into Fredericton by the reform) is the
+        # evidence that this generation is the post-reform one.
+        effective_from=date(2022, 11, 28),
+        # ⛔ NOT `name_e` — see trap 1. `name_builder` supplies the label.
+        name_field="ward",
+        name_builder=_nb_label,
+        authority_id_field="ward",
+        boundary_kind="district",
+        # ⚠ 312, not the 330 features in the file. 18 features merge into 7 wards,
+        # and every one of those is a RURAL DISTRICT — which is exactly right: a
+        # rural district is the unincorporated remainder between local governments,
+        # so one of its wards is genuinely several disconnected pieces (Southeast
+        # RD's at-large "ward" is 7 of them). Multi-part merging is the loader doing
+        # its job, and `parts_merged` reports it.
+        expect_districts=312,
+        # 78 local governments + 15 rural districts. ⚠ Not 94: a naive count of
+        # distinct `elect_comm` values gives 16 rural districts because the null row
+        # counts as its own, when it is in fact Restigouche's second ward.
+        expect_sets=93,
+        expect_per_set={
+            # ★ 13, not 12 — the assertion that proves we picked up the reform.
+            "fredericton-wards": 13,
+            "moncton-wards": 4,
+            "saint-john-wards": 4,
+            # The four LG/RD name collisions, asserted on both sides so a merge
+            # cannot pass as a plausible total.
+            "restigouche-rural-district-wards": 2,
+        },
+        licence="ogl-nb",
+        notes="gnb.socrata.com 7zs3-pcvk; publisher of record GeoNB"
     ),
 }

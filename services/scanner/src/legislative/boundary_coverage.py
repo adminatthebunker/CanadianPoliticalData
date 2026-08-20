@@ -335,6 +335,53 @@ async def check_municipal_integrity(db: Database) -> list[MunicipalProblem]:
             sum(r["n"] for r in rows),
         ))
 
+    # ── Live duplicate generations ──────────────────────────────────────
+    # ⛔ One constituency_id live under two `boundaries_version`s. Both satisfy
+    # the effective-date window, so every point-in-polygon over that area returns
+    # the district TWICE — and because the ids are identical, the roster still
+    # resolves and nothing else looks wrong.
+    #
+    # ★ This is how a load and a cutover come apart. The upsert key is
+    # (constituency_id, boundaries_version), so loading a new generation over an
+    # existing one INSERTS beside it rather than replacing it; retiring the old
+    # one is the migration's job, deliberately, because only a migration knows a
+    # generation is superseded. Miss that step and the result is silent
+    # double-counting — the 0084 defect, found by hand then and worth never
+    # finding by hand again.
+    #
+    # ⚠ Scans every level, not just municipal: the failure mode is a property of
+    # the versioning scheme, not of municipal data.
+    rows = await db.fetch(
+        """
+        WITH live AS (
+          SELECT level, source_set, constituency_id, boundaries_version
+            FROM constituency_boundaries
+           WHERE effective_from <= CURRENT_DATE
+             AND (effective_to IS NULL OR effective_to >= CURRENT_DATE)
+        )
+        SELECT level, source_set, count(*) AS ids,
+               string_agg(DISTINCT boundaries_version, ' + '
+                          ORDER BY boundaries_version) AS versions
+          FROM (SELECT level, source_set, constituency_id, boundaries_version
+                  FROM live) l
+         GROUP BY level, source_set, constituency_id
+        HAVING count(*) > 1
+        """
+    )
+    if rows:
+        by_set: dict = {}
+        for r in rows:
+            key = (r["source_set"], r["versions"])
+            by_set[key] = by_set.get(key, 0) + 1
+        out.append(MunicipalProblem(
+            "duplicate-generation",
+            "constituency_ids live under two generations at once — a cutover "
+            "migration must retire the superseded one: "
+            + ", ".join(f"{ss} ({v}) ×{n}" for (ss, v), n in
+                        sorted(by_set.items(), key=lambda t: -t[1])[:6]),
+            len(rows),
+        ))
+
     # ── Council cohesion ────────────────────────────────────────────────
     # ⛔ A member must sit on a polygon that TOUCHES one of their colleagues'.
     # Municipal district slugs are nowhere near unique — `district-1` exists in
