@@ -4089,6 +4089,38 @@ def cmd_ingest_nar_postcodes(
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 
 
+@cli.command("ingest-qc-municipal-roster")
+@click.option("--csv-path", type=str,
+              default="/data/rosters/quebec-municipal/current/Elec2025_Mun.csv",
+              help="Staged MAMH general-election results CSV.")
+@click.option("--dry-run", is_flag=True, help="Report without writing.")
+@click.pass_context
+def cmd_ingest_qc_municipal_roster(ctx, csv_path: str, dry_run: bool) -> None:
+    """Rebuild the Québec municipal roster from the 2025 election results.
+
+    ⛔ Replaces the Open North municipal roster for Québec, which is a full
+    election cycle stale — it still served Valérie Plante as mayor of Montréal
+    9½ months after she left office. Open North is up but unmaintained, so
+    re-running `ingest-all-councils` cannot fix it.
+
+    Source: Ministère des Affaires municipales, CC-BY, one province-wide CSV.
+    """
+    from .legislative.qc_municipal_roster import ingest_qc_municipal_roster
+
+    async def _wrap(db: Database) -> None:
+        st = await ingest_qc_municipal_roster(db, csv_path=csv_path, dry_run=dry_run)
+        console.print(
+            f"[green]ingest-qc-municipal-roster[/green]: "
+            f"councils={st.municipalities} winners={st.winners} "
+            f"inserted={st.inserted} rekeyed={st.rekeyed} updated={st.updated} "
+            f"deactivated={st.deactivated} attached={st.attached} "
+            f"unattached={st.unattached}"
+            + (" [yellow](dry run)[/yellow]" if dry_run else "")
+        )
+        _print_problems(st.problems)
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
 @cli.command("check-boundary-coverage")
 @click.option("--no-area", is_flag=True,
               help="Skip the area-drift half. Use immediately after a "
@@ -4105,7 +4137,9 @@ def cmd_check_boundary_coverage(ctx: click.Context, no_area: bool) -> None:
     means duplicate rows. Exits non-zero on any breach so the scheduled run
     surfaces as a FAILED job in the admin panel.
     """
-    from .legislative.boundary_coverage import check_boundary_coverage
+    from .legislative.boundary_coverage import (
+        check_boundary_coverage, check_municipal_integrity,
+    )
 
     async def _wrap(db: Database) -> None:
         rows = await check_boundary_coverage(db, check_area=not no_area)
@@ -4113,23 +4147,37 @@ def cmd_check_boundary_coverage(ctx: click.Context, no_area: bool) -> None:
         for r in rows:
             marker = "[red]BREACH[/red]" if r.breached else "[green]ok[/green]"
             vac = f" vacancies={r.vacancies}" if r.vacancies else ""
+            frz = (f" [yellow]frozen={r.roster_frozen}"
+                   f"@{r.roster_stale_days}d[/yellow]") if r.roster_frozen else ""
             console.print(
                 f"{marker} {r.level}/{r.jurisdiction}: districts={r.districts} "
-                f"seats={r.seats} members={r.actives} attached={r.attached}{vac}"
+                f"seats={r.seats} members={r.actives} attached={r.attached}{vac}{frz}"
             )
             for b in r.breaches:
                 console.print(f"[red]    - {b}[/red]")
+        # ⚠ Municipal is checked PER SEAT, not per polygon — a council is
+        # mayors + ward councillors + at-large councillors + boroughs, so
+        # `districts == seats` has no municipal analogue. See the module.
+        muni = await check_municipal_integrity(db)
+        for m in muni:
+            console.print(f"[red]BREACH[/red] municipal/{m.kind} ×{m.count}: {m.detail}")
+        if not muni:
+            console.print("[green]ok[/green] municipal: per-seat integrity clean")
+
         total_vac = sum(r.vacancies for r in rows)
         console.print(
             f"check-boundary-coverage: jurisdictions={len(rows)} "
-            f"breaches={len(breaches)} vacancies={total_vac}"
+            f"breaches={len(breaches)} vacancies={total_vac} "
+            f"municipal_problems={len(muni)} "
+            f"roster_frozen={sum(r.roster_frozen for r in rows)}"
         )
-        if breaches:
+        if breaches or muni:
             raise SystemExit(
                 f"check-boundary-coverage: {len(breaches)} jurisdiction(s) "
-                f"breached: {[r.level + '/' + r.jurisdiction for r in breaches]}. "
-                f"A district count that matches its seat count proves nothing on "
-                f"its own — read the per-jurisdiction lines above."
+                f"breached {[r.level + '/' + r.jurisdiction for r in breaches]} "
+                f"and {len(muni)} municipal problem class(es) "
+                f"{[m.kind for m in muni]}. A district count that matches its "
+                f"seat count proves nothing on its own — read the lines above."
             )
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 

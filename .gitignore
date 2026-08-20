@@ -101,3 +101,10 @@ mkdocs/site/*
 data/boundaries/**
 !data/boundaries/**/
 !data/boundaries/**/PROVENANCE.md
+
+# Staged roster source files. Same pattern and same reason as data/boundaries
+# above: exclude the CONTENTS, keep the directories traversable, and keep the
+# PROVENANCE.md committed as the audit trail.
+data/rosters/**
+!data/rosters/**/
+!data/rosters/**/PROVENANCE.md

@@ -283,6 +283,35 @@ async def _upsert_politician(db: Database, rep: dict, set_def: OpenNorthSet) -> 
 
     row = await db.fetchrow(
         """
+        -- ⛔ THIS UPSERT MUST NOT OVERWRITE FEDERAL OR PROVINCIAL CUTOVER STATE.
+        --
+        -- Two columns were doing real damage every time the weekly roster
+        -- refresh ran, on 2026-08-19 at 23:40 across the whole suite:
+        --
+        --   constituency_id — rewritten from the rep's Open North boundary_url,
+        --     i.e. the OLD mirror id. Those boundaries were deleted by the
+        --     cutovers, so the write silently detached members from geometry
+        --     that exists: BC fell from 93 attached to 52, NB from 49 to 22.
+        --
+        --   is_active — forced true for everyone in the feed, resurrecting
+        --     members we had deliberately retired. Newfoundland went back to 48
+        --     sitting MHAs for 40 seats and Yukon to 32 for 21 — the defeated
+        --     cohorts from the 2025 elections, which Open North still lists
+        --     because it is a full cycle stale.
+        --
+        -- ★ The mirror is no longer authoritative for who sits or for which
+        -- district they sit in. It is still the only roster source we have for
+        -- most jurisdictions, so the ingest still runs — it just may no longer
+        -- overwrite those two decisions above the municipal level. Attachment is
+        -- done by the cutover migrations against authoritative slugs; retirement
+        -- is a deliberate act recorded in politician_changes.
+        --
+        -- ⚠ Consequence, accepted: Open North can no longer REACTIVATE a
+        -- provincial member either. A genuinely re-elected former member needs a
+        -- deliberate reactivation. Given the feed served Valérie Plante as mayor
+        -- of Montréal 9½ months after she left office, that is the safer default,
+        -- and `check-boundary-coverage` reports any resulting shortfall as a
+        -- vacancy rather than hiding it.
         INSERT INTO politicians (
             source_id, name, first_name, last_name, gender, party, elected_office,
             level, province_territory, constituency_name, constituency_id,
@@ -296,7 +325,12 @@ async def _upsert_politician(db: Database, rep: dict, set_def: OpenNorthSet) -> 
             party = EXCLUDED.party,
             elected_office = EXCLUDED.elected_office,
             constituency_name = EXCLUDED.constituency_name,
-            constituency_id = EXCLUDED.constituency_id,
+            -- ⛔ constituency_id and is_active are NOT overwritten for federal
+            -- or provincial rows. See the block comment above this statement.
+            constituency_id = CASE
+              WHEN politicians.level = 'municipal' THEN EXCLUDED.constituency_id
+              ELSE COALESCE(politicians.constituency_id, EXCLUDED.constituency_id)
+            END,
             email = EXCLUDED.email,
             photo_url = EXCLUDED.photo_url,
             personal_url = EXCLUDED.personal_url,
@@ -304,7 +338,10 @@ async def _upsert_politician(db: Database, rep: dict, set_def: OpenNorthSet) -> 
             social_urls = EXCLUDED.social_urls,
             extras = EXCLUDED.extras,
             updated_at = now(),
-            is_active = true
+            is_active = CASE
+              WHEN politicians.level = 'municipal' THEN true
+              ELSE politicians.is_active
+            END
         RETURNING id
         """,
         source_id,
@@ -499,24 +536,53 @@ def _extract_websites(rep: dict) -> Iterable[tuple[str, str]]:
             yield u, _label_for(u, note or "related")
 
 
-async def _fetch_boundary(client: httpx.AsyncClient, set_def: OpenNorthSet, constituency_id: str) -> Optional[dict]:
+async def _fetch_boundary(
+    client: httpx.AsyncClient, set_def: OpenNorthSet, constituency_id: str
+) -> tuple[Optional[dict], Optional[str]]:
+    """Fetch one boundary. Returns `(geojson, failure_reason)`.
+
+    ⛔ RETURNS A REASON, NOT A BARE None — this is the Fort Erie defect.
+
+    `fort-erie-wards` holds 4 ward polygons against 6 sitting councillors, and
+    `/ward-2` and `/ward-4` were for a long time the only orphaned
+    `constituency_id`s in the entire table. The post-mortem blamed a projection
+    failure caught by `boundary_in_wgs84_bounds` and swallowed by the caller's
+    blanket `except Exception`. That is provably wrong: the four surviving wards
+    were inserted at 2026-04-14 03:10 UTC and the commit adding that CHECK landed
+    12h49m later, so the constraint did not exist yet.
+
+    The real cause was here. This function used to convert a 404 — or five
+    exhausted retries against a rate-limiting host — into `None`, and the caller
+    tested `if gj and gj.get("coordinates"):` with no `else`. Nothing raised, so
+    nothing was caught, logged or counted: a per-item upstream failure became a
+    silent absence that survived four months.
+
+    ★ Error handling only catches failures that are SIGNALLED. A function that
+    turns failure into a falsy return value routes around every handler above it.
+    """
     # constituency_id is "{boundary_set}/{slug}" produced by _constituency_id.
     if "/" not in constituency_id:
         constituency_id = f"{set_def.boundary_set}/{constituency_id}"
     url = f"{BASE}/boundaries/{constituency_id}/simple_shape"
     # Open North rate-limits aggressively; retry with backoff on 429/5xx.
+    last = "unknown"
     for attempt in range(5):
         try:
             r = await client.get(url)
             if r.status_code == 200:
-                return r.json()
+                return r.json(), None
             if r.status_code in (429, 502, 503, 504):
+                last = f"HTTP {r.status_code} after {attempt + 1} attempt(s)"
                 await asyncio.sleep(0.5 * (2 ** attempt))
                 continue
-            return None
-        except Exception:
+            # ⚠ A 404 here means the rep carries a boundary_url the boundary set
+            # does not actually serve — upstream inconsistency, not our bug, but
+            # it must be visible.
+            return None, f"HTTP {r.status_code}"
+        except Exception as exc:
+            last = f"{type(exc).__name__}: {exc}"
             await asyncio.sleep(0.5 * (2 ** attempt))
-    return None
+    return None, f"5 attempts exhausted ({last})"
 
 
 async def _upsert_boundary(db: Database, set_def: OpenNorthSet, constituency_id: str,
@@ -566,7 +632,45 @@ async def _upsert_boundary(db: Database, set_def: OpenNorthSet, constituency_id:
     )
 
 
+# ⛔ OPEN NORTH INGESTION IS RETIRED (operator decision, 2026-08-19).
+#
+# The Represent mirror is UP but unmaintained, and over one evening it undid the
+# boundary programme three separate ways:
+#
+#   1. resurrected 180 deleted boundary rows in QC and MB, putting both provinces
+#      back to two live generations with doubled point-in-polygon answers;
+#   2. retired a hand-verified sitting member three hours after she was added,
+#      because the feed has never heard of her;
+#   3. detached 726 members across 8 jurisdictions onto deleted mirror ids and
+#      resurrected the cohorts defeated in the 2025 elections.
+#
+# The underlying reason is not a bug in any one of those paths: the feed is a
+# full election cycle stale in places — it still served Valérie Plante as mayor
+# of Montréal 9½ months after she left office — while retaining write authority
+# over columns we had deliberately set from authoritative sources.
+#
+# ⚠ THIS FREEZES ROSTERS. Open North is still the source of record for roughly
+# 840 active federal and provincial rows. Nothing below is deleted; it simply
+# stops refreshing until a per-jurisdiction replacement exists (Québec municipal
+# was the first — see `legislative/qc_municipal_roster.py`). That staleness is
+# reported by `check-boundary-coverage` rather than left to be discovered.
+#
+# Set OPENNORTH_ALLOW_INGEST=1 to run one deliberately — for a one-off
+# comparison, or for a jurisdiction with no replacement yet where a stale refresh
+# still beats none.
+OPENNORTH_RETIRED_MESSAGE = (
+    "Open North ingestion is retired (2026-08-19). The Represent mirror is "
+    "unmaintained and was overwriting authoritative data: it resurrected deleted "
+    "boundaries, retired a sitting member it had never heard of, and detached 726 "
+    "members onto ids that no longer exist. Build a per-jurisdiction source "
+    "instead — see legislative/qc_municipal_roster.py for the pattern. To run "
+    "one anyway, set OPENNORTH_ALLOW_INGEST=1."
+)
+
+
 async def _ingest_set(db: Database, set_def: OpenNorthSet, limit: int) -> None:
+    if os.environ.get("OPENNORTH_ALLOW_INGEST") != "1":
+        raise RuntimeError(f"{OPENNORTH_RETIRED_MESSAGE} (set: {set_def.path})")
     async with httpx.AsyncClient(timeout=30, headers={"User-Agent": "CanadianPoliticalDataBot/1.0"}) as client:
         console.print(f"[cyan]Fetching {set_def.path}[/cyan]")
         reps = await _fetch_reps(client, set_def, limit)
@@ -580,6 +684,12 @@ async def _ingest_set(db: Database, set_def: OpenNorthSet, limit: int) -> None:
             bsem = asyncio.Semaphore(3)
             seen_ids: set[str] = set()
             seen_source_ids: set[str] = set()
+            # ⛔ Every boundary we failed to fetch, as (constituency_id, why).
+            # Politicians are upserted first and unconditionally while boundaries
+            # are a best-effort side-effect, so an unreported miss leaves a
+            # member pointing at a district that does not exist — which is
+            # precisely how Fort Erie lost two wards.
+            boundary_misses: list[tuple[str, str]] = []
 
             async def handle(rep: dict) -> None:
                 try:
@@ -587,20 +697,63 @@ async def _ingest_set(db: Database, set_def: OpenNorthSet, limit: int) -> None:
                     seen_source_ids.add(sid)
                     await _attach_websites(db, pid, rep)
                     cid = _constituency_id(rep, set_def)
+                    # ⛔ DO NOT WRITE FEDERAL OR PROVINCIAL BOUNDARIES HERE.
+                    #
+                    # This ingester writes boundaries as a side-effect of roster
+                    # ingest, keyed on `set_def.boundary_set` — the old
+                    # generation-suffixed names like
+                    # `quebec-electoral-districts-2017`. Every federal and
+                    # provincial jurisdiction was moved onto an authoritative
+                    # agency source in migrations 0064-0080, which DELETED those
+                    # mirrored rows.
+                    #
+                    # ★ Left unguarded, this silently undid that work. On
+                    # 2026-08-19 the scheduled daily ingests resurrected 124
+                    # Québec rows at 21:35 and 56 Manitoba rows at 21:40 — the
+                    # exact generations two cutover migrations had removed hours
+                    # earlier — putting both provinces back to two live
+                    # generations and doubling their point-in-polygon answers.
+                    # `check-boundary-coverage` caught it the same evening.
+                    #
+                    # `boundary_loader.py` owns federal and provincial geometry
+                    # now. Municipal is still mirrored from Open North and is the
+                    # only level this may write.
+                    if set_def.level != "municipal":
+                        cid = None
                     if cid and cid not in seen_ids:
                         seen_ids.add(cid)
                         async with bsem:
-                            gj = await _fetch_boundary(client, set_def, cid)
+                            gj, why = await _fetch_boundary(client, set_def, cid)
                             if gj and gj.get("coordinates"):
                                 await _upsert_boundary(
                                     db, set_def, cid,
                                     rep.get("district_name") or cid, gj)
+                            else:
+                                boundary_misses.append(
+                                    (cid, why or "empty geometry"))
                 except Exception as exc:
                     log.exception("ingest failed for %s: %s", rep.get("name"), exc)
                 finally:
                     progress.update(task, advance=1)
 
             await asyncio.gather(*(handle(r) for r in reps))
+
+        if boundary_misses:
+            # ⚠ Loud, itemised, and non-zero-exit. A boundary miss is not a
+            # cosmetic warning: the politician row has already been written and
+            # now points at nothing.
+            for cid, why in sorted(boundary_misses):
+                console.print(f"[red]  boundary MISSING[/red] {cid} — {why}")
+            raise RuntimeError(
+                f"{set_def.path}: {len(boundary_misses)} of {len(seen_ids)} "
+                f"boundaries failed to load "
+                f"({', '.join(c for c, _ in sorted(boundary_misses)[:5])}"
+                f"{'…' if len(boundary_misses) > 5 else ''}). "
+                f"Their politicians were already upserted and now reference a "
+                f"district with no polygon. Re-run; if a 404 persists, the "
+                f"upstream set does not serve that slug and it needs an "
+                f"authoritative source instead."
+            )
 
         # Only run retirement detection when we processed a *full* set (not a
         # --limit=N debugging run), otherwise every politician past the limit

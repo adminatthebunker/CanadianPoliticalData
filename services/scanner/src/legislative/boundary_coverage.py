@@ -92,6 +92,16 @@ class CoverageRow:
     orphans: int
     vacancies: int
     total_area: float
+    # ⚠ Reported, never a breach. Open North ingestion was retired 2026-08-19
+    # (migration 0087) because the mirror was actively corrupting authoritative
+    # data. Roughly 840 federal and provincial rows still SOURCE from it and now
+    # have no refresh path until a per-jurisdiction replacement is built. A
+    # frozen roster is wrong slowly and visibly; the mirror was wrong quickly and
+    # silently. This surfaces the freeze so it is a known cost rather than a
+    # surprise — making it a breach would just mean 12 red lines every week until
+    # the last replacement ships.
+    roster_frozen: int = 0
+    roster_stale_days: Optional[int] = None
     breaches: list[str] = field(default_factory=list)
 
     @property
@@ -168,6 +178,24 @@ async def check_boundary_coverage(
         """
     )
 
+    # How many sitting members still source from the retired Open North mirror,
+    # and how long since anything touched them.
+    frozen_by: dict[tuple[str, str], tuple[int, Optional[int]]] = {}
+    for f in await db.fetch(
+        """
+        SELECT level,
+               CASE WHEN level = 'federal' THEN 'CA'
+                    ELSE province_territory END AS ju,
+               count(*) AS n,
+               (now()::date - max(updated_at)::date) AS stale_days
+          FROM politicians
+         WHERE is_active AND level IN ('federal', 'provincial')
+           AND source_id LIKE 'opennorth:%'
+         GROUP BY 1, 2
+        """
+    ):
+        frozen_by[(f["level"], f["ju"])] = (f["n"], f["stale_days"])
+
     out: list[CoverageRow] = []
     for r in rows:
         level, ju = r["level"], r["ju"]
@@ -205,10 +233,129 @@ async def check_boundary_coverage(
                         f"recorded {exp_area:,.0f} — geometry or projection changed"
                     )
 
+        frozen = frozen_by.get((level, ju), (0, None))
         out.append(CoverageRow(
             jurisdiction=ju, level=level, seats=seats, districts=districts,
             actives=actives, attached=attached, orphans=orphans,
             vacancies=max(0, (seats or 0) - actives) if seats else 0,
-            total_area=float(r["total_area"] or 0), breaches=breaches,
+            total_area=float(r["total_area"] or 0),
+            roster_frozen=frozen[0], roster_stale_days=frozen[1],
+            breaches=breaches,
+        ))
+    return out
+
+
+# ── Municipal ────────────────────────────────────────────────────────────────
+#
+# ⛔ `districts == seats` HAS NO MUNICIPAL ANALOGUE and must not be attempted.
+# A council is not one-seat-one-polygon:
+#
+#   Fort Erie   6 ward polygons + 1 city polygon for 7 seats
+#   Vancouver   1 polygon for 18 seats — at-large is the BC statutory default,
+#               and that is complete, not broken
+#   Montréal    63 polygons for 65 seats, across three nested tiers
+#   Niagara     32 seats spread over 13 polygons belonging to OTHER councils
+#
+# What does hold is a per-SEAT rule, in two clauses:
+#
+#   1. Every sitting municipal politician with a constituency_id resolves to a
+#      live boundary row. (Fails today on exactly 2 — Fort Erie wards 2 and 4,
+#      the only orphans in the table, lost to a silent fetch failure in 2026-04.)
+#   2. A politician whose office is unambiguously CITY-WIDE sits on a
+#      `municipality` polygon, and a borough mayor sits on a `borough` polygon.
+#
+# ⚠ Clause 2 deliberately says nothing about `Councillor` / `Conseiller` /
+# `Regional Councillor`. Those are legitimately either tier — ward-elected in
+# most of Ontario and Québec, at-large across BC and in a dozen other councils —
+# so asserting on them would fire on correct data. Only the offices that CANNOT
+# be ward-elected are checked.
+
+# Offices that are city-wide by definition -> must sit on a `municipality` row.
+CITY_WIDE_OFFICES = (
+    "Mayor", "Maire", "Lord Mayor", "Maire de la Ville de Montréal",
+    "Deputy Mayor", "Councillor at Large", "Commissioner",
+    "Regional Chair", "Chair", "Warden", "Deputy Warden",
+)
+# Offices that are borough-level by definition -> must sit on a `borough` row.
+BOROUGH_OFFICES = ("Maire d'arrondissement",)
+
+
+@dataclass
+class MunicipalProblem:
+    kind: str
+    detail: str
+    count: int
+
+
+async def check_municipal_integrity(db: Database) -> list[MunicipalProblem]:
+    """Per-seat municipal checks. Empty list means clean."""
+    out: list[MunicipalProblem] = []
+
+    rows = await db.fetch(
+        """
+        SELECT p.name, p.elected_office, p.constituency_id
+          FROM politicians p
+         WHERE p.is_active AND p.level = 'municipal'
+           AND p.constituency_id IS NOT NULL
+           AND NOT EXISTS (SELECT 1 FROM constituency_boundaries b
+                            WHERE b.constituency_id = p.constituency_id)
+         ORDER BY p.constituency_id
+        """
+    )
+    if rows:
+        out.append(MunicipalProblem(
+            "orphaned",
+            "sitting members pointing at a boundary that does not exist: "
+            + ", ".join(f"{r['name']} ({r['constituency_id']})" for r in rows[:6]),
+            len(rows),
+        ))
+
+    rows = await db.fetch(
+        """
+        SELECT p.elected_office, b.boundary_kind, count(*) AS n
+          FROM politicians p
+          JOIN constituency_boundaries b ON b.constituency_id = p.constituency_id
+         WHERE p.is_active AND p.level = 'municipal'
+           AND ( (p.elected_office = ANY($1::text[])
+                  AND b.boundary_kind IS DISTINCT FROM 'municipality')
+              OR (p.elected_office = ANY($2::text[])
+                  AND b.boundary_kind IS DISTINCT FROM 'borough') )
+         GROUP BY 1, 2 ORDER BY 3 DESC
+        """,
+        list(CITY_WIDE_OFFICES), list(BOROUGH_OFFICES),
+    )
+    if rows:
+        out.append(MunicipalProblem(
+            "wrong-tier",
+            "; ".join(
+                f"{r['elected_office']} on a "
+                f"{r['boundary_kind'] or 'NULL'} polygon ×{r['n']}"
+                for r in rows[:6]
+            ),
+            sum(r["n"] for r in rows),
+        ))
+
+    # ⚠ Near-identical overlapping polygons make a smallest-first lookup
+    # planner-dependent — the Peel defect, fixed in 0083. Cheap to re-check.
+    dupes = await db.fetchval(
+        """
+        SELECT count(*) FROM constituency_boundaries a
+          JOIN constituency_boundaries b
+            ON b.constituency_id > a.constituency_id
+           AND b.level = 'municipal' AND b.boundary_kind = 'district'
+           AND ST_Intersects(a.boundary, b.boundary)
+           AND ST_Area(ST_Intersection(a.boundary, b.boundary))
+                 / least(ST_Area(a.boundary), ST_Area(b.boundary)) >= 0.98
+           AND ST_Area(a.boundary) / ST_Area(b.boundary) BETWEEN 0.98 AND 1.02
+         WHERE a.level = 'municipal' AND a.boundary_kind = 'district'
+        """,
+        timeout=300,
+    )
+    if dupes:
+        out.append(MunicipalProblem(
+            "duplicate-geometry",
+            "pairs of near-identical municipal district polygons — a "
+            "smallest-first lookup cannot choose deterministically between them",
+            int(dupes),
         ))
     return out

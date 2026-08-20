@@ -249,6 +249,48 @@ async def detect_retirements(
     set_slug = set_def.path.rstrip("/").split("/")[-1]
     prefix = f"opennorth:{set_slug}:"
 
+    # ⛔ SEAT-COUNT FLOOR GATE — do not retire a chamber below its seat count.
+    #
+    # This function treats the Open North feed as ground truth for who exists:
+    # anything active under this prefix and absent from the feed is retired. That
+    # is right when the feed is complete and catastrophic when it is not.
+    #
+    # ★ It fired for real on 2026-08-19. Jennifer Flett won The Pas-Kameesak in a
+    # by-election on 2026-07-22, was added to the roster at 18:50 after the
+    # boundary work found the seat empty, and was RETIRED by the scheduled
+    # `ingest-mb-mlas` at 21:40 — three hours later — purely because Open North
+    # has never heard of her. Manitoba went to 56 sitting members against 57
+    # seats, and the same fate was queued for the Nova Scotia and PEI by-election
+    # members behind her in the schedule.
+    #
+    # ⚠ Using the source_id Open North *will* mint was the right call for the
+    # INSERT path (it makes the next real ingest an update rather than a
+    # duplicate) and it is exactly what walks a hand-verified row into this
+    # sweep. Both things are true; the fix belongs here.
+    #
+    # The same upstream is also a full election cycle stale in places — it still
+    # served Valérie Plante as mayor of Montréal 9½ months after she left office
+    # — so "absent from the feed" is weak evidence of anything.
+    #
+    # Mirrors SK_RETIREMENT_ROSTER_FLOOR in legislative/sk_mlas.py, generalised
+    # to read the seat count rather than hardcode one.
+    seats = None
+    if set_def.level == "provincial" and set_def.province:
+        seats = await db.fetchval(
+            "SELECT seats FROM jurisdiction_sources WHERE jurisdiction = $1",
+            set_def.province,
+        )
+    elif set_def.level == "federal":
+        seats = 343
+    if seats and len(seen_source_ids) < seats:
+        log.warning(
+            "skipping retirement detection for %s: the feed returned %d "
+            "members for a %d-seat chamber, so absence from it is not evidence "
+            "of retirement",
+            set_def.path, len(seen_source_ids), seats,
+        )
+        return
+
     rows = await db.fetch(
         """
         SELECT id, source_id, name, party, elected_office, level,

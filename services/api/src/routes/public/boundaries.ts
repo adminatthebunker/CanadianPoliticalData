@@ -111,6 +111,9 @@ interface BoundaryMetaRow {
   effective_from: string | null;
   effective_to: string | null;
   boundaries_version: string | null;
+  // The municipal tier: district | borough | municipality. NULL for
+  // federal/provincial rows, which are all 'district'.
+  boundary_kind?: string | null;
 }
 
 interface BoundaryWithGeoJsonRow extends BoundaryMetaRow {
@@ -131,11 +134,34 @@ export async function lookupBoundariesAtPoint(
   federal: ReturnType<typeof shapeBoundaryWithGeoJson> | null;
   provincial: ReturnType<typeof shapeBoundaryWithGeoJson> | null;
   municipal: ReturnType<typeof shapeBoundaryWithGeoJson> | null;
+  /**
+   * The municipal polygons this point falls in, split by tier.
+   *
+   * ⛔ `municipal` above can only hold ONE polygon, and that is a real
+   * limitation rather than a simplification: `level` is 3-valued
+   * (federal/provincial/municipal), but municipal geography NESTS. Measured
+   * over 3,000 sampled postcodes, 79% of covered addresses sit inside two or
+   * more municipal polygons and 21% inside three or more.
+   *
+   * A Plateau address in Montréal is inside its district (2.4 km²), its borough
+   * (8.1 km²) and the city (366 km²) — three polygons with three different
+   * officials: a city councillor, a borough mayor and the mayor of Montréal.
+   * Returning only the smallest silently drops the other two.
+   *
+   * `municipal` is kept as the most specific polygon so existing callers are
+   * unaffected; this field exposes the full nest. `boundary_kind` is the column
+   * that has always named these tiers and which nothing read until now.
+   */
+  municipal_tiers: {
+    district: ReturnType<typeof shapeBoundaryWithGeoJson> | null;
+    borough: ReturnType<typeof shapeBoundaryWithGeoJson> | null;
+    municipality: ReturnType<typeof shapeBoundaryWithGeoJson> | null;
+  };
 }> {
   const lvls = levels && levels.length > 0 ? levels : (LEVELS as readonly string[]);
   const rows = await query<BoundaryWithGeoJsonRow>(
     `SELECT constituency_id, name, level, province_territory, source_set,
-            area_sqkm,
+            area_sqkm, boundary_kind,
             ST_X(centroid) AS centroid_lng,
             ST_Y(centroid) AS centroid_lat,
             effective_from, effective_to, boundaries_version,
@@ -146,14 +172,20 @@ export async function lookupBoundariesAtPoint(
         AND ST_Contains(boundary, ST_SetSRID(ST_MakePoint($2, $3), 4326))
       -- Smallest-first, so the per-level pick below is the most specific
       -- polygon rather than whichever row the planner returned last.
-      ORDER BY level, area_sqkm ASC NULLS LAST`,
+      -- ⚠ constituency_id is the final tiebreaker: two polygons of identical
+      -- area would otherwise order arbitrarily, and the answer could change
+      -- between identical requests. Peel used to do exactly that (its ward
+      -- copies matched the city ones to 4 decimal places) until migration 0083
+      -- removed the duplicates; the tiebreaker keeps it from recurring.
+      ORDER BY level, area_sqkm ASC NULLS LAST, constituency_id`,
     [lvls as string[], lng, lat],
   );
-  const out: {
-    federal: ReturnType<typeof shapeBoundaryWithGeoJson> | null;
-    provincial: ReturnType<typeof shapeBoundaryWithGeoJson> | null;
-    municipal: ReturnType<typeof shapeBoundaryWithGeoJson> | null;
-  } = { federal: null, provincial: null, municipal: null };
+  const out = {
+    federal: null,
+    provincial: null,
+    municipal: null,
+    municipal_tiers: { district: null, borough: null, municipality: null },
+  } as Awaited<ReturnType<typeof lookupBoundariesAtPoint>>;
   // Keep the FIRST row per level — i.e. the smallest containing polygon.
   //
   // This previously overwrote, so the survivor was whichever row came last and
@@ -176,6 +208,19 @@ export async function lookupBoundariesAtPoint(
   for (const row of rows) {
     if (row.level === "federal" || row.level === "provincial" || row.level === "municipal") {
       if (out[row.level] === null) out[row.level] = shapeBoundaryWithGeoJson(row);
+    }
+    // Municipal additionally fans out by tier. Rows arrive smallest-first, so
+    // the first of each kind is again the most specific — which matters for
+    // `municipality`, where a lower-tier city polygon and an upper-tier region
+    // (Peel, Niagara, Waterloo) are both kind='municipality' and the city is
+    // the one the caller means.
+    if (row.level === "municipal") {
+      const k = row.boundary_kind;
+      if (k === "district" || k === "borough" || k === "municipality") {
+        if (out.municipal_tiers[k] === null) {
+          out.municipal_tiers[k] = shapeBoundaryWithGeoJson(row);
+        }
+      }
     }
   }
   return out;
