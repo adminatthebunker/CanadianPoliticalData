@@ -217,6 +217,16 @@ class BoundarySpec:
     # Tracadie and "At-Large / Général" in sixteen bodies. Reporting those as
     # duplicates buries a real finding under 300 lines of non-findings.
     authority_id_unique_across_sets: bool = False
+    # ⚠ Which held source_set `--compare` measures against, when it is not this
+    # spec's own. Municipal comparisons are scoped to the set (see
+    # `held_scope`), which is what makes them meaningful — but that scoping
+    # blocks the one case where the set name itself is what is changing.
+    #
+    # Toronto is held as `toronto-wards-2018`, generation baked into the set
+    # name, and this spec loads it as `toronto-wards` + version `2018`. Without
+    # this the comparison reports held=0 and every ward as new, turning a cutover
+    # check into no check at all.
+    compare_held_source_set: Optional[str] = None
     licence: Optional[str] = None
     notes: str = ""
 
@@ -893,7 +903,8 @@ async def compare_boundaries(
             # comparison into no comparison.
             held_scope = ("AND source_set = $3" if spec.level == "municipal"
                           and not spec.set_resolver else "")
-            held_args = ([spec.source_set] if held_scope else [])
+            held_args = ([spec.compare_held_source_set or spec.source_set]
+                         if held_scope else [])
             # Same grouping the loader uses — filter, dissolve, accumulate parts.
             # If compare grouped differently, a clean result would not predict
             # what the load writes.
@@ -1338,6 +1349,35 @@ def _calgary_label(props: dict) -> str | None:
 # Licence - Prince Edward Island" on a Manitoba dataset, a misconfigured picker.
 # Recorded as unresolved rather than as OGL-PEI, which would be a false
 # provenance claim.
+
+
+# Toronto wards — City of Toronto open data (CKAN), dataset `city-wards`.
+#
+# ⓘ The only Ontario municipality in the corpus with a recorded source URL, and
+# it is CKAN rather than the ArcGIS FeatureServer archetype the other ~47 use.
+#
+# ★ SOURCE_SET RE-KEY. We hold these as `toronto-wards-2018`, which puts the
+# generation in the SET NAME — the thing rule 5 exists to prevent, and the same
+# defect the NB and BC provincial cutovers had to unpick. The generation belongs
+# in `boundaries_version`, where a future ward-model change (Toronto's has been
+# litigated before) is a new version rather than a new set and a new public URL.
+# Migration 0095 re-keys the held rows and the roster.
+#
+# ⛔ THE IN-FORCE DATE IS NOT THE FILE'S. Every feature carries
+# `DATE_EFFECTIVE = 2018-08-07T14:11:06`, which is when the record was created in
+# Toronto's GIS — and it PRECEDES the Royal Assent of the statute that created
+# the 25-ward model (the Better Local Government Act, 2018, S.O. 2018 c. 11,
+# assented 2018-08-14). A metadata date that predates the law it supposedly
+# reflects is a clean illustration of why A2 exists.
+#
+# Per A10.4 the municipal in-force date is the election these wards first
+# governed: 2018-10-22.
+#
+# ⚠ `DATE_EXPIRY = 3000-01-01` is a sentinel, not a date. Left as
+# `effective_to = None`.
+#
+# ⚠ Licence: CKAN reports `license_title: None` / "License not specified".
+# Recorded, not treated as a gate.
 
 
 SPECS: dict[str, BoundarySpec] = {
@@ -3073,5 +3113,24 @@ SPECS: dict[str, BoundarySpec] = {
         expect_districts=15,
         licence="declared-ogl-pei-on-a-manitoba-dataset-unresolved",
         notes="data.winnipeg.ca t4cg-yaxs; prior generation mp2r-jeav"
+    ),
+    "toronto-wards": BoundarySpec(
+        jurisdiction="toronto-wards",
+        source_path="municipal-ontario/current/toronto-city-wards-4326.geojson",
+        src_epsg=4326,
+        level="municipal",
+        province_territory="ON",
+        source_set="toronto-wards",
+        id_prefix="toronto-wards",
+        authority="city-of-toronto",
+        boundaries_version="2018",
+        effective_from=date(2018, 10, 22),
+        name_field="AREA_NAME",
+        authority_id_field="AREA_SHORT_CODE",
+        boundary_kind="district",
+        expect_districts=25,
+        compare_held_source_set="toronto-wards-2018",
+        licence="unspecified-on-ckan",
+        notes="open.toronto.ca dataset city-wards, resource city-wards-data-4326.geojson"
     ),
 }
