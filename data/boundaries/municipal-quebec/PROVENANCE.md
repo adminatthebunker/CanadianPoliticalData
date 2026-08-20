@@ -39,3 +39,45 @@ dossier offering five dated generations.
   See the dossier's reconciliation section.
 - Files are uncompressed, unsimplified GeoJSON — 6.9 MB for 58 features. Budget accordingly if
   harvesting all 24 Québec sets in one run.
+
+## Données Québec district files — added 2026-08-20
+
+All CC-BY, fetched with a browser User-Agent (⚠ `donnees.montreal.ca` 403s a bare
+curl; the Données Québec catalogue API does not, so a harvester reads the catalogue
+fine and then fails on every download).
+
+| file | bytes | sha256 | source |
+|---|---:|---|---|
+| `laval-districts-2025.geojson` | 367510 | `2de4bd5ec55fa902…` | see below |
+| `quebec-city-districts-2025.geojson` | 599682 | `4bc4044bb4bcaa01…` | see below |
+| `longueuil-districts-2025.geojson` | 199744 | `bf170bbadf905b72…` | see below |
+
+- **Laval** — `donneesquebec.ca` package
+  `limites-des-districts-electoraux-des-dernieres-elections-municipales`,
+  resource `limite-district-electoral.geojson`, package modified 2026-05-20.
+  **22 districts**; CRS declared `urn:ogc:def:crs:OGC:1.3:CRS84` (WGS84, lon/lat).
+  Fields `NOM`, `NUMERO`, `CONSEILLER`, `TEL_CELL`, `COURRIEL`.
+  ★ Laval redistricted 20 → 22 for 2025-11-02, and **the seven new district names
+  are exactly the seven councillors that could not attach** — roster from MAMH,
+  map from the city, two bodies agreeing. Loaded (migration 0099).
+
+- **Ville de Québec** — package `vque_43`, resource `vdq-districtelectoral.geojson`,
+  **resource modified 2026-08-18**, the freshest municipal source in the corpus.
+  **21 districts**, fields `ID`, `NOM`, `PARTI`, `CONSEILLER`. No `crs` member →
+  RFC 7946 WGS84.
+  ⛔ Only TWO of its five "new" districts are new; three are the same district with
+  its ARTICLE restored (`plateau` → `le-plateau`, `pointe-de-sainte-foy` →
+  `la-pointe-de-sainte-foy`, `chute-montmorency-seigneurial` →
+  `la-chute-montmorency-seigneurial`). Loaded (0099), which re-keys those three.
+
+- **Longueuil** — package `districts-electoraux-longueuil`, resource
+  `districtelectoral.json`. ⛔ **FETCHED AND DELIBERATELY NOT LOADED.** The resource
+  is dated **2024-03-01** and holds **15 districts whose slugs are byte-identical to
+  the 15 we already have**, while Longueuil's 2025 roster names six districts that
+  exist in neither. The city has not published its post-redistribution map. Staged so
+  the next person does not re-fetch it to reach the same conclusion; its six
+  councillors stay unattached rather than being forced onto a superseded map.
+
+ⓘ **All three files name the sitting councillor** (`CONSEILLER`), as Calgary,
+Edmonton, Winnipeg and Halifax do. With Open North retired, municipal boundary files
+are a roster source and not only a geometry source.

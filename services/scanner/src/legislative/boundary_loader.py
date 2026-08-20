@@ -3406,4 +3406,43 @@ SPECS: dict[str, BoundarySpec] = {
         licence="niagara-region-reference-use-disclaimer",
         notes="AGOL org WxiLK82TWf8W3O3f, VoterTool_data/FeatureServer/1"
     ),
+    "laval-districts": BoundarySpec(
+        jurisdiction="laval-districts",
+        source_path="municipal-quebec/current/laval-districts-2025.geojson",
+        src_epsg=4326,
+        level="municipal",
+        province_territory="QC",
+        source_set="laval-districts",
+        id_prefix="laval-districts",
+        authority="ville-de-laval",
+        boundaries_version="2025",
+        effective_from=date(2025, 11, 2),
+        name_field="NOM",
+        authority_id_field="NUMERO",
+        boundary_kind="district",
+        expect_districts=22,
+        licence="cc-by-4.0",
+        notes="donneesquebec.ca limites-des-districts-electoraux-des-dernieres-elections-municipales"
+    ),
+    "quebec-city-districts": BoundarySpec(
+        jurisdiction="quebec-city-districts",
+        source_path="municipal-quebec/current/quebec-city-districts-2025.geojson",
+        src_epsg=4326,
+        level="municipal",
+        province_territory="QC",
+        # ⚠ The existing set holds Québec's 5 BOROUGH polygons too, under
+        # `quebec-boroughs/` ids. This spec loads districts only; the boroughs are
+        # untouched and keep their own generation.
+        source_set="quebec-districts",
+        id_prefix="quebec-districts",
+        authority="ville-de-quebec",
+        boundaries_version="2025",
+        effective_from=date(2025, 11, 2),
+        name_field="NOM",
+        authority_id_field="ID",
+        boundary_kind="district",
+        expect_districts=21,
+        licence="cc-by-4.0",
+        notes="donneesquebec.ca vque_43, resource vdq-districtelectoral.geojson"
+    ),
 }
