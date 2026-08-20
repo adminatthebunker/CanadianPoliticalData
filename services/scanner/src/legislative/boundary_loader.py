@@ -906,10 +906,6 @@ async def compare_boundaries(
             # changed (`…-districts-2018` vs `…-districts`), and scoping by
             # source_set would report every district as new — turning a cutover
             # comparison into no comparison.
-            held_scope = ("AND source_set = $3" if spec.level == "municipal"
-                          and not spec.set_resolver else "")
-            held_args = ([spec.compare_held_source_set or spec.source_set]
-                         if held_scope else [])
             # Same grouping the loader uses — filter, dissolve, accumulate parts.
             # If compare grouped differently, a clean result would not predict
             # what the load writes.
@@ -919,6 +915,23 @@ async def compare_boundaries(
             st.rejected = gst.rejected
             st.filtered_out = gst.filtered_out
             st.problems = gst.problems
+
+            # ⚠ Computed AFTER grouping: an aggregator's scope is the set list it
+            # just resolved, which does not exist until the features are grouped.
+            if spec.set_resolver:
+                # ⚠ An aggregator has no single set to scope to, but it does have
+                # the set LIST it just resolved. Without this the report counts
+                # every municipal row in the province as "held" and lists all of
+                # them as "we hold, authority does not" — 365 lines of Ajax and
+                # Belleville around 26 real findings.
+                held_scope = "AND source_set = ANY($3::text[])"
+                held_args = [sorted({r["source_set"] for r in grouped.values()})]
+            elif spec.level == "municipal":
+                held_scope = "AND source_set = $3"
+                held_args = [spec.compare_held_source_set or spec.source_set]
+            else:
+                held_scope = ""
+                held_args = []
             for cid, r in grouped.items():
                 await conn.execute(
                     f"""
@@ -1443,6 +1456,80 @@ def _regina_label(props: dict) -> str | None:
 # 'district' to 'borough' in migration 0082 and keep their ids. Ville-Marie's
 # borough polygon remains absent from our data entirely — the city publishes
 # borough limits as a separate dataset, which is follow-up work.
+
+
+# Niagara Region lower-tier ward boundaries — 44 wards across 12 municipalities,
+# from the Region's own AGOL service.
+#
+# ★ FOUND VIA `orgid:`, which is the technique that makes Ontario tractable.
+# A keyword search on a city's own AGOL host returns the GLOBAL index; scoping
+# with the org id from `/sharing/rest/portals/self` returns two results instead
+# of ten thousand.
+#
+#   org  WxiLK82TWf8W3O3f  "Niagara Region"
+#   svc  services1.arcgis.com/WxiLK82TWf8W3O3f/.../VoterTool_data/FeatureServer/1
+#
+# ⓘ This is the FIRST ONTARIO AGGREGATOR, and it matters beyond Niagara: Ontario
+# has no provincial ward layer because wards are created by local by-law, but an
+# upper-tier REGION publishing a voter tool covers its lower-tier municipalities
+# in one service. The same shape is worth probing for Peel, York, Durham,
+# Halton and Waterloo before treating those as individual discoveries.
+#
+# ⛔ VINTAGE IS THE OPEN QUESTION AND IS DELIBERATELY MEASURED, NOT ASSUMED. The
+# AGOL item's `modified` is 2018-10-17 — the 2018 municipal election — and
+# Ontario has voted since (2022, and again on 2026-10-26). Grimsby in particular
+# is on the list of Niagara municipalities with a recent ward review. Run
+# `--compare` against the held sets before promoting this beyond Fort Erie.
+#
+# ⚠ Licence: the item carries a real `licenseInfo` (a Niagara Region reference-
+# use disclaimer), unlike most of the municipal corpus. Recorded as such.
+
+_NIAGARA_SETS = {
+    # Our existing set names, where they differ from a plain slug.
+    "Niagara-on-the-Lake": "niagara-on-the-lake-wards",
+}
+
+# ⛔ ST. CATHARINES IS EXCLUDED, and for the same reason Halifax and Cape Breton
+# are excluded from the Nova Scotia aggregator: the aggregator is WORSE than what
+# we already hold.
+#
+# St. Catharines' six wards have NAMES — Grantham, Merritton, Port Dalhousie,
+# St. Andrew's, St. George's, St. Patrick's, two councillors each — and that is
+# the form the city uses and residents recognise. The Region's voter tool numbers
+# them 1..6.
+#
+# Loading it would mint six parallel numbered rows beside the six named ones and
+# orphan all twelve St. Catharines councillors, to replace a name with an
+# ordinal. Mapping number to name would need a crosswalk we do not have, and
+# guessing it from geometry is not a thing to do quietly.
+_EXCLUDED = {"St. Catharines"}
+
+
+def _niagara_set(props: dict) -> str | None:
+    mun = (props.get("MUNICIPALITY") or "").strip()
+    if not mun:
+        return None
+    return _NIAGARA_SETS.get(mun, slugify(mun) + "-wards")
+
+
+def _niagara_keep(props: dict) -> bool:
+    return (props.get("MUNICIPALITY") or "").strip() not in _EXCLUDED
+
+
+def _niagara_label(props: dict) -> str | None:
+    """
+    `WARD` -> display name.
+
+    ⚠ `WARD` is not always a number. Niagara Falls elects its council at large
+    and its single feature carries `WARD = "Councillor at Large"`, which a naive
+    f-string turns into the district "Ward Councillor at Large" — and, since the
+    slug follows the name, into the id `.../ward-councillor-at-large`. Anything
+    non-numeric is the at-large case.
+    """
+    w = str(props.get("WARD") or "").strip()
+    if not w:
+        return None
+    return f"Ward {w}" if w.isdigit() else "At Large"
 
 
 SPECS: dict[str, BoundarySpec] = {
@@ -3257,5 +3344,36 @@ SPECS: dict[str, BoundarySpec] = {
               "⚠ NOM_ARR names the parent borough on every district and is the "
               "hierarchy Montréal publishes — worth capturing when "
               "constituency_boundaries grows a parent column."
+    ),
+    "niagara-region-wards": BoundarySpec(
+        jurisdiction="niagara-region-wards",
+        source_path="municipal-ontario/current/niagara-region-ward-boundaries.geojson",
+        src_epsg=4326,
+        level="municipal",
+        province_territory="ON",
+        source_set="niagara-region-wards",
+        id_prefix="niagara-region-wards",
+        set_resolver=_niagara_set,
+        authority="niagara-region",
+        boundaries_version="2018",
+        # Ruling A10.4 — the municipal election these wards first governed.
+        effective_from=date(2018, 10, 22),
+        name_field="WARD",
+        name_builder=_niagara_label,
+        authority_id_field="WARD",
+        boundary_kind="district",
+        row_filter=_niagara_keep,
+        expect_districts=38,
+        expect_sets=11,
+        expect_per_set={
+            # ★ Six, and we hold four — this is the fix for the last two orphaned
+            # constituency_ids in the table (fort-erie-wards/ward-2 and /ward-4).
+            "fort-erie-wards": 6,
+            "welland-wards": 6,
+            "grimsby-wards": 4,
+            "lincoln-wards": 4,
+        },
+        licence="niagara-region-reference-use-disclaimer",
+        notes="AGOL org WxiLK82TWf8W3O3f, VoterTool_data/FeatureServer/1"
     ),
 }
