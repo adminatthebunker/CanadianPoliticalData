@@ -97,25 +97,36 @@ def main():
     if int(n_backup) == 0:
         sys.exit("refusing to proceed: rollback table is empty")
 
-    # ---- 1. corrected: patch meta.json ---------------------------------
-    patched = 0
-    for r in corrected:
+    # ---- 1. patch meta.json --------------------------------------------
+    # `corrected` gets a new offset. `confirmed` keeps its offset but is
+    # still stamped identity-verified: without that stamp a later
+    # `realign-media-offsets` run would recompute these with VAD and could
+    # overwrite a value identity already validated. The stamp is what
+    # makes that CLI's skip-guard work.
+    patched = stamped = 0
+    for r in corrected + confirmed:
         got = idx.get(r["vid"])
         if not got:
             print(f"  ! {r['vid']}: no meta.json on disk")
             continue
         path, j = got
-        j["caption_offset_s"] = r["recovered"]
+        is_correction = r["verdict"] == "corrected"
+        if is_correction:
+            j["align_offset_previous"] = j.get("caption_offset_s")
+            j["caption_offset_s"] = r["recovered"]
+            patched += 1
+        else:
+            stamped += 1
         j["align_method"] = "identity"
         j["identity_peak"] = r["peak"]
-        j["align_offset_previous"] = r.get("stored")
+        j["identity_verified_at"] = "2026-08-19"
         if args.apply:
             tmp = path + ".tmp"
             with open(tmp, "w") as fh:
                 json.dump(j, fh)
             os.replace(tmp, path)
-        patched += 1
-    print(f"meta.json patched: {patched}")
+    print(f"meta.json — offsets rewritten: {patched}, "
+          f"verified-in-place: {stamped}")
 
     def vid_list(rs):
         return ",".join("'https://www.youtube.com/watch?v=%s'" % r["vid"] for r in rs)

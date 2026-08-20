@@ -155,6 +155,38 @@ def measure_lag(audio, turns, clf) -> float:
     return best_lag
 
 
+_META_INDEX: dict | None = None
+
+
+def _cache_meta_for(video_url: str) -> dict | None:
+    """meta.json for a meeting, looked up by its YouTube URL.
+
+    Built by walking the media cache once — the per-meeting alternative
+    is a psql round-trip each, which at corpus scale is minutes of pure
+    latency.
+    """
+    global _META_INDEX
+    if _META_INDEX is None:
+        import re as _re
+        root_dir = os.environ.get(
+            "MEDIA_CACHE_DIR", os.path.join(HERE, "..", "..", "media-cache"))
+        _META_INDEX = {}
+        for root, _dirs, files in os.walk(root_dir):
+            if "meta.json" not in files:
+                continue
+            try:
+                with open(os.path.join(root, "meta.json")) as fh:
+                    j = json.load(fh)
+            except (OSError, json.JSONDecodeError):
+                continue
+            m = _re.search(r"v=([A-Za-z0-9_-]{11})", j.get("video_url", ""))
+            if m:
+                _META_INDEX[m.group(1)] = j
+    import re as _re2
+    m = _re2.search(r"v=([A-Za-z0-9_-]{11})", video_url or "")
+    return _META_INDEX.get(m.group(1)) if m else None
+
+
 def process_meeting(video_id: str, clf, cached_only: bool = False) -> str | None:
     """Embed all turns; cache npz. Returns cache path or None."""
     import numpy as np
@@ -305,14 +337,33 @@ def main():
         if p:
             caches[vid] = (p, url)
 
-    # Pooled enrollment across all meetings.
+    # Pooled enrollment. A meeting whose caption offset is wrong yields
+    # embeddings cut from the wrong moment — audio of some OTHER
+    # councillor filed under this one's name — so pooling it poisons the
+    # centroids for everyone. Prefer meetings whose alignment has been
+    # verified (meta.json align_method == "identity"); fall back to
+    # pooling everything if too few are verified to enrol from, which is
+    # the case on a corpus that has never been through realign_offsets.
     from collections import defaultdict
+    verified = {vid for vid in caches
+                if (_cache_meta_for(caches[vid][1]) or {}).get("align_method")
+                == "identity"}
+    use_verified = len(verified) >= max(20, 0.25 * len(caches))
+    if use_verified:
+        print(f"enrolment restricted to {len(verified)} alignment-verified "
+              f"meetings (of {len(caches)})")
+    else:
+        print(f"only {len(verified)} verified meetings — pooling all "
+              f"{len(caches)} (run realign_offsets.py to improve this)")
+
     pool = defaultdict(list)
     per_meeting = {}
     for vid, (p, url) in caches.items():
         z = np.load(p, allow_pickle=True)
         E, meta = z["embeddings"], json.loads(str(z["meta"]))
         per_meeting[vid] = (E, meta, url)
+        if use_verified and vid not in verified:
+            continue          # classify it, but don't enrol from it
         for i, m in enumerate(meta):
             if m["attr"] in ENROL_ATTR and m["has_fk"]:
                 pool[m["speaker"]].append(E[i])
