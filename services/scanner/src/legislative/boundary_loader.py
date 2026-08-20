@@ -877,6 +877,23 @@ async def compare_boundaries(
             # primary key before it can even mis-match. Key on the full id there.
             key_sql = ("constituency_id" if spec.set_resolver
                        else "split_part(constituency_id,'/',2)")
+
+            # ⛔ And scope the HELD side to the spec's own set when the spec is
+            # municipal. Municipal slugs collide constantly — `ward-4` exists in
+            # Calgary, Strathcona County and Wood Buffalo — so a slug-keyed join
+            # across a whole province silently compares Calgary's Ward 4 against
+            # a county division 300 km away. Measured on Calgary: 26 "matches"
+            # for 14 districts, five of them at 0.00% overlap, and a mean of
+            # 49.77% that means nothing at all.
+            #
+            # ⚠ NOT applied to provincial/federal specs. There the whole point of
+            # the slug key is to match ACROSS a generation whose set or prefix
+            # changed (`…-districts-2018` vs `…-districts`), and scoping by
+            # source_set would report every district as new — turning a cutover
+            # comparison into no comparison.
+            held_scope = ("AND source_set = $3" if spec.level == "municipal"
+                          and not spec.set_resolver else "")
+            held_args = ([spec.source_set] if held_scope else [])
             # Same grouping the loader uses — filter, dissolve, accumulate parts.
             # If compare grouped differently, a clean result would not predict
             # what the load writes.
@@ -929,13 +946,14 @@ async def compare_boundaries(
                           OR province_territory IS NOT DISTINCT FROM $2)
                      AND effective_from <= CURRENT_DATE
                      AND (effective_to IS NULL OR effective_to >= CURRENT_DATE)
+                     {held_scope}
                 )
                 SELECT c.slug,
                        ST_Area(ST_Intersection(c.g, h.g))
                          / greatest(ST_Area(c.g), ST_Area(h.g)) AS overlap
                   FROM _cmp c JOIN held h USING (slug)
                 """,
-                spec.level, spec.province_territory,
+                spec.level, spec.province_territory, *held_args,
                 # ⚠ Ten minutes, against the pool's 60s default. This single
                 # query does a full-resolution ST_Intersection per district, and
                 # Newfoundland's 1:50,000 coastline blew straight through the
@@ -948,13 +966,18 @@ async def compare_boundaries(
                 # check exists to establish.
                 timeout=600,
             )
+            # ⚠ Scoped exactly like the match above. Unscoped it reported
+            # `held=53` for Calgary — every municipal row in Alberta — next to
+            # `authoritative=14`, which reads as a catastrophic shortfall rather
+            # than as a comparison against 14 of Calgary's own wards.
             st.held = await conn.fetchval(
-                """SELECT count(*) FROM constituency_boundaries
+                f"""SELECT count(*) FROM constituency_boundaries
                     WHERE level=$1
                       AND ($2::text IS NULL OR province_territory IS NOT DISTINCT FROM $2)
                       AND effective_from <= CURRENT_DATE
-                      AND (effective_to IS NULL OR effective_to >= CURRENT_DATE)""",
-                spec.level, spec.province_territory,
+                      AND (effective_to IS NULL OR effective_to >= CURRENT_DATE)
+                      {held_scope}""",
+                spec.level, spec.province_territory, *held_args,
             )
             st.only_authoritative = [
                 r["slug"] for r in await conn.fetch(
@@ -963,9 +986,10 @@ async def compare_boundaries(
                            FROM constituency_boundaries
                           WHERE level=$1
                             AND ($2::text IS NULL
-                                 OR province_territory IS NOT DISTINCT FROM $2))
+                                 OR province_territory IS NOT DISTINCT FROM $2)
+                            {held_scope})
                        ORDER BY slug""",
-                    spec.level, spec.province_territory)
+                    spec.level, spec.province_territory, *held_args)
             ]
             st.only_held = [
                 r["slug"] for r in await conn.fetch(
@@ -976,8 +1000,9 @@ async def compare_boundaries(
                           AND effective_from <= CURRENT_DATE
                           AND (effective_to IS NULL OR effective_to >= CURRENT_DATE)
                           AND {key_sql} NOT IN (SELECT slug FROM _cmp)
+                          {held_scope}
                         ORDER BY 1""",
-                    spec.level, spec.province_territory)
+                    spec.level, spec.province_territory, *held_args)
             ]
 
     vals = [float(r["overlap"]) for r in rows if r["overlap"] is not None]
@@ -1244,6 +1269,75 @@ def _nb_label(props: dict) -> str | None:
     if ward.lower().startswith("at-large"):
         return "At Large"
     return f"Ward {ward}"
+
+
+# Calgary wards — City of Calgary open data, Socrata `tz8z-hyaz`.
+#
+# ⛔ THE THIRD CONFIRMED A7 CASE, after SK (61 -> 61) and NT (19/19).
+# Our 14 held rows match the SUPERSEDED 2017–2021 generation at mean 0.36%
+# (band 0.28–0.42%, 14/14 within 2%) and the current one at mean 4.76%,
+# max 17.53%, only 6/14 within 2%. No ward matches the current generation better
+# than it matches the old one. The count check passes perfectly at 14 -> 14,
+# which is precisely A7's point: a full district count proves nothing.
+#
+# ⚠ A8.1's counter-argument noted and dismissed: Calgary is landlocked, so the
+# offshore-envelope drawing convention that makes coastal comparisons unreliable
+# cannot be what produces a 17.53% delta on Ward 11.
+#
+# Consequence today: addresses near Ward 11 resolve to the wrong councillor.
+#
+# ⚠ Licence unread — the dataset declares the literal string "See Terms of Use"
+# with no termsLink. Recorded, not treated as a gate.
+
+def _calgary_label(props: dict) -> str | None:
+    num = str(props.get("ward_num") or "").strip()
+    return f"Ward {num}" if num else None
+
+# Edmonton wards — City of Edmonton open data, Socrata `nydb-6rce`.
+#
+# ✅ CORRECT VINTAGE ALREADY. Mean 0.55%, median 0.41%, max 1.44% across 12/12
+# against the in-force 2021 wards, and all 12 councillor names match our roster.
+# This load is a PROVENANCE and DATE upgrade, not a rescue.
+#
+# ⛔ 42 features, not 12. The file carries every generation and must be
+# partitioned on `effdt_type`: 12 `Current` + 30 `Historical`. ⚠ The dataset
+# title advertises "Future" wards and there are ZERO `Future` rows — the title
+# is not evidence about the contents.
+#
+# ★ The in-force date comes from the DATA, not the title or the metadata:
+# `Historical` ends 2021-10-17 and `Current` starts 2021-10-18 open-ended, with
+# no break at the 2025 election. `rowsUpdatedAt` is not evidence of currency.
+#
+# ⓘ Edmonton publishes NO numeric ward id — `name_1` is the ward's
+# Indigenous-language name and is the only identifier. The casing is deliberate
+# Cree and Blackfoot orthography (`papastew`, `pihêsiwin`, `O-day'min`) and is
+# preserved verbatim as the display name; only the slug folds it.
+#
+# ⚠ Licence unread — "See Terms of Use", no termsLink.
+
+# Winnipeg electoral wards — City of Winnipeg open data, Socrata `t4cg-yaxs`.
+#
+# ✅ CORRECT VINTAGE. Mean 0.34%, median 0.35%, max 0.55% across the 14 wards we
+# hold, and 14/14 councillor names match.
+#
+# ★ WE ARE MISSING EXACTLY ONE WARD: `Elmwood – East Kildonan` (ward 14,
+# Councillor Emma Durand-Wood), identified two independent ways. 15 -> 15 here.
+#
+# ★ The in-force date was previously recorded as BLOCKED on "no dossier has a
+# Manitoba municipal election date", with a guess of late October 2026. That was
+# the wrong question: these boundaries are the 2018 redraw, and the dataset's own
+# description says so — "updated in November of 2018 to reflect the new council
+# wards". Ruling A10.4 then gives 2018-10-24, the election they first governed.
+# Nothing was blocked on a future election.
+#
+# ⚠ Name normalisation is handled by `slugify`, not by a fixup: the city writes
+# spaced hyphens (`Charleswood - Tuxedo - Westwood`) where we use em-dashes, and
+# both collapse to the same slug.
+#
+# ⛔ Licence field is FLATLY WRONG — the dataset declares "Open Government
+# Licence - Prince Edward Island" on a Manitoba dataset, a misconfigured picker.
+# Recorded as unresolved rather than as OGL-PEI, which would be a false
+# provenance claim.
 
 
 SPECS: dict[str, BoundarySpec] = {
@@ -2920,5 +3014,64 @@ SPECS: dict[str, BoundarySpec] = {
         },
         licence="ogl-nb",
         notes="gnb.socrata.com 7zs3-pcvk; publisher of record GeoNB"
+    ),
+    "calgary-wards": BoundarySpec(
+        jurisdiction="calgary-wards",
+        source_path="municipal-alberta/current/calgary-wards_tz8z-hyaz.geojson",
+        src_epsg=4326,
+        level="municipal",
+        province_territory="AB",
+        source_set="calgary-wards",
+        id_prefix="calgary-wards",
+        authority="city-of-calgary",
+        boundaries_version="2021",
+        # Ruling A10.4 — the municipal election these wards first governed.
+        effective_from=date(2021, 10, 18),
+        # `label` is "WARD 1" in caps; name_builder gives the display form our other
+        # numbered sets use, and the slug follows it to `ward-1` — which is what the
+        # 14 sitting councillors are already attached to.
+        name_field="label",
+        name_builder=_calgary_label,
+        authority_id_field="ward_num",
+        boundary_kind="district",
+        expect_districts=14,
+        licence="see-terms-of-use-unread",
+        notes="data.calgary.ca tz8z-hyaz; prior generation au4g-xjwh staged for comparison"
+    ),
+    "edmonton-wards": BoundarySpec(
+        jurisdiction="edmonton-wards",
+        source_path="municipal-alberta/current/edmonton-wards_nydb-6rce.geojson",
+        src_epsg=4326,
+        level="municipal",
+        province_territory="AB",
+        source_set="edmonton-wards",
+        id_prefix="edmonton-wards",
+        authority="city-of-edmonton",
+        boundaries_version="2021",
+        effective_from=date(2021, 10, 18),
+        name_field="name_1",
+        boundary_kind="district",
+        row_filter=lambda p: (p.get("effdt_type") or "").strip() == "Current",
+        expect_districts=12,
+        licence="see-terms-of-use-unread",
+        notes="data.edmonton.ca nydb-6rce; partitioned on effdt_type=Current"
+    ),
+    "winnipeg-wards": BoundarySpec(
+        jurisdiction="winnipeg-wards",
+        source_path="municipal-west/current/winnipeg-electoral-wards.geojson",
+        src_epsg=4326,
+        level="municipal",
+        province_territory="MB",
+        source_set="winnipeg-wards",
+        id_prefix="winnipeg-wards",
+        authority="city-of-winnipeg",
+        boundaries_version="2018",
+        effective_from=date(2018, 10, 24),
+        name_field="name",
+        authority_id_field="number",
+        boundary_kind="district",
+        expect_districts=15,
+        licence="declared-ogl-pei-on-a-manitoba-dataset-unresolved",
+        notes="data.winnipeg.ca t4cg-yaxs; prior generation mp2r-jeav"
     ),
 }
