@@ -47,6 +47,30 @@ WINNER_PREFIX = "Élu"
 
 SOURCE_PREFIX = "mamh-qc"
 
+# ⛔ EVERY district/borough attach MUST be scoped to the municipality that owns
+# the polygon. `district-1` exists in THIRTEEN Québec source sets, and even named
+# districts collide: `plateau` is both Gatineau's and Québec City's, `saint-
+# charles` is both Kirkland's and Longueuil's, `carrefour` is both Laval's (as
+# `Le Carrefour`) and Sherbrooke's.
+#
+# An unscoped join is not merely ambiguous, it is silently WRONG and
+# planner-dependent: it put Gatineau's councillor for Plateau on Québec City's
+# Plateau, 400 km away. Migration 0089 repairs the three it produced.
+#
+# One set per municipality, named `<slug>-districts` — and note the set holds
+# that municipality's boroughs too, so `saguenay-districts` contains
+# `saguenay-boroughs/chicoutimi`. Montréal is the sole exception.
+SOURCE_SET_OVERRIDES = {"montreal": "montreal-boroughs-and-districts"}
+
+# The two MAMH post types that sit in a district. `Maire` and
+# `Maire d'arrondissement` take the municipality and borough polygons instead.
+COUNCILLOR_OFFICES = {"Conseiller", "Conseiller d'arrondissement"}
+
+
+def source_set_for(muni: str) -> str:
+    """The one boundary source_set that owns `muni`'s district/borough polygons."""
+    return SOURCE_SET_OVERRIDES.get(muni, f"{muni}-districts")
+
 
 def slugify(s: str) -> str:
     """Match `boundary_loader.slugify` so roster slugs join to boundary ids."""
@@ -83,6 +107,30 @@ def read_winners(csv_path: Path, municipality_slugs: set[str]) -> dict[str, list
             continue
         out.setdefault(muni, []).append(row)
     return out
+
+
+def _numbered_posts(rows: list[dict]) -> set[int]:
+    """
+    Councillor post numbers for a municipality that identifies districts by
+    number — empty if any councillor carries a district NAME instead.
+
+    ⚠ All-or-nothing on purpose. A municipality that names some districts and
+    numbers others is a shape we have not seen and would be guessing at.
+    """
+    posts: set[int] = set()
+    for r in rows:
+        if (r.get("Type de poste") or "").strip() not in COUNCILLOR_OFFICES:
+            continue
+        if (r.get("Nom du district électoral") or "").strip():
+            return set()
+        try:
+            n = int((r.get("Identifiant du poste") or "").strip())
+        except ValueError:
+            return set()
+        if n < 1:
+            return set()
+        posts.add(n)
+    return posts
 
 
 async def ingest_qc_municipal_roster(
@@ -125,6 +173,76 @@ async def ingest_qc_municipal_roster(
             f"because its name did not match would wipe it."
         )
 
+    # ── Ownership map: municipality -> the source_set holding its polygons ───
+    # Every attach below joins through this. Built once, asserted once: a
+    # municipality whose set is absent would silently attach nobody, which reads
+    # as "that council has no districts" rather than as a broken convention.
+    owned = {muni: source_set_for(muni) for muni in muni_of.values()}
+    known_sets = {
+        r["source_set"] for r in await db.fetch(
+            """
+            SELECT DISTINCT source_set FROM constituency_boundaries
+             WHERE level = 'municipal' AND province_territory = 'QC'
+            """
+        )
+    }
+    unknown = sorted(m for m, ss in owned.items() if ss not in known_sets)
+    if unknown:
+        raise RuntimeError(
+            f"{len(unknown)} held Québec councils resolve to a boundary "
+            f"source_set that does not exist: "
+            f"{[(m, owned[m]) for m in unknown]}. Either the set was never "
+            f"loaded or it breaks the `<slug>-districts` convention — add it to "
+            f"SOURCE_SET_OVERRIDES rather than letting the attach no-op."
+        )
+
+    # ── Which municipalities identify districts by NUMBER ────────────────────
+    # ⛔ MAMH names the district for only 758 of 7,835 winners province-wide. For
+    # everyone else the district is carried as `Identifiant du poste` — 0 for the
+    # mayor, 1..N for the councillors — and our polygons for exactly those
+    # municipalities are named `District N`.
+    #
+    # ★ That the post number IS the district number was measured, not assumed:
+    # for every incumbent re-elected to the same post, MAMH's post id was
+    # compared against the district number their pre-2025 `politician_terms` row
+    # still carries. 53 of 53 agree, 0 disagree.
+    #
+    # ⛔ Admit a municipality only when its polygon slugs are EXACTLY
+    # {district-1 .. district-C} for C councillors elected. A bare count check is
+    # not enough and a count MISmatch is disqualifying on its own: Brossard
+    # elected 12 councillors against 9 polygons, so its council grew and post 3
+    # is no longer district 3. Attaching those would be worse than leaving them
+    # NULL.
+    #
+    # ⚠ This buys ATTACHMENT, not vintage. Stable numbering is weak evidence the
+    # maps were not redrawn in place, and no evidence at all that they were not.
+    numbered: set[str] = set()
+    for muni, source_set in sorted(owned.items()):
+        posts = _numbered_posts(winners[muni])
+        if not posts:
+            continue
+        slugs = {
+            r["slug"] for r in await db.fetch(
+                """
+                SELECT split_part(constituency_id, '/', 2) AS slug
+                  FROM constituency_boundaries
+                 WHERE source_set = $1 AND boundary_kind = 'district'
+                   AND effective_from <= CURRENT_DATE
+                   AND (effective_to IS NULL OR effective_to >= CURRENT_DATE)
+                """,
+                source_set,
+            )
+        }
+        wanted = {f"district-{n}" for n in posts}
+        if slugs and slugs == wanted:
+            numbered.add(muni)
+        elif slugs and slugs & wanted:
+            st.problems.append(
+                f"{muni}: {len(posts)} numbered posts elected but the polygon "
+                f"set holds {len(slugs)} districts — council resized, so post N "
+                f"is no longer district N. Left unattached deliberately."
+            )
+
     for council, muni in sorted(muni_of.items()):
         rows = winners[muni]
         st.winners += len(rows)
@@ -138,6 +256,14 @@ async def ingest_qc_municipal_roster(
             party = (r.get("Nom du parti ou de l'équipe") or "").strip() or None
             borough = (r.get("Nom de l'arrondissement") or "").strip()
             district = (r.get("Nom du district électoral") or "").strip()
+
+            # ⛔ Where MAMH names no district, the district has no name: for a
+            # numbered municipality `District N` IS the name, and it is exactly
+            # what our polygon carries. Gated on `numbered`, which admits a
+            # municipality only when its polygon slugs are precisely the posts
+            # elected.
+            if not district and muni in numbered and office in COUNCILLOR_OFFICES:
+                district = f"District {(r.get('Identifiant du poste') or '').strip()}"
 
             # The constituency the office is actually elected for: a district
             # where one is named, else the borough, else the whole municipality.
@@ -257,50 +383,73 @@ async def ingest_qc_municipal_roster(
         # Mayors take the whole-municipality polygon; borough mayors take the
         # borough; everyone else takes a district within their own municipality's
         # source_set.
+        # ⚠ `owned` scopes every pass below to the municipality that owns the
+        # polygon. Passed as two parallel arrays rather than derived in SQL, so
+        # the convention lives in exactly one place (`source_set_for`) and is
+        # asserted before any row is touched.
+        munis = sorted(owned)
+        sets = [owned[m] for m in munis]
+
+        # The mayor's polygon may live in the municipality's own set OR in
+        # `census-subdivisions`, which is where the StatCan CSD outlines sit.
         await db.execute(
             """
+            WITH owned AS (SELECT unnest($2::text[]) AS muni,
+                                  unnest($3::text[]) AS source_set)
             UPDATE politicians p
                SET constituency_id = b.constituency_id, updated_at = now()
-              FROM constituency_boundaries b
+              FROM constituency_boundaries b, owned o
              WHERE p.is_active AND p.level = 'municipal'
                AND p.source_id LIKE $1
                AND p.constituency_id IS NULL
                AND p.elected_office IN ('Maire', 'Maire de la Ville de Montréal')
+               AND o.muni = split_part(p.source_id, ':', 2)
+               AND b.source_set IN (o.source_set, 'census-subdivisions')
                AND b.level = 'municipal' AND b.province_territory = 'QC'
                AND b.boundary_kind = 'municipality'
                AND cpd_slugify(b.name) = cpd_slugify(p.constituency_name)
             """,
-            f"{SOURCE_PREFIX}:%",
+            f"{SOURCE_PREFIX}:%", munis, sets,
         )
         await db.execute(
             """
+            WITH owned AS (SELECT unnest($2::text[]) AS muni,
+                                  unnest($3::text[]) AS source_set)
             UPDATE politicians p
                SET constituency_id = b.constituency_id, updated_at = now()
-              FROM constituency_boundaries b
+              FROM constituency_boundaries b, owned o
              WHERE p.is_active AND p.level = 'municipal'
                AND p.source_id LIKE $1
                AND p.constituency_id IS NULL
                AND p.elected_office = 'Maire d''arrondissement'
+               AND o.muni = split_part(p.source_id, ':', 2)
+               AND b.source_set = o.source_set
                AND b.level = 'municipal' AND b.province_territory = 'QC'
                AND b.boundary_kind = 'borough'
                AND cpd_slugify(b.name) = cpd_slugify(p.constituency_name)
             """,
-            f"{SOURCE_PREFIX}:%",
+            f"{SOURCE_PREFIX}:%", munis, sets,
         )
         await db.execute(
             """
+            WITH owned AS (SELECT unnest($2::text[]) AS muni,
+                                  unnest($3::text[]) AS source_set)
             UPDATE politicians p
                SET constituency_id = b.constituency_id, updated_at = now()
-              FROM constituency_boundaries b
+              FROM constituency_boundaries b, owned o
              WHERE p.is_active AND p.level = 'municipal'
                AND p.source_id LIKE $1
                AND p.constituency_id IS NULL
+               AND o.muni = split_part(p.source_id, ':', 2)
+               AND b.source_set = o.source_set
                AND b.level = 'municipal' AND b.province_territory = 'QC'
                AND b.boundary_kind = 'district'
+               AND b.effective_from <= CURRENT_DATE
+               AND (b.effective_to IS NULL OR b.effective_to >= CURRENT_DATE)
                AND split_part(b.constituency_id, '/', 2)
                  = cpd_slugify(p.constituency_name)
             """,
-            f"{SOURCE_PREFIX}:%",
+            f"{SOURCE_PREFIX}:%", munis, sets,
         )
         # ── Fallback pass: French articles and spacing ──────────────────
         # ⛔ Two publishers, two naming conventions for the same district. The
@@ -321,8 +470,10 @@ async def ingest_qc_municipal_roster(
         # resolved correctly.
         await db.execute(
             """
-            WITH norm AS (
-              SELECT b.constituency_id,
+            WITH owned AS (SELECT unnest($2::text[]) AS muni,
+                                  unnest($3::text[]) AS source_set),
+            norm AS (
+              SELECT b.constituency_id, b.source_set,
                      regexp_replace(
                        regexp_replace(split_part(b.constituency_id, '/', 2),
                                       '^(de-la-|de-|du-|des-|d-|la-|le-|les-)', ''),
@@ -333,24 +484,26 @@ async def ingest_qc_municipal_roster(
                  AND b.effective_from <= CURRENT_DATE
                  AND (b.effective_to IS NULL OR b.effective_to >= CURRENT_DATE)
             ), uniq AS (
-              -- ⚠ Only where the normalised key is UNAMBIGUOUS. Collapsing
-              -- articles can make two real districts look alike, and a wrong
-              -- attachment is worse than none.
-              SELECT key, min(constituency_id) AS constituency_id
-                FROM norm GROUP BY key HAVING count(*) = 1
+              -- ⚠ Only where the normalised key is UNAMBIGUOUS **within the
+              -- municipality**. Collapsing articles can make two real districts
+              -- look alike, and a wrong attachment is worse than none.
+              SELECT source_set, key, min(constituency_id) AS constituency_id
+                FROM norm GROUP BY source_set, key HAVING count(*) = 1
             )
             UPDATE politicians p
                SET constituency_id = u.constituency_id, updated_at = now()
-              FROM uniq u
+              FROM uniq u, owned o
              WHERE p.is_active AND p.level = 'municipal'
                AND p.source_id LIKE $1
                AND p.constituency_id IS NULL
+               AND o.muni = split_part(p.source_id, ':', 2)
+               AND u.source_set = o.source_set
                AND u.key = regexp_replace(
                      regexp_replace(cpd_slugify(p.constituency_name),
                                     '^(de-la-|de-|du-|des-|d-|la-|le-|les-)', ''),
                      '-', '', 'g')
             """,
-            f"{SOURCE_PREFIX}:%",
+            f"{SOURCE_PREFIX}:%", munis, sets,
         )
 
         st.attached = await db.fetchval(

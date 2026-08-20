@@ -335,6 +335,56 @@ async def check_municipal_integrity(db: Database) -> list[MunicipalProblem]:
             sum(r["n"] for r in rows),
         ))
 
+    # ── Council cohesion ────────────────────────────────────────────────
+    # ⛔ A member must sit on a polygon that TOUCHES one of their colleagues'.
+    # Municipal district slugs are nowhere near unique — `district-1` exists in
+    # 13 Québec sets, `plateau` is both Gatineau's and Québec City's — so an
+    # attach that joins on the slug without scoping to the municipality is
+    # ambiguous, and Postgres resolves ambiguity by plan choice, not geography.
+    # It put Gatineau's councillor for Plateau on Québec City's Plateau, 400 km
+    # away (repaired in 0089).
+    #
+    # ★ Deliberately GEOMETRIC rather than a source_set/slug convention check:
+    # the convention is what was wrong, so testing it against itself proves
+    # nothing. Contiguity is a fact about the world that no naming scheme can
+    # fake.
+    #
+    # ⚠ Only for councils holding more than one DISTINCT polygon. An at-large
+    # council — Burnaby, Abbotsford, Coquitlam — puts its whole membership on one
+    # CSD polygon, which is correct and has no colleague polygon to touch.
+    rows = await db.fetch(
+        """
+        WITH m AS (
+          SELECT p.name, split_part(p.source_id, ':', 2) AS council,
+                 b.constituency_id, b.boundary
+            FROM politicians p
+            JOIN constituency_boundaries b ON b.constituency_id = p.constituency_id
+           WHERE p.is_active AND p.level = 'municipal'
+        )
+        SELECT a.council, a.name, a.constituency_id
+          FROM m a
+         WHERE (SELECT count(DISTINCT x.constituency_id)
+                  FROM m x WHERE x.council = a.council) > 1
+           AND NOT EXISTS (
+                 SELECT 1 FROM m o
+                  WHERE o.council = a.council
+                    AND o.constituency_id <> a.constituency_id
+                    AND ST_Intersects(o.boundary, a.boundary))
+         ORDER BY a.council, a.name
+        """
+    )
+    if rows:
+        out.append(MunicipalProblem(
+            "displaced",
+            "sitting on a polygon disjoint from every colleague's, i.e. almost "
+            "certainly another municipality's district: "
+            + ", ".join(
+                f"{r['name']} ({r['council']} -> {r['constituency_id']})"
+                for r in rows[:6]
+            ),
+            len(rows),
+        ))
+
     # ⚠ Near-identical overlapping polygons make a smallest-first lookup
     # planner-dependent — the Peel defect, fixed in 0083. Cheap to re-check.
     dupes = await db.fetchval(
