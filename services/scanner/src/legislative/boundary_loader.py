@@ -459,7 +459,12 @@ def group_features(
             st.filtered_out += 1
             continue
 
-        raw_name = (props.get(spec.name_field) or "").strip()
+        # ⚠ str(): a numeric name_field is normal, not exotic. Regina's is `ID`
+        # (an int ward number) and GeoJSON preserves the JSON type, so
+        # `(props.get(...) or "").strip()` raised AttributeError on an int and
+        # killed the run BEFORE `name_builder` — which exists precisely to turn
+        # that number into a label — ever got to see it.
+        raw_name = str(props.get(spec.name_field) or "").strip()
         if spec.name_fixups:
             fixed = spec.name_fixups.get(raw_name)
             if fixed is not None:
@@ -1378,6 +1383,66 @@ def _calgary_label(props: dict) -> str | None:
 #
 # ⚠ Licence: CKAN reports `license_title: None` / "License not specified".
 # Recorded, not treated as a gate.
+
+
+# Regina wards — City of Regina, "NEW 2024 Ward Boundaries".
+#
+# ★ THE 403 DOES NOT REPRODUCE. The dossier recorded `www.regina.ca` as returning
+# HTTP 403 to automated clients, with the browser-UA retry never attempted. It
+# returns **200 to a plain curl** today. The block, whatever it was, is gone.
+#
+# ★ AND THE PUBLISHER IS FOUND. The city runs its own ArcGIS Server at
+# `opengis.regina.ca`, and the layer is reachable from the AGOL item "2024 Ward
+# Boundary Map" in the org `32Z5vyJw5sI48UUM` ("City of Regina"):
+#
+#   https://opengis.regina.ca/arcgis/rest/services/CGISViewer/WardsBoundaryReview2023/MapServer/0
+#
+# ⛔ How NOT to search for these: `/sharing/rest/search` on a city's OWN AGOL
+# host is NOT scoped to that city — it queries the global index. Searching
+# `regina.maps.arcgis.com` for "ward" returns Baltimore, Montana and Washington
+# D.C., and the top "City of Regina" publisher guess (`DCGISopendata`) is
+# Washington. Scope with `orgid:` from `/sharing/rest/portals/self`, or the
+# results are worthless. This is the same failure the Ontario dossier recorded as
+# "returns Nigeria, South Africa and Ohio ahead of Ontario" — it is not specific
+# to keyword search, it is how the endpoint works.
+#
+# ⚠ `copyrightText` is empty, as it was for Saskatoon. The difference is
+# categorical and worth stating: attribution here rests on the HOST — a
+# city-owned domain under an AGOL org named "City of Regina" — not on a metadata
+# field. Saskatoon's candidate is an anonymous item on a shared
+# `services6.arcgis.com` tenant with `orgName: None`, which nothing identifies.
+#
+# ⛔ CRS TRAP. The staged GeoJSON is EPSG:26913 (NAD83 / UTM 13N) in PROJECTED
+# METRES, carrying a legacy `crs` member; first coordinate is
+# [535248.19, 5591196.13]. Declaring 4326 puts Regina in the Gulf of Guinea. The
+# accompanying `.prj` has no AUTHORITY clause, so the code cannot be sniffed from
+# it either — this is exactly why `src_epsg` is declared and never inferred.
+#
+# ⓘ The file carries no ward NAME — fields are OBJECTID, ID, POPULATION and two
+# shape measures. `ID` is the ward number.
+
+def _regina_label(props: dict) -> str | None:
+    wid = props.get("ID")
+    return f"Ward {int(wid)}" if wid is not None else None
+
+
+# Montréal — the 2025 electoral districts, from the city's own open data.
+#
+# ⛔ Our 44 district polygons are the 2021 map, superseded at the 2025-11-02
+# municipal general election. The roster was rebuilt from the MAMH election
+# results on 2026-08-19 and only 206 of 396 Québec municipal members could be
+# attached, because the 2025 district names do not slug-match 2021 polygons.
+# Montréal is the largest single block of that gap: 27 city councillors and 2
+# borough mayors unattached.
+#
+# ⚠ 58 districts, not 59 — the 2021 map had 59. This is a real redistribution,
+# not a re-publication.
+#
+# ⓘ This file carries DISTRICTS ONLY. Montréal's 18 borough polygons came from
+# the Open North mirror and are not replaced here; they were re-typed from
+# 'district' to 'borough' in migration 0082 and keep their ids. Ville-Marie's
+# borough polygon remains absent from our data entirely — the city publishes
+# borough limits as a separate dataset, which is follow-up work.
 
 
 SPECS: dict[str, BoundarySpec] = {
@@ -3132,5 +3197,65 @@ SPECS: dict[str, BoundarySpec] = {
         compare_held_source_set="toronto-wards-2018",
         licence="unspecified-on-ckan",
         notes="open.toronto.ca dataset city-wards, resource city-wards-data-4326.geojson"
+    ),
+    "regina-wards": BoundarySpec(
+        jurisdiction="regina-wards",
+        source_path="municipal-west/current/regina-wards-2024.geojson",
+        src_epsg=26913,
+        level="municipal",
+        province_territory="SK",
+        source_set="regina-wards",
+        id_prefix="regina-wards",
+        authority="city-of-regina",
+        boundaries_version="2024",
+        # Ruling A10.4 — Saskatchewan's fixed municipal election date, the one these
+        # wards first governed.
+        effective_from=date(2024, 11, 13),
+        name_field="ID",
+        name_builder=_regina_label,
+        authority_id_field="ID",
+        boundary_kind="district",
+        expect_districts=10,
+        licence="unstated-on-layer-city-owned-host",
+        notes="opengis.regina.ca CGISViewer/WardsBoundaryReview2023/MapServer/0"
+    ),
+    "montreal-districts": BoundarySpec(
+        jurisdiction="montreal-districts",
+        source_path="municipal-quebec/current/montreal-districts-electoraux-2025.geojson",
+        # ⚠ Already WGS84 degrees — first coordinate [-73.5233, 45.5958], no `crs`
+        # member. Montréal publishes in 4326 directly, unlike the provincial QC
+        # files which are EPSG:3798.
+        src_epsg=4326,
+        level="municipal",
+        province_territory="QC",
+        # ⚠ Same source_set and id_prefix as the rows we already hold, deliberately.
+        # The set is MIXED — it holds the CSD polygon, 18 borough polygons and the
+        # districts — and only the districts are being replaced. Keeping the prefix
+        # means the roster attaches by the same slug scheme it always has.
+        source_set="montreal-boroughs-and-districts",
+        id_prefix="montreal-boroughs-and-districts",
+        authority="ville-de-montreal",
+        boundaries_version="2025",
+        # The 2025 municipal general election.
+        effective_from=date(2025, 11, 2),
+        effective_to=None,
+        name_field="NOM_DISTRICT",
+        name_fr_field=None,      # the file is French; there is no second form
+        # ⚠ NO_DISTRICT is the unpadded number ('71'), CODE_DISTRICT the zero-padded
+        # string ('071'). Taking the padded one because it is the stable published
+        # identifier and sorts correctly.
+        authority_id_field="CODE_DISTRICT",
+        boundary_kind="district",
+        expect_districts=58,
+        licence="cc-by-4.0",
+        notes="Ville de Montréal via Données Québec, dataset "
+              "`vmtl-districts-electoraux`, resource 'Districts électoraux 2025'. "
+              "CC-BY 4.0 — commercial use and redistribution explicit, attribution "
+              "to the city. Gate-free direct download. "
+              "⚠ Districts only; the 18 borough polygons and the CSD row in this "
+              "source_set come from elsewhere and are not touched by this load. "
+              "⚠ NOM_ARR names the parent borough on every district and is the "
+              "hierarchy Montréal publishes — worth capturing when "
+              "constituency_boundaries grows a parent column."
     ),
 }
