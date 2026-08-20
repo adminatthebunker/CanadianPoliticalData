@@ -104,29 +104,51 @@ def main():
     # overwrite a value identity already validated. The stamp is what
     # makes that CLI's skip-guard work.
     patched = stamped = 0
+    payload = {}
     for r in corrected + confirmed:
         got = idx.get(r["vid"])
         if not got:
             print(f"  ! {r['vid']}: no meta.json on disk")
             continue
         path, j = got
-        is_correction = r["verdict"] == "corrected"
-        if is_correction:
-            j["align_offset_previous"] = j.get("caption_offset_s")
-            j["caption_offset_s"] = r["recovered"]
+        patch = {"align_method": "identity", "identity_peak": r["peak"],
+                 "identity_verified_at": "2026-08-19"}
+        if r["verdict"] == "corrected":
+            # Only record the prior value the FIRST time, or a re-run would
+            # overwrite the original with our own correction and lose it.
+            if j.get("align_method") != "identity":
+                patch["align_offset_previous"] = j.get("caption_offset_s")
+            patch["caption_offset_s"] = r["recovered"]
             patched += 1
         else:
             stamped += 1
-        j["align_method"] = "identity"
-        j["identity_peak"] = r["peak"]
-        j["identity_verified_at"] = "2026-08-19"
-        if args.apply:
-            tmp = path + ".tmp"
-            with open(tmp, "w") as fh:
-                json.dump(j, fh)
-            os.replace(tmp, path)
+        # The cache tree is owned by the container's uid (1001); the host
+        # user cannot write it. Patch through the container that owns it
+        # rather than loosening permissions on the whole cache.
+        payload[os.path.join("/media-cache",
+                             os.path.relpath(path, MEDIA))] = patch
     print(f"meta.json — offsets rewritten: {patched}, "
           f"verified-in-place: {stamped}")
+
+    if args.apply and payload:
+        script = (
+            "import json,os,sys\n"
+            "p=json.load(sys.stdin)\n"
+            "n=0\n"
+            "for path,patch in p.items():\n"
+            "    with open(path) as fh: j=json.load(fh)\n"
+            "    j.update(patch)\n"
+            "    t=path+'.tmp'\n"
+            "    with open(t,'w') as fh: json.dump(j,fh)\n"
+            "    os.replace(t,path); n+=1\n"
+            "print('patched',n)\n"
+        )
+        r = subprocess.run(
+            ["docker", "exec", "-i", "sw-scanner-jobs", "python3", "-c", script],
+            input=json.dumps(payload), capture_output=True, text=True)
+        if r.returncode != 0:
+            sys.exit(f"meta.json patch failed: {r.stderr.strip()[:300]}")
+        print(f"  {r.stdout.strip()}")
 
     def vid_list(rs):
         return ",".join("'https://www.youtube.com/watch?v=%s'" % r["vid"] for r in rs)
@@ -170,7 +192,9 @@ def main():
         with t as (
           update speeches s set politician_id = null, confidence = 0,
                  speaker_name_raw = 'UNATTRIBUTED',
-                 raw = raw - 'attribution', updated_at = now()
+                 -- qualify: meetings also has a `raw` column, so a bare
+                 -- reference is ambiguous inside UPDATE ... FROM
+                 raw = s.raw - 'attribution', updated_at = now()
           from meetings m
           where m.id = s.meeting_id and m.municipality_slug='edmonton'
             and s.raw->>'attribution' = 'voice'
@@ -184,7 +208,7 @@ def main():
         n = psql(f"""
         with t as (
           update speeches s set confidence = 0.3,
-                 raw = raw || '{{"voice_unverified": true}}'::jsonb,
+                 raw = s.raw || '{{"voice_unverified": true}}'::jsonb,
                  updated_at = now()
           from meetings m
           where m.id = s.meeting_id and m.municipality_slug='edmonton'
