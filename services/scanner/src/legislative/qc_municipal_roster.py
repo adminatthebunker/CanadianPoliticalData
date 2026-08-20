@@ -451,57 +451,109 @@ async def ingest_qc_municipal_roster(
             """,
             f"{SOURCE_PREFIX}:%", munis, sets,
         )
-        # ── Fallback pass: French articles and spacing ──────────────────
-        # ⛔ Two publishers, two naming conventions for the same district. The
-        # MAMH results carry the article and the city's own layer usually does
-        # not, and the two disagree about spacing inside a name:
+        # ── Fallback pass: French articles, elision, spacing, tiers ─────
+        # ⛔ Two publishers, two conventions for the same district — and the ways
+        # they differ are NOT one problem:
         #
-        #     roster  `du Sault-au-Récollet`   polygon  `Sault-au-Récollet`
-        #     roster  `de Saint-Sulpice`       polygon  `Saint-Sulpice`
-        #     roster  `DeLorimier`             polygon  `De Lorimier`
+        #   roster  `du Sault-au-Récollet`   polygon  `Sault-au-Récollet`   article
+        #   roster  `de Lennoxville`         polygon  `Lennoxville`         article
+        #   roster  `d'Ascot`                polygon  `Ascot`               ELISION
+        #   roster  `DeLorimier`             polygon  `De Lorimier`         SPACING
+        #   roster  `de l'Est`               polygon  `Est`                 both
         #
-        # An exact slug join misses every one. Comparing on the slug with any
-        # leading French article removed AND all hyphens stripped folds all three
-        # shapes together.
+        # ⚠ ELISION defeated the previous version. `d'Ascot` slugifies to
+        # `dascot` — the apostrophe is REMOVED, not hyphenated — so a regex
+        # stripping a leading `d-` never fires. It has to come off the RAW name,
+        # before slugification.
         #
-        # ⚠ Deliberately a SECOND pass, applied only to rows the exact join left
-        # unattached — a looser comparison must never outrank an exact one, and
-        # it must never silently re-point a member the strict pass already
-        # resolved correctly.
+        # ⚠ And SPACING pulls the opposite way: `DeLorimier` -> `delorimier`
+        # while `De Lorimier` -> `de-lorimier`, so stripping the article from the
+        # polygon side alone yields `lorimier` and matches nothing. Article
+        # removal cannot be unconditional; the hyphen-collapsed form WITHOUT it
+        # is a separate key.
+        #
+        # Hence four keys per side rather than one rewrite: exact, de-articled,
+        # de-hyphenated, and both. A match on any is accepted — but only where the
+        # key is unambiguous WITHIN THE MUNICIPALITY and reaches one polygon.
+        #
+        # ⚠ Still a SECOND pass, over rows the exact join left NULL. A looser
+        # comparison must never outrank an exact one.
+        #
+        # ★ And it now spans BOROUGHS, not only districts. Montréal's smaller
+        # boroughs elect their city councillor borough-wide rather than by
+        # district, so `Conseiller` for `Anjou` or `Lachine` has no district to
+        # match — the constituency IS the borough. Restricting the fallback to
+        # `boundary_kind = 'district'` made those unattachable by construction,
+        # along with every borough mayor whose MAMH name carries an article
+        # (`Le Plateau-Mont-Royal` vs `Plateau-Mont-Royal`).
         await db.execute(
             """
             WITH owned AS (SELECT unnest($2::text[]) AS muni,
                                   unnest($3::text[]) AS source_set),
-            norm AS (
-              SELECT b.constituency_id, b.source_set,
-                     regexp_replace(
-                       regexp_replace(split_part(b.constituency_id, '/', 2),
-                                      '^(de-la-|de-|du-|des-|d-|la-|le-|les-)', ''),
-                       '-', '', 'g') AS key
+            bkeys AS (
+              SELECT b.constituency_id, b.source_set, k.key
                 FROM constituency_boundaries b
+               CROSS JOIN LATERAL (
+                 SELECT unnest(ARRAY[
+                   cpd_slugify(b.name),
+                   regexp_replace(cpd_slugify(b.name),
+                     '^(de-la-|de-l-|de-|du-|des-|d-|la-|le-|les-)', ''),
+                   regexp_replace(cpd_slugify(b.name), '-', '', 'g'),
+                   regexp_replace(
+                     regexp_replace(cpd_slugify(b.name),
+                       '^(de-la-|de-l-|de-|du-|des-|d-|la-|le-|les-)', ''),
+                     '-', '', 'g')
+                 ]) AS key
+               ) k
                WHERE b.level = 'municipal' AND b.province_territory = 'QC'
-                 AND b.boundary_kind = 'district'
+                 AND b.boundary_kind IN ('district', 'borough')
                  AND b.effective_from <= CURRENT_DATE
                  AND (b.effective_to IS NULL OR b.effective_to >= CURRENT_DATE)
             ), uniq AS (
-              -- ⚠ Only where the normalised key is UNAMBIGUOUS **within the
-              -- municipality**. Collapsing articles can make two real districts
-              -- look alike, and a wrong attachment is worse than none.
+              -- ⚠ A key reaching two different polygons is DROPPED. Collapsing
+              -- articles and hyphens can make two real districts look alike, and
+              -- a wrong attachment is worse than none.
               SELECT source_set, key, min(constituency_id) AS constituency_id
-                FROM norm GROUP BY source_set, key HAVING count(*) = 1
+                FROM bkeys
+               GROUP BY source_set, key
+              HAVING count(DISTINCT constituency_id) = 1
+            ), pkeys AS (
+              SELECT p.id, o.source_set, k.key
+                FROM politicians p
+                JOIN owned o ON o.muni = split_part(p.source_id, ':', 2)
+               CROSS JOIN LATERAL (
+                 SELECT regexp_replace(
+                          regexp_replace(p.constituency_name,
+                                         '^(de |du |des |de la |le |la |les )',
+                                         '', 'i'),
+                          -- ⚠ THREE quotes: `''` is one literal apostrophe
+                          -- inside a SQL string. Five silently matched a
+                          -- DOUBLE apostrophe, i.e. nothing, and the elision
+                          -- pass no-opped while looking correct.
+                          '^(d|l)''', '', 'i') AS base
+               ) e
+               CROSS JOIN LATERAL (
+                 SELECT unnest(ARRAY[
+                   cpd_slugify(e.base),
+                   regexp_replace(cpd_slugify(e.base), '-', '', 'g'),
+                   cpd_slugify(p.constituency_name),
+                   regexp_replace(cpd_slugify(p.constituency_name), '-', '', 'g')
+                 ]) AS key
+               ) k
+               WHERE p.is_active AND p.level = 'municipal'
+                 AND p.source_id LIKE $1
+                 AND p.constituency_id IS NULL
+            ), matched AS (
+              SELECT pk.id, min(u.constituency_id) AS constituency_id
+                FROM pkeys pk
+                JOIN uniq u ON u.source_set = pk.source_set AND u.key = pk.key
+               GROUP BY pk.id
+              HAVING count(DISTINCT u.constituency_id) = 1
             )
             UPDATE politicians p
-               SET constituency_id = u.constituency_id, updated_at = now()
-              FROM uniq u, owned o
-             WHERE p.is_active AND p.level = 'municipal'
-               AND p.source_id LIKE $1
-               AND p.constituency_id IS NULL
-               AND o.muni = split_part(p.source_id, ':', 2)
-               AND u.source_set = o.source_set
-               AND u.key = regexp_replace(
-                     regexp_replace(cpd_slugify(p.constituency_name),
-                                    '^(de-la-|de-|du-|des-|d-|la-|le-|les-)', ''),
-                     '-', '', 'g')
+               SET constituency_id = m.constituency_id, updated_at = now()
+              FROM matched m
+             WHERE p.id = m.id
             """,
             f"{SOURCE_PREFIX}:%", munis, sets,
         )

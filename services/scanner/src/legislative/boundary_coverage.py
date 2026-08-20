@@ -42,6 +42,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from ..db import Database
+from .boundary_loader import slugify
 
 # Number of federal electoral districts. ⚠ NOT read from
 # `jurisdiction_sources.seats`, which records 440 for 'federal' — that figure
@@ -333,6 +334,72 @@ async def check_municipal_integrity(db: Database) -> list[MunicipalProblem]:
                 for r in rows[:6]
             ),
             sum(r["n"] for r in rows),
+        ))
+
+    # ── Slug-function divergence ────────────────────────────────────────
+    # ⛔ TWO IMPLEMENTATIONS OF ONE FUNCTION, AND THEY MUST NOT DRIFT.
+    # `boundary_loader.slugify` (Python) mints every `constituency_id`;
+    # `cpd_slugify` (SQL, migration 0080) is what the roster attach joins on.
+    # `qc_municipal_roster.slugify` documents itself as matching the former. If
+    # any of the three disagree on a name, ids are minted one way and looked up
+    # another, and the symptom is not an error — it is a member who quietly fails
+    # to attach.
+    #
+    # ★ This is not hypothetical. Python's NFKD does not touch LIGATURES — `œ` is
+    # one character, not an accented `o` — while Postgres `unaccent()` expands
+    # them. Montréal's `Champlain–L'Île-des-Sœurs` was minted as
+    # `champlain-lile-des-s-urs` (the `œ` became a hyphen mid-word) while the
+    # roster looked for `champlain-lile-des-soeurs`. Three councillors did not
+    # attach and nothing reported a problem.
+    #
+    # Cheap: ~1,900 names, one round trip.
+    rows = await db.fetch(
+        """
+        SELECT constituency_id, name, authority, cpd_slugify(name) AS sql_slug
+          FROM constituency_boundaries WHERE name IS NOT NULL
+        """
+    )
+    drift = [r for r in rows if slugify(r["name"]) != r["sql_slug"]]
+
+    # ⚠ And the second half: an id MINTED BY AN EARLIER slugify keeps whatever
+    # that version produced. Fixing the function does not retroactively fix the
+    # ids it wrote, so `champlain-lile-des-s-urs` survives a corrected slugify
+    # and still fails to match. Only checked for loader-minted rows (`authority`
+    # set) — mirror rows legitimately carry ids we did not derive.
+    # ⚠ Skip ids minted from `slug_field` rather than from the name — federal
+    # districts key on Elections Canada's FED_NUM
+    # (`federal-electoral-districts/10001`) and CSD polygons on the StatCan code,
+    # and neither is meant to equal the name slug. Without this exclusion the
+    # check reports 463 "failures", all of them correct rows, which is exactly the
+    # muted-alarm problem this module's header warns about.
+    stale = [
+        r for r in rows
+        if r["authority"]
+        and not r["constituency_id"].split("/", 1)[-1].isdigit()
+        and r["constituency_id"].split("/", 1)[-1] != slugify(r["name"])
+    ]
+    if stale:
+        out.append(MunicipalProblem(
+            "stale-slug-id",
+            "loader-minted ids that no longer match slugify(name) — minted by an "
+            "earlier version of the function and never re-keyed: "
+            + ", ".join(
+                f"{r['constituency_id']} (name {r['name']!r} -> {slugify(r['name'])!r})"
+                for r in stale[:4]
+            ),
+            len(stale),
+        ))
+
+    if drift:
+        out.append(MunicipalProblem(
+            "slug-divergence",
+            "cpd_slugify (SQL) and boundary_loader.slugify (Python) disagree — "
+            "ids are minted one way and looked up the other: "
+            + ", ".join(
+                f"{r['name']!r} py={slugify(r['name'])!r} sql={r['sql_slug']!r}"
+                for r in drift[:4]
+            ),
+            len(drift),
         ))
 
     # ── Live duplicate generations ──────────────────────────────────────

@@ -252,6 +252,20 @@ def _sql_lit(s: str) -> str:
     return "'" + s.replace("'", "''") + "'"
 
 
+# Characters Postgres `unaccent()` expands but Unicode NFKD leaves alone. Kept
+# deliberately short: every entry is one `unaccent` actually rewrites, so the two
+# implementations stay in step. ß is here because unaccent maps it to `ss`, not
+# because any Canadian district needs it.
+_LIGATURES = {
+    "\u0153": "oe", "\u0152": "OE",   # œ Œ  — Sœurs, cœur
+    "\u00e6": "ae", "\u00c6": "AE",   # æ Æ
+    "\u00df": "ss",                    # ß
+    "\u00f8": "o",  "\u00d8": "O",    # ø Ø
+    "\u0111": "d",  "\u0110": "D",    # đ Đ
+    "\u0142": "l",  "\u0141": "L",    # ł Ł
+}
+
+
 def slugify(name: str) -> str:
     """
     District name -> url slug, matching the existing Open-North-derived ids.
@@ -260,7 +274,23 @@ def slugify(name: str) -> str:
     to ASCII, and periods drop. Verified against Ontario: 'Chatham-Kent—Leamington'
     -> 'chatham-kent-leamington', "Toronto—St. Paul's" -> 'toronto-st-pauls'.
     """
-    s = unicodedata.normalize("NFKD", name)
+    # ⛔ LIGATURES FIRST — NFKD does not touch them. `œ` is a single character,
+    # not an accented `o`, so it survives normalisation, survives the
+    # combining-mark strip, and is then eaten by the `[^a-z0-9]+` rule below.
+    # Montréal's `Champlain–L'Île-des-Sœurs` slugified to
+    # `champlain-lile-des-s-urs` — the `œ` became a hyphen mid-word — and that id
+    # was minted into the table.
+    #
+    # ★ The real defect was DIVERGENCE, not the mangling. `cpd_slugify`
+    # (migration 0080) uses Postgres `unaccent()`, whose rules DO expand
+    # ligatures, so the SQL side produced `champlain-lile-des-soeurs` while this
+    # produced something else — and `qc_municipal_roster` joins roster names
+    # slugified one way against ids minted the other. The two must agree, and
+    # `check-boundary-coverage` now asserts that they do over every row.
+    s = name
+    for lig, expansion in _LIGATURES.items():
+        s = s.replace(lig, expansion)
+    s = unicodedata.normalize("NFKD", s)
     s = "".join(c for c in s if not unicodedata.combining(c))
     s = s.lower()
     s = s.replace("'", "").replace("’", "").replace(".", "")
