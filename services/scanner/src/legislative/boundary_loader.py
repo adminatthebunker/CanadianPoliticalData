@@ -4105,4 +4105,42 @@ SPECS: dict[str, BoundarySpec] = {
               "2022'. Fills the last zero-ward Ontario set."
     ),
 
+
+    # ⛔ WE ARE MISSING WARD 5 — a hole, not a trailing gap. Held rows are
+    # Wards 1, 2, 3, 4, 6, 7; every address in Ward 5 resolves to no
+    # councillor. Found by auditing held district count against AMO's 2026
+    # roster, the same check that surfaced Windsor's and Burlington's gaps.
+    #
+    # ★ The in-force date is the publisher's own prose, not a layer title and
+    # not a metadata date: "Since 2003 the Town of Newmarket has had a ward
+    # system of representation on Town Council. This system contains seven
+    # wards." Ontario's 2003 municipal election was 2003-11-10 — a NOVEMBER
+    # date, because the fixed fourth-Monday-of-October rule only begins in 2010.
+    #
+    # ⚠ Residual uncertainty, recorded rather than hidden: that sentence dates
+    # the seven-ward SYSTEM, not necessarily these exact boundaries. A
+    # within-system adjustment after 2003 would not contradict it. The count
+    # matches at seven and no review is documented, but this is weaker evidence
+    # than a by-law and should be upgraded if one is found.
+    "newmarket-wards": BoundarySpec(
+        jurisdiction="newmarket-wards",
+        source_path="municipal-ontario/current/newmarket-wards.geojson",
+        src_epsg=4326,
+        level="municipal",
+        province_territory="ON",
+        source_set="newmarket-wards",
+        id_prefix="newmarket-wards",
+        authority="town-of-newmarket",
+        boundaries_version="2003",
+        effective_from=date(2003, 11, 10),
+        name_field="WARD",
+        name_builder=_on_ward_from("WARD"),
+        authority_id_field="WARD",
+        boundary_kind="district",
+        expect_districts=7,
+        licence="none-stated",
+        notes="Town of Newmarket 'Ward Boundaries', copyrightText "
+              "'© The Town of Newmarket'. Carries the councillor in NAME."
+    ),
+
 }
