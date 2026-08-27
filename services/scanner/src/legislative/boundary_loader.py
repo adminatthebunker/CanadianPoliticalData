@@ -4067,4 +4067,42 @@ SPECS: dict[str, BoundarySpec] = {
               "layer — do not confuse them."
     ),
 
+
+    # ═══ Ontario — Durham and York ══════════════════════════════════════
+    # ⛔ WE HOLD ZERO WARDS FOR THIS TOWN. `whitchurch-stouffville-wards` has
+    # carried a single `census-subdivisions/` municipality polygon and nothing
+    # else, so every address in the Town resolved to no councillor. This
+    # dossier has recorded it as "a genuine gap" since 2026-08-18; it is the
+    # last of the two zero-ward Ontario sets (LaSalle is legitimately at-large).
+    #
+    # ★ The in-force date comes from our own prior research pass, not from the
+    # layer title: six wards "in force since October 2022", three rural and
+    # three in the Community of Stouffville, each returning one councillor.
+    # AMO's 2026 roster independently confirms six.
+    #
+    # ⚠ Three candidate files were staged and all three differ. Resolved by
+    # per-ward area: `ws_2022` ("Electoral Ward Boundaries 2022") and
+    # `ws_tows2022` ("WardBoundary_2022") agree to 0.24% — the same map twice —
+    # while `ws_tows` ("WardsMarch2014") differs by 505% on its worst ward and
+    # is the superseded 2014 generation.
+    "whitchurch-stouffville-wards": BoundarySpec(
+        jurisdiction="whitchurch-stouffville-wards",
+        source_path="municipal-ontario/current/whitchurch-stouffville-wards.geojson",
+        src_epsg=4326,
+        level="municipal",
+        province_territory="ON",
+        source_set="whitchurch-stouffville-wards",
+        id_prefix="whitchurch-stouffville-wards",
+        authority="town-of-whitchurch-stouffville",
+        boundaries_version="2022",
+        effective_from=date(2022, 10, 24),
+        name_field="Ward",
+        authority_id_field="Ward",
+        boundary_kind="district",
+        expect_districts=6,
+        licence="none-stated",
+        notes="Town of Whitchurch-Stouffville, 'Electoral Ward Boundaries "
+              "2022'. Fills the last zero-ward Ontario set."
+    ),
+
 }
