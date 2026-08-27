@@ -59,6 +59,49 @@ with 2010, so a generated date is wrong for anything earlier.
   current layer surfaces only under "boundaries" (a "ward" search returns its
   2001-2018 predecessor, a confidently-wrong pick with a plausible count).
 
+## Ontario mid-size — staged 2026-08-27
+
+Thirteen files: ten current generations plus Burlington, Chatham-Kent and
+Haldimand's 2026 maps. All fetched via
+`/query?where=1=1&outFields=*&outSR=4326&f=geojson`, HTTP 200, checksums in the
+tranche manifest.
+
+| File | Endpoint | Licence |
+|---|---|---|
+| `current/kitchener-wards-2010.geojson` | services1.arcgis.com/qAo1OsXi67t7XgmS/…/Wards/FeatureServer/0 | ★ OGL – City of Kitchener 1.0 — the **only** full named machine-readable open licence among 27 Ontario publishers |
+| `current/cambridge-wards-2010.geojson` | maps.cambridge.ca/arcgispub03/…/OpenData2/MapServer/20 | licence PDF URL, name not given |
+| `current/oakville-wards-2018.geojson` | services5.arcgis.com/QJebCdoMf4PF8fJP/…/Wards/FeatureServer/0 | Town of Oakville Open Data Licence |
+| `current/milton-wards-2018.geojson` | api.milton.ca/…/Datasets/Wards/MapServer/0 | ⚠ unresolved — "Town of Milton disclaimer and terms of use", no URL |
+| `current/caledon-wards-2022.geojson` | services3.arcgis.com/AbUjpCl3KckkXVBh/…/Caledon_Ward_Boundaries_2022_Update_WFL1/FeatureServer/0 | ⚠ none stated |
+| `current/kawartha-lakes-wards-2018.geojson` | services3.arcgis.com/RQBDTPtsbT0jebs7/…/Wards_2018_AGOL/FeatureServer/0 | ⚠ none stated — the field holds a warranty disclaimer + copyright assertion, no grant |
+| `current/sault-ste-marie-wards-2018.geojson` | enterprise.ssmic.com/server/…/SooMaps_GeneralLayers/MapServer/14 | ⚠ none stated |
+| `current/burlington-wards-2006.geojson` | mapping.burlington.ca/arcgisweb/…/COB/WardBoundaries/MapServer/0 | ⚠ unresolved — "Open Data Terms of Use", no URL |
+| `current/burlington-wards-2026.geojson` | utility.arcgis.com proxy → COB/Ward_Boundaries_2026/MapServer/0 | as above |
+| `current/chatham-kent-wards-2026.geojson` | services1.arcgis.com/BlSm9A1poQIGIz9S/…/Election_2026_New_Ward_Boundaries/FeatureServer/3 | ⚠ none stated |
+| `current/haldimand-county-wards-2026.geojson` | gis.haldimandcounty.ca/server/…/Planning/DBO_WardsNew/FeatureServer/0 | ⚠ none stated |
+| `current/waterloo-wards-2014.geojson` | services.arcgis.com/ZpeBVw5o1kjit7LT/…/Wards2022/FeatureServer/0 | ⚠ none stated |
+| `current/belleville-wards-2000.geojson` | services2.arcgis.com/l8GRYtTYXpMUcOYV/…/Wards/FeatureServer/2 | ⚠ none stated |
+
+★ **Kawartha Lakes was a repair, not an upgrade.** The mirror's eight wards summed
+to 2,364.6 km² against a 3,335.2 km² municipality — roughly 1,000 km², 29% of the
+city, had no ward polygon at all. The authoritative eight sum to ~3,332. A count
+check passed it: 8 held, 8 authoritative.
+
+⚠ **Licence reality.** Of the nineteen mid-size publishers examined, **nine state
+nothing at all**; Kawartha Lakes states only an "as is" disclaimer. Kitchener is
+the sole full open licence. The modal Ontario municipal answer is silence, which
+is worse than this dossier's earlier "~40 licensors, mostly unaudited" framing
+implied. Recorded verbatim, never inferred.
+
+⚠ **Layer index is rarely 0** — Belleville 2, Cambridge 20, Chatham-Kent 7 and 3,
+Guelph 8, North Dumfries 377, Sault Ste. Marie 14, Wilmot 1. North Dumfries `/0`
+returns 2,000 address points that parse cleanly as GeoJSON.
+
+⛔ **Sault Ste. Marie moved.** The city's own published repo pins the wards layer
+at MapServer/17, which now serves 57 "Regulation 176_06" polygons with no ward
+attributes. A first-party published index is not a stable reference — check the
+attributes, not just the 200.
+
 ## Notes
 
 - Both files come from the **`city-wards` dataset** on `open.toronto.ca` (CKAN at

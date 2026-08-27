@@ -1589,6 +1589,29 @@ def _on_ward_titlecase(props: dict) -> str | None:
     return f"Ward {m.group(1)}" if m else w
 
 
+def _on_ward_from(field: str):
+    """Build a "Ward N" label from an arbitrary numeric/short field.
+
+    ⚠ Every Ontario publisher names this field differently — WARD, WARD_NO,
+    WARD_NUM, WARDNUMBER, WARD_ID, Ward_Number, ID. Held rows are uniformly
+    "Ward N" and the roster joins on the slug of that name, so the label has to
+    be built rather than taken.
+    """
+    def _b(props: dict) -> str | None:
+        v = props.get(field)
+        if v is None or str(v).strip() == "":
+            return None
+        v = str(v).strip()
+        # "WARD 2" / "Ward 2" -> "2"; a bare "2" stays "2"
+        m = re.match(r"^\s*WARD\s+(\S+)\s*$", v, re.I)
+        if m:
+            v = m.group(1)
+        if v.endswith(".0"):
+            v = v[:-2]
+        return f"Ward {v}"
+    return _b
+
+
 SPECS: dict[str, BoundarySpec] = {
     # ⚠ INTERNAL VALIDATION ONLY — not cleared for the public API.
     #
@@ -3766,6 +3789,282 @@ SPECS: dict[str, BoundarySpec] = {
         notes="opendata.greatersudbury.ca item "
               "30b05ebcb3784d73a05744bc4935c9ef, "
               "Ward_Boundaries/FeatureServer/0. Geometry only, no roster."
+    ),
+
+
+    # ═══ Ontario mid-size ═══════════════════════════════════════════════
+    # ⛔ ONLY MUNICIPALITIES WITH AN ESTABLISHED IN-FORCE DATE ARE HERE.
+    # Nine more were discovered, verified and staged in the same pass and are
+    # deliberately NOT loaded, because their date could only be guessed:
+    # Brantford (a 2024 ward review whose outcome is unknown, and its count is 5
+    # either way so no count check would catch a change), Guelph (geometry may be
+    # the 2006 map rather than the 2022 one — the Calgary A7 failure mode),
+    # Thunder Bay, North Dumfries, Wellesley, Wilmot, Woolwich, and the CURRENT
+    # generations of Chatham-Kent and Haldimand. Their mirror rows carry a date
+    # that is known to be false; replacing it with one that is merely plausible
+    # would trade a known error for a hidden one.
+
+    "kitchener-wards": BoundarySpec(
+        jurisdiction="kitchener-wards",
+        source_path="municipal-ontario/current/kitchener-wards-2010.geojson",
+        src_epsg=4326, level="municipal", province_territory="ON",
+        source_set="kitchener-wards", id_prefix="kitchener-wards",
+        authority="city-of-kitchener", boundaries_version="2010",
+        # A 2010 ward boundary review replaced six wards with ten for the 2010
+        # election. AMO's 2026 roster still shows ten.
+        effective_from=date(2010, 10, 25),
+        name_field="WARD", name_builder=_on_ward_from("WARD"),
+        authority_id_field="WARDID", boundary_kind="district",
+        expect_districts=10,
+        # ★ The ONLY full, named, machine-readable open licence among the 27
+        # Ontario municipal publishers examined in this wave.
+        licence="ogl-city-of-kitchener-1.0",
+        notes="open-kitchenergis.opendata.arcgis.com Wards/FeatureServer/0. "
+              "Carries COUNCILLOR_NAME, EMAIL, WORK_PHONE."
+    ),
+
+    "cambridge-wards": BoundarySpec(
+        jurisdiction="cambridge-wards",
+        source_path="municipal-ontario/current/cambridge-wards-2010.geojson",
+        src_epsg=4326, level="municipal", province_territory="ON",
+        source_set="cambridge-wards", id_prefix="cambridge-wards",
+        authority="city-of-cambridge", boundaries_version="2010",
+        # Ward 7 in its current form was created in 2010 when Cambridge went
+        # from six wards to eight.
+        effective_from=date(2010, 10, 25),
+        name_field="MAP_LABEL", name_builder=_on_ward_from("WARD_ID"),
+        authority_id_field="WARD_ID", boundary_kind="district",
+        expect_districts=8,
+        licence="city-of-cambridge-open-data-licence-pdf",
+        notes="maps.cambridge.ca OpenData2/MapServer/20 (NOT /0). Carries "
+              "COUNCILLOR_NAME, COUNCILLOR_EMAIL, ELECTORS_NUMBER."
+    ),
+
+    "oakville-wards": BoundarySpec(
+        jurisdiction="oakville-wards",
+        source_path="municipal-ontario/current/oakville-wards-2018.geojson",
+        src_epsg=4326, level="municipal", province_territory="ON",
+        source_set="oakville-wards", id_prefix="oakville-wards",
+        authority="town-of-oakville", boundaries_version="2018",
+        # Council adopted the option-2 boundaries 2016-05-30, re-dividing six
+        # wards into seven. Boundaries were status quo for 2014, so the
+        # seven-ward map first governed 2018.
+        effective_from=date(2018, 10, 22),
+        name_field="FULL_NAME", authority_id_field="Ward",
+        boundary_kind="district", expect_districts=7,
+        licence="town-of-oakville-open-data-licence",
+        notes="portal-exploreoakville.opendata.arcgis.com "
+              "Wards/FeatureServer/0. Geometry only."
+    ),
+
+    "milton-wards": BoundarySpec(
+        jurisdiction="milton-wards",
+        source_path="municipal-ontario/current/milton-wards-2018.geojson",
+        src_epsg=4326, level="municipal", province_territory="ON",
+        source_set="milton-wards", id_prefix="milton-wards",
+        authority="town-of-milton", boundaries_version="2018",
+        # Council voted 6-5 in June 2016 to cut eight wards to four, split
+        # north/south of Derry Rd. The 2018-2022 term was the first under it.
+        effective_from=date(2018, 10, 22),
+        # ⚠ `Name` is the compass label (NORTH-WEST); held rows are "Ward N".
+        name_field="Name", name_builder=_on_ward_from("WARD_NUM"),
+        authority_id_field="WARD_NUM", boundary_kind="district",
+        expect_districts=4,
+        licence="unresolved-town-of-milton-disclaimer",
+        notes="api.milton.ca Datasets/Wards/MapServer/0."
+    ),
+
+    "caledon-wards": BoundarySpec(
+        jurisdiction="caledon-wards",
+        source_path="municipal-ontario/current/caledon-wards-2022.geojson",
+        src_epsg=4326, level="municipal", province_territory="ON",
+        source_set="caledon-wards", id_prefix="caledon-wards",
+        authority="town-of-caledon", boundaries_version="2022",
+        # Ward Boundary By-law 2021-62 (council 2021-07-13) updated the ward
+        # structure for the first time in 27 years, for the 2022 election.
+        effective_from=date(2022, 10, 24),
+        # ⚠ The layer's own DESCRIPTION is stale — it still claims five wards
+        # with two councillors each and a 2013 copyright, while the DATA holds
+        # six. Trust the features, not the prose.
+        name_field="ID", name_builder=_on_ward_from("ID"),
+        authority_id_field="ID", boundary_kind="district",
+        expect_districts=6,
+        licence="none-stated",
+        notes="Caledon_Ward_Boundaries_2022_Update_WFL1/FeatureServer/0. "
+              "Contact columns exist but are ALL NULL — no usable roster."
+    ),
+
+    "kawartha-lakes-wards": BoundarySpec(
+        jurisdiction="kawartha-lakes-wards",
+        source_path="municipal-ontario/current/kawartha-lakes-wards-2018.geojson",
+        src_epsg=4326, level="municipal", province_territory="ON",
+        source_set="kawartha-lakes-wards", id_prefix="kawartha-lakes-wards",
+        authority="city-of-kawartha-lakes", boundaries_version="2018",
+        # By-Law 2017-053. Council moved to eight wards in March 2017; the OMB
+        # held a hearing 2017-08-24 and dismissed the appeal 2017-10-11,
+        # effective the next term. Residents elected eight councillors in 2018
+        # instead of sixteen.
+        effective_from=date(2018, 10, 22),
+        name_field="Ward_No", authority_id_field="Ward",
+        boundary_kind="district", expect_districts=8,
+        # ⚠ NOT an open licence: the licence field is a warranty disclaimer with
+        # a copyright assertion and no grant of rights.
+        licence="none-stated-disclaimer-only",
+        notes="open-data-kawartha.hub.arcgis.com Wards_2018_AGOL/FeatureServer/0."
+    ),
+
+    "sault-ste-marie-wards": BoundarySpec(
+        jurisdiction="sault-ste-marie-wards",
+        source_path="municipal-ontario/current/sault-ste-marie-wards-2018.geojson",
+        src_epsg=4326, level="municipal", province_territory="ON",
+        source_set="sault-ste-marie-wards", id_prefix="sault-ste-marie-wards",
+        authority="city-of-sault-ste-marie", boundaries_version="2018",
+        # Council agreed 2017-03-06 to redraft from twelve councillors across
+        # six wards to ten across five. In place since the 2018 election.
+        effective_from=date(2018, 10, 22),
+        name_field="WARDNUMBER", name_builder=_on_ward_from("WARDNUMBER"),
+        authority_id_field="WARDNUMBER", boundary_kind="district",
+        expect_districts=5,
+        licence="none-stated",
+        notes="enterprise.ssmic.com SooMaps_GeneralLayers/MapServer/14. "
+              "⛔ The CITY'S OWN published repo pins this layer at index 17, "
+              "which now serves 57 'Regulation 176_06' polygons with no ward "
+              "attributes. A first-party published index is not a stable "
+              "reference — verify attributes, not just a 200."
+    ),
+
+    "burlington-wards": BoundarySpec(
+        jurisdiction="burlington-wards",
+        source_path="municipal-ontario/current/burlington-wards-2006.geojson",
+        src_epsg=4326, level="municipal", province_territory="ON",
+        source_set="burlington-wards", id_prefix="burlington-wards",
+        authority="city-of-burlington", boundaries_version="2006",
+        # Burlington's last review before the current one was in 2005 and the
+        # boundaries last changed for the 2006 election.
+        effective_from=date(2006, 11, 13),
+        # ⛔ Ends when its successor begins — By-law 30-2025, appeal period
+        # expired 2025-07-04 with no appeals filed.
+        effective_to=date(2026, 10, 25),
+        name_field="WARD_NO", name_builder=_on_ward_from("WARD_NO"),
+        authority_id_field="WARD_NO", boundary_kind="district",
+        expect_districts=6,
+        licence="unresolved-open-data-terms-of-use-no-url",
+        notes="mapping.burlington.ca COB/WardBoundaries/MapServer/0. "
+              "★ We held 4 of 6 wards — this is a partial-ingest fix."
+    ),
+
+    # ⛔ FUTURE — live only from 2026-10-26. By-law 30-2025, appeal period
+    # expired 2025-07-04 with no notices of appeal. Six wards before AND after,
+    # so a count check cannot tell it from the current map (ruling A7). The
+    # geometry can: measured per-ward change is -9.5% / +11.5% / +9.0% / -19.2%
+    # on wards 1-4 and under 1.2% on 5-6, matching the by-law's stated scope of
+    # "Wards 1, 2, 3 and 4 impacted" exactly.
+    "burlington-wards-2026": BoundarySpec(
+        jurisdiction="burlington-wards-2026",
+        source_path="municipal-ontario/current/burlington-wards-2026.geojson",
+        src_epsg=4326, level="municipal", province_territory="ON",
+        source_set="burlington-wards", id_prefix="burlington-wards",
+        authority="city-of-burlington", boundaries_version="2026",
+        effective_from=date(2026, 10, 26),
+        name_field="Wards_Appr", authority_id_field="Wards_Appr",
+        boundary_kind="district", expect_districts=6,
+        licence="unresolved-open-data-terms-of-use-no-url",
+        notes="⚠ Reachable ONLY via the utility.arcgis.com proxy — the direct "
+              "mapping.burlington.ca path returns code 499 'Token Required' and "
+              "the service is absent from the public COB folder listing. The "
+              "proxy URL itself is public and unauthenticated."
+    ),
+
+    # ⛔ FUTURE — 6 wards to 8, live 2026-10-26. Council approved 2025-03-03;
+    # the enabling by-law passed March 2025. Council shrinks 18 -> 15. The
+    # layer's own description is "New Ward Boundaries for the 2026 muni
+    # election", and AMO's 2026 roster lists exactly these eight names.
+    # ⚠ The CURRENT 6-ward Chatham-Kent map is deliberately not loaded — its
+    # in-force date is either 1997-11-10 or 2000-11-13 and that was not resolved.
+    "chatham-kent-wards-2026": BoundarySpec(
+        jurisdiction="chatham-kent-wards-2026",
+        source_path="municipal-ontario/current/chatham-kent-wards-2026.geojson",
+        src_epsg=4326, level="municipal", province_territory="ON",
+        source_set="chatham-kent-wards", id_prefix="chatham-kent-wards",
+        authority="municipality-of-chatham-kent", boundaries_version="2026",
+        effective_from=date(2026, 10, 26),
+        name_field="wardName", authority_id_field="wardNumber",
+        boundary_kind="district", expect_districts=8,
+        licence="none-stated",
+        notes="Election_2026_New_Ward_Boundaries/FeatureServer/3 (NOT /0). "
+              "⚠ This org publishes at least eight ward-ish services, most of "
+              "them drafts from the review — CK_Wards, Future_Chatham_Kent_"
+              "Wards, CKWBR_Draft..., WardOne..WardSix. This is the one with "
+              "defensible provenance."
+    ),
+
+    # ⛔ FUTURE — 6 wards to 7, live 2026-10-26. By-law 2588/25 approved by
+    # council 2025-02-10; the Ontario Land Tribunal DISMISSED the appeal
+    # 2025-08-25 after a hearing on 2025-07-15. ★ The cleanest A2/A10.4 case in
+    # the Ontario wave — a numbered by-law with a resolved OLT proceeding.
+    # ⚠ The service is named DBO_WardsNew. Nothing in its name or metadata says
+    # 2026 or cites the by-law; only the 7-vs-6 count and the OLT record
+    # identify it. Do not rely on the name.
+    "haldimand-county-wards-2026": BoundarySpec(
+        jurisdiction="haldimand-county-wards-2026",
+        source_path="municipal-ontario/current/haldimand-county-wards-2026.geojson",
+        src_epsg=4326, level="municipal", province_territory="ON",
+        source_set="haldimand-county-wards", id_prefix="haldimand-county-wards",
+        authority="haldimand-county", boundaries_version="2026",
+        effective_from=date(2026, 10, 26),
+        name_field="Ward", authority_id_field="Ward",
+        boundary_kind="district", expect_districts=7,
+        licence="none-stated",
+        notes="gis.haldimandcounty.ca Planning/DBO_WardsNew/FeatureServer/0."
+    ),
+
+    "waterloo-wards": BoundarySpec(
+        jurisdiction="waterloo-wards",
+        source_path="municipal-ontario/current/waterloo-wards-2014.geojson",
+        src_epsg=4326, level="municipal", province_territory="ON",
+        source_set="waterloo-wards", id_prefix="waterloo-wards",
+        authority="city-of-waterloo", boundaries_version="2014",
+        # ⚠ AN UPPER BOUND, NOT A CONFIRMED DATE, and recorded as such. The
+        # city publishes Wards2010/2014/2018/2022 as four separate services;
+        # 2014, 2018 and 2022 are the SAME geometry (all 7 wards agree to
+        # <0.01% area — only the councillor columns differ), so the map first
+        # governed 2014 AT THE LATEST. Wards2010 returns HTTP 200 with an empty
+        # features array, so 2010 could not be ruled out either way.
+        # ⛔ Ingesting each year-labelled layer as its own generation would have
+        # fabricated three Waterloo generations plus one empty one. A year in an
+        # ArcGIS dataset name is not evidence of a generation.
+        effective_from=date(2014, 10, 27),
+        name_field="WARD", name_builder=_on_ward_from("WARD_NO"),
+        authority_id_field="WARD_NO", boundary_kind="district",
+        expect_districts=7,
+        licence="none-stated",
+        notes="data.waterloo.ca Wards2022/FeatureServer/0. Carries COUNCILLOR."
+    ),
+
+    "belleville-wards": BoundarySpec(
+        jurisdiction="belleville-wards",
+        source_path="municipal-ontario/current/belleville-wards-2000.geojson",
+        src_epsg=4326, level="municipal", province_territory="ON",
+        source_set="belleville-wards", id_prefix="belleville-wards",
+        authority="city-of-belleville", boundaries_version="2000",
+        # ⚠ INFERRED, and flagged as such: Ward 2 was created when the City
+        # amalgamated with the Township of Thurlow effective 1998-01-01, so the
+        # first general election under the two-ward model was 2000-11-13. No
+        # by-law was located. A 2021 proposal to move to four wards was voted
+        # down, so nothing has superseded it.
+        effective_from=date(2000, 11, 13),
+        # ★ BELLEVILLE IS GENUINELY TWO WARDS. The dossier recorded a
+        # "Belleville 2/6" gap; there was no gap. Ward 1 (the historic city)
+        # elects SIX councillors and Ward 2 (Thurlow) elects two — the six
+        # councillors were misread as six wards. Confirmed three ways: the
+        # city's layer returns exactly 2 features, AMO's 2026 roster shows two
+        # ward labels, and the amalgamation history explains why.
+        name_field="Ward", authority_id_field="Ward",
+        boundary_kind="district", expect_districts=2,
+        licence="none-stated",
+        notes="opendata-bellevillegis.hub.arcgis.com Wards/FeatureServer/2 "
+              "(NOT /0). ⚠ The same org publishes a 'Wards 1850' historical "
+              "layer — do not confuse them."
     ),
 
 }
