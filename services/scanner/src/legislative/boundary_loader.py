@@ -4225,4 +4225,57 @@ SPECS: dict[str, BoundarySpec] = {
               "roster payload after Kitchener."
     ),
 
+
+    # ★ BRANTFORD WAS NEVER ACTUALLY UNCERTAIN — the premise was a NAME
+    # COLLISION, one tier out from the one this dossier already warns about.
+    # It was held back from 0109 because a ward-boundary review appeared to run
+    # through 2024 (survey July, Policy Development Committee 2024-09-03,
+    # Council 2024-09-23) with an outcome nobody could find. That review belongs
+    # to the COUNTY OF BRANT, not the CITY OF BRANTFORD: engagebrant.ca names
+    # the municipality, "Policy Development Committee" is a County committee
+    # (Brantford has none), and AMO lists them separately — "Brant, County of"
+    # urlId 10123 against "Brantford, City of" 10109. There was no Brantford
+    # decision to find, so the layer's 2024-02-14 modification date "predating"
+    # it was evidence of nothing.
+    #
+    # ⚠ Ontario reuses names across tiers and this is the sharper form: not two
+    # municipalities with the SAME name at different tiers, but two whose names
+    # differ by three letters. Verify the municipality, not the string.
+    #
+    # In-force 2018-10-22. The boundaries changed once, at the 2017 annexation.
+    # Brantford-Brant Boundary Adjustment Agreement, Part II, Article 5.01:
+    # "existing Wards 1, 2, 3 and 4 of the City shall be enlarged as required to
+    # include the entirety of that Phase annexed... Except for the enlargement
+    # of the said Wards 1, 2, 3, and 4, there shall be no other changes to the
+    # boundaries". Signed 2016-06-28, effective 2017-01-01; first election after
+    # it was 2018-10-22.
+    #
+    # ⚠ A LIVE CAVEAT, not a closed question. The agreement runs in three phases
+    # with a Trigger Mechanism, and s.5.03 provides that when it is exercised
+    # "the City shall specify the resulting City Ward Boundary changes". The
+    # 2021 census area matches the full annexation and the City's own 2026 ward
+    # map matches this geometry, so no later phase has moved the wards yet — but
+    # a future trigger will, and it will NOT be announced as a ward review.
+    "brantford-wards": BoundarySpec(
+        jurisdiction="brantford-wards",
+        source_path="municipal-ontario/current/brantford-wards-2018.geojson",
+        src_epsg=4326,
+        level="municipal",
+        province_territory="ON",
+        source_set="brantford-wards",
+        id_prefix="brantford-wards",
+        authority="city-of-brantford",
+        boundaries_version="2018",
+        effective_from=date(2018, 10, 22),
+        name_field="WARD_NAME",
+        authority_id_field="WARD",
+        boundary_kind="district",
+        expect_districts=5,
+        licence="city-of-brantford-open-data-licence-portal-ref",
+        notes="data-brantford.opendata.arcgis.com Wards/FeatureServer/0. The "
+              "OP_Voting_District service returns byte-equal geometry. ⚠ The "
+              "Hub serves no DCAT feed — /api/feed/dcat-us/1.1.json is 404 and "
+              "the search collections endpoint is 401; reach it by org id."
+    ),
+
 }
