@@ -4143,4 +4143,42 @@ SPECS: dict[str, BoundarySpec] = {
               "'© The Town of Newmarket'. Carries the councillor in NAME."
     ),
 
+
+    # ⛔ WE ARE MISSING WARD 7 — a hole, like Newmarket's Ward 5. Held rows are
+    # Wards 1-6 and 8; every address in Ward 7 resolves to no councillor.
+    # Surfaced by the AMO coverage audit (held 7, council 8).
+    #
+    # ★ The cleanest date evidence in the Durham/York tranche, and it is an
+    # INSTRUMENT rather than prose: Ward Boundary By-law 2013-29, passed by
+    # Markham City Council 2013-03-19, with the Ontario Municipal Board
+    # dismissing the appeal against it on 2013-10-24. Same shape as Haldimand's
+    # 2588/25 — a numbered by-law with a resolved tribunal proceeding — so the
+    # boundaries first governed the 2014-10-27 election.
+    #
+    # ⚠ Markham has had eight wards since 1997 with the NUMBERING unchanged
+    # through minor adjustments in 1978, 1982, 1997 and 2006. The count is
+    # therefore useless as a vintage signal across five generations — ruling A7
+    # in its purest form. The 2013 review changed all eight boundaries, which is
+    # what makes 2014 the answer rather than 1997.
+    "markham-wards": BoundarySpec(
+        jurisdiction="markham-wards",
+        source_path="municipal-ontario/current/markham-wards.geojson",
+        src_epsg=4326,
+        level="municipal",
+        province_territory="ON",
+        source_set="markham-wards",
+        id_prefix="markham-wards",
+        authority="city-of-markham",
+        boundaries_version="2014",
+        effective_from=date(2014, 10, 27),
+        name_field="WARD",
+        name_builder=_on_ward_from("WARD"),
+        authority_id_field="WARD",
+        boundary_kind="district",
+        expect_districts=8,
+        licence="none-stated",
+        notes="City of Markham 'Wards'. By-law 2013-29 (2013-03-19), OMB appeal "
+              "dismissed 2013-10-24. Carries COUNCILLOR and PHONE_NUMBER."
+    ),
+
 }
