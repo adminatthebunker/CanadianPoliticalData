@@ -4181,4 +4181,48 @@ SPECS: dict[str, BoundarySpec] = {
               "dismissed 2013-10-24. Carries COUNCILLOR and PHONE_NUMBER."
     ),
 
+
+    # ★ THE CALGARY A7 FAILURE MODE, TESTED AND DISCONFIRMED. Guelph was held
+    # back from the mid-size load because its councillor attributes are the
+    # current 2022-2026 council while attributes update independently of
+    # geometry — exactly how Calgary's perfect count concealed a superseded map.
+    # Resolved by rendering the staged geometry against the City's OWN published
+    # "City of Guelph Ward Map", dated May 2022: every ward matches, including
+    # Ward 2's narrow northern spur, Ward 5's stepped southern edge and Ward 6's
+    # angled western boundary. It is the 2022 map.
+    #
+    # In-force 2022-10-24: after roughly thirty years unchanged, Council
+    # approved an adjusted six-ward map for the 2022 election, the legislated
+    # deadline for passing it being 2021-12-31. The prior adjustment was 2006.
+    #
+    # ⚠ Held rows are named "Ward N" while the source names them for saints —
+    # St. Patrick's, St. George's, St. John's, St. David's, St. Andrew's,
+    # St. James'. Keeping the source's names would re-key all six
+    # constituency_ids and detach the council, so the label is built from WARD
+    # and the saints' names are deliberately dropped. ⛔ Do not "fix" this by
+    # switching name_field to NAME without a matching roster migration.
+    "guelph-wards": BoundarySpec(
+        jurisdiction="guelph-wards",
+        source_path="municipal-ontario/current/guelph-wards-2022.geojson",
+        src_epsg=4326,
+        level="municipal",
+        province_territory="ON",
+        source_set="guelph-wards",
+        id_prefix="guelph-wards",
+        authority="city-of-guelph",
+        boundaries_version="2022",
+        effective_from=date(2022, 10, 24),
+        name_field="WARD",
+        name_builder=_on_ward_from("WARD"),
+        authority_id_field="WARD",
+        boundary_kind="district",
+        expect_districts=6,
+        # ⚠ licenseInfo is the bare string "Open Data License" — no version, no
+        # URL. Unresolved, not open.
+        licence="unresolved-bare-open-data-license-string",
+        notes="gismaps.guelph.ca OpenData/OpenData1/FeatureServer/8 (NOT /0). "
+              "Two councillors per ward in COUNC1/COUNC2 — richest Ontario "
+              "roster payload after Kitchener."
+    ),
+
 }
