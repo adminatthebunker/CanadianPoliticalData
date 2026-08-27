@@ -456,9 +456,13 @@ INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) V
 -- with no district, orphaned constituency_ids, and geometry drift. Four
 -- jurisdictions in the 2026 boundary programme had a PERFECT count over wrong
 -- data. A member shortfall is reported as a vacancy, never failed.
-('Boundary coverage sentinel (weekly)',
+-- ⛔ DAILY, not weekly, since 2026-08-27. On 2026-08-23 an Open North re-ingest
+-- reverted twelve cutover migrations; this sentinel FAILED on 2026-08-24 and
+-- the failure sat unread for five days because the next run was a week out. It
+-- is cheap and the damage window is what matters, not the run cost.
+('Boundary coverage sentinel (daily)',
  'check-boundary-coverage', '{}'::jsonb,
- '57 13 * * 1', true, 'daily-ingest-rollout'),
+ '57 13 * * *', true, 'daily-ingest-rollout'),
 
 -- Roster enrichment + slug-stamping additions (MEDIUM-bucket triage,
 -- same audit cycle, later in the day). Slotted into the Sunday
@@ -491,47 +495,34 @@ INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) V
  'ingest-nt-mlas', '{}'::jsonb,
  '52 4 * * 0', true, 'audit-2026-05-21');
 
--- ─── Weekly current-roster refresh (Sun 05:05–05:40 UTC) ────────────
--- Roster-audit 2026-08-12: the Open North current-roster commands were
--- never scheduled — a by-election winner or floor-crosser only landed
--- when someone ran the command by hand. All of these share the
--- detect_retirements path (close ended_at + flip is_active on members
--- dropped upstream), so flag-less weekly runs are self-healing.
--- Deliberately NOT scheduled: the Open North SK/NS variants (native
--- slug-stamping rosters already run weekly; a second roster source
--- there re-opens the SK-triples duplicate-politician class), the NU
--- variant (Open North indexes 0 NU rows), and ingest-nwt-mlas (native
--- ingest-nt-mlas already covers NT weekly).
+-- ─── Weekly current-roster refresh — REMOVED 2026-08-27 ─────────────
+-- ⛔ THIS BLOCK RE-ENABLED OPEN NORTH ROSTER INGESTION ON EVERY RUN.
+--
+-- It DELETEd by `created_by` and re-INSERTed nine schedules with
+-- `enabled = true`, so re-running this seed silently reverted migration
+-- 0087, which had disabled exactly those schedules when the Open North
+-- mirror was retired on 2026-08-19. A migration that a routine seed can
+-- undo is not a retirement.
+--
+-- ★ The 2026-08-23 incident did not come through here — it came from
+-- `scripts/scanner-cron.sh`, a second undocumented scheduler running a
+-- three-month-old image. But this block was the same failure waiting on
+-- a different trigger, and it is removed for the same reason.
+--
+-- The commands themselves (`ingest-mps`, `ingest-mlas`, `ingest-bc-mlas`,
+-- `ingest-ontario-mpps`, `ingest-new-brunswick-mlas`, `ingest-nl-mhas`,
+-- `ingest-pei-mlas`, `ingest-yukon-mlas`) are gone from the job catalogue.
+-- Roster refresh now belongs to each jurisdiction's own ingester; where one
+-- does not exist yet the roster is FROZEN, and saying so is Stage F's job.
+--
+-- ⚠ `ingest-senators` was in this block and is NOT an Open North command.
+-- It is preserved below.
 DELETE FROM scanner_schedules WHERE created_by = 'roster-audit-2026-08-12';
 
 INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) VALUES
-('Federal MP roster weekly refresh',
- 'ingest-mps', '{}'::jsonb,
- '5 5 * * 0', true, 'roster-audit-2026-08-12'),
 ('Senate roster weekly refresh',
  'ingest-senators', '{}'::jsonb,
- '8 5 * * 0', true, 'roster-audit-2026-08-12'),
-('AB MLA roster weekly refresh (Open North)',
- 'ingest-mlas', '{}'::jsonb,
- '10 5 * * 0', true, 'roster-audit-2026-08-12'),
-('BC MLA roster weekly refresh (Open North)',
- 'ingest-bc-mlas', '{}'::jsonb,
- '15 5 * * 0', true, 'roster-audit-2026-08-12'),
-('ON MPP roster weekly refresh (Open North)',
- 'ingest-ontario-mpps', '{}'::jsonb,
- '20 5 * * 0', true, 'roster-audit-2026-08-12'),
-('NB MLA roster weekly refresh (Open North)',
- 'ingest-new-brunswick-mlas', '{}'::jsonb,
- '25 5 * * 0', true, 'roster-audit-2026-08-12'),
-('NL MHA roster weekly refresh (Open North)',
- 'ingest-nl-mhas', '{}'::jsonb,
- '30 5 * * 0', true, 'roster-audit-2026-08-12'),
-('PE MLA roster weekly refresh (Open North)',
- 'ingest-pei-mlas', '{}'::jsonb,
- '35 5 * * 0', true, 'roster-audit-2026-08-12'),
-('YT MLA roster weekly refresh (Open North)',
- 'ingest-yukon-mlas', '{}'::jsonb,
- '40 5 * * 0', true, 'roster-audit-2026-08-12');
+ '8 5 * * 0', true, 'roster-audit-2026-08-12');
 
 -- next_run_at is computed by the worker the first time it polls; leave
 -- it NULL here so croniter advances it correctly on the worker tick.

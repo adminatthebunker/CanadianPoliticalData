@@ -499,6 +499,17 @@ services:
       GEOIP_CITY_PATH: /data/GeoLite2-City.mmdb
       GEOIP_ASN_PATH:  /data/GeoLite2-ASN.mmdb
     volumes:
+      # ⛔ THE MISSING MOUNT THAT CAUSED THE 2026-08-23 MIRROR REGRESSION.
+      # This was the only scanner-family service without it — `scanner`,
+      # `scanner-jobs`, `alerts-worker`, `reports-worker` and `scrape-worker`
+      # all bind-mount the source. So this container ran `COPY src/ ./src/`
+      # code from an image built 2026-06-02, and `restart: unless-stopped`
+      # carried that image across every rebuild of everything else. The Open
+      # North retirement guard added 2026-08-20 was present in the repo and
+      # absent here, which is precisely how a retired ingester re-created 1,926
+      # boundary rows and reverted twelve cutover migrations.
+      # ⚠ Verify with: docker exec sw-scanner-cron grep -c OPENNORTH_ALLOW_INGEST /app/src/opennorth.py
+      - ./services/scanner/src:/app/src
       - ./data:/data:ro
       - ./db:/app/db:ro
       - ./scripts/scanner-cron.sh:/cron.sh:ro
@@ -589,8 +600,15 @@ services:
     image: nginx:alpine
     container_name: sw-nginx
     ports:
-      - "${HTTP_PORT:-8088}:80"
-      - "${HTTPS_PORT:-8443}:443"
+      # Loopback only. Public traffic arrives through the Newt tunnel, which
+      # reaches this container as `nginx:80` over the `sw` network and never
+      # touches the host publish. Docker port publishing bypasses ufw, so a
+      # 0.0.0.0 bind here would expose the site to the LAN.
+      #
+      # The former "${HTTPS_PORT:-8443}:443" mapping was removed: nginx binds
+      # only :80 inside the container (TLS terminates at Pangolin), so it
+      # published a host socket to a closed port.
+      - "127.0.0.1:${HTTP_PORT:-8088}:80"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/conf.d:/etc/nginx/conf.d:ro

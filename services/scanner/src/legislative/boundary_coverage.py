@@ -469,8 +469,15 @@ async def check_municipal_integrity(db: Database) -> list[MunicipalProblem]:
     rows = await db.fetch(
         """
         WITH m AS (
+          -- ⚠ ST_MakeValid at read time, deliberately. This check once
+          -- aborted the ENTIRE sentinel with `GEOSIntersects:
+          -- TopologyException` because 28 QC polygons were self-intersecting,
+          -- so nothing downstream of it ran and no summary line was printed
+          -- for five days. A validity defect is reported by the
+          -- `invalid-geometry` class below, never by taking the run down.
           SELECT p.name, split_part(p.source_id, ':', 2) AS council,
-                 b.constituency_id, b.boundary
+                 b.constituency_id,
+                 ST_CollectionExtract(ST_MakeValid(b.boundary), 3) AS boundary
             FROM politicians p
             JOIN constituency_boundaries b ON b.constituency_id = p.constituency_id
            WHERE p.is_active AND p.level = 'municipal'
@@ -501,17 +508,35 @@ async def check_municipal_integrity(db: Database) -> list[MunicipalProblem]:
 
     # ⚠ Near-identical overlapping polygons make a smallest-first lookup
     # planner-dependent — the Peel defect, fixed in 0083. Cheap to re-check.
+    # ⛔ `boundary_kind = 'district'` on BOTH sides is what made this check
+    # blind to the 2026-08-23 mirror regression. A re-ingested Open North row
+    # carries `boundary_kind IS NULL` — it has no tier at all — so Toronto's 25
+    # wards sat live TWICE at 100% overlap and this predicate excluded every
+    # pair. Treat NULL as a district: an untiered row is exactly the kind that
+    # duplicates, so excluding it inverts the check's purpose.
+    #
+    # ⚠ Also now scoped to LIVE rows. Without it, removing the kind filter would
+    # count deliberately retired generations (QC's end-dated 2017 map) as
+    # duplicates — a retired generation overlapping its successor is the system
+    # working, not a defect.
     dupes = await db.fetchval(
         """
-        SELECT count(*) FROM constituency_boundaries a
-          JOIN constituency_boundaries b
+        WITH live AS (
+          SELECT constituency_id,
+                 ST_CollectionExtract(ST_MakeValid(boundary), 3) AS g
+            FROM constituency_boundaries
+           WHERE level = 'municipal'
+             AND (boundary_kind = 'district' OR boundary_kind IS NULL)
+             AND effective_from <= CURRENT_DATE
+             AND (effective_to IS NULL OR effective_to >= CURRENT_DATE)
+        )
+        SELECT count(*) FROM live a
+          JOIN live b
             ON b.constituency_id > a.constituency_id
-           AND b.level = 'municipal' AND b.boundary_kind = 'district'
-           AND ST_Intersects(a.boundary, b.boundary)
-           AND ST_Area(ST_Intersection(a.boundary, b.boundary))
-                 / least(ST_Area(a.boundary), ST_Area(b.boundary)) >= 0.98
-           AND ST_Area(a.boundary) / ST_Area(b.boundary) BETWEEN 0.98 AND 1.02
-         WHERE a.level = 'municipal' AND a.boundary_kind = 'district'
+           AND ST_Intersects(a.g, b.g)
+           AND ST_Area(ST_Intersection(a.g, b.g))
+                 / least(ST_Area(a.g), ST_Area(b.g)) >= 0.98
+           AND ST_Area(a.g) / ST_Area(b.g) BETWEEN 0.98 AND 1.02
         """,
         timeout=300,
     )
@@ -522,4 +547,148 @@ async def check_municipal_integrity(db: Database) -> list[MunicipalProblem]:
             "smallest-first lookup cannot choose deterministically between them",
             int(dupes),
         ))
+
+    # ── Invalid geometry ────────────────────────────────────────────────
+    # ⚠ The checks above now repair at read time so a self-intersection cannot
+    # abort the run. That makes it this check's job to say so out loud —
+    # otherwise the repair silently masks a defect in the stored data, and a
+    # polygon PostGIS has to fix on every read is a polygon that will break the
+    # next thing that touches it raw.
+    rows = await db.fetch(
+        """
+        SELECT level, source_set, count(*) AS n
+          FROM constituency_boundaries
+         WHERE NOT ST_IsValid(boundary)
+           AND effective_from <= CURRENT_DATE
+           AND (effective_to IS NULL OR effective_to >= CURRENT_DATE)
+         GROUP BY level, source_set
+         ORDER BY n DESC
+        """
+    )
+    if rows:
+        out.append(MunicipalProblem(
+            "invalid-geometry",
+            "live polygons fail ST_IsValid and are being repaired on every "
+            "read — fix them in the table: "
+            + ", ".join(f"{r['source_set']} ×{r['n']}" for r in rows[:6]),
+            sum(r["n"] for r in rows),
+        ))
+
+    # ── Open North mirror signature ─────────────────────────────────────
+    # ⛔ THE 2026-08-23 REGRESSION, CAUGHT DIRECTLY.
+    #
+    # A single Open North run re-created 1,926 rows and reverted twelve applied
+    # cutover migrations. Every existing check missed it: `duplicate-generation`
+    # groups by source_set and the cutovers deliberately RENAMED the set;
+    # `duplicate-geometry` required a boundary_kind the mirror rows do not
+    # carry; `wrong-tier` cannot fire on NULL. Three checks, all failing open.
+    #
+    # ★ So test the signature itself rather than its consequences. The loader
+    # produces neither `boundaries_version='current'` nor
+    # `effective_from='2023-01-01'` — only the mirror ever did. At federal and
+    # provincial level all 14 jurisdictions are on authoritative sources, so
+    # ANY such row is a defect. Municipal keeps the source_set qualifier: ~782
+    # legitimately un-replaced mirror rows are the only data that exists for
+    # those places, and flagging them every day would train the operator to
+    # ignore this line.
+    rows = await db.fetch(
+        """
+        SELECT b.level, b.source_set, count(*) AS n
+          FROM constituency_boundaries b
+         WHERE b.boundaries_version = 'current'
+           AND b.effective_from = DATE '2023-01-01'
+           -- ⚠ `boundary_kind IS NULL` is not decoration, it is the whole
+           -- discriminator. The mirror never writes a tier; every deliberately
+           -- kept row has one. Without this clause the check reports the ten
+           -- `census-subdivisions/*` mayoral polygons 0093 preserved inside
+           -- ward sets, Montréal's 18 boroughs, Québec's 5 and Sainte-Anne's
+           -- 5 held districts — 38 rows that are correct and must stay. Found
+           -- the hard way while writing 0101, whose first draft would have
+           -- deleted all 38.
+           AND b.boundary_kind IS NULL
+           AND (b.effective_to IS NULL OR b.effective_to >= CURRENT_DATE)
+           AND (b.level <> 'municipal'
+                OR EXISTS (SELECT 1 FROM constituency_boundaries n
+                            WHERE n.source_set = b.source_set
+                              AND n.boundaries_version <> 'current'))
+         GROUP BY b.level, b.source_set
+         ORDER BY n DESC
+        """
+    )
+    if rows:
+        out.append(MunicipalProblem(
+            "mirror-signature",
+            "Open North mirror rows are live in a jurisdiction already moved "
+            "onto an authoritative source — an ingest has reverted a cutover: "
+            + ", ".join(f"{r['source_set']} ×{r['n']}" for r in rows[:6]),
+            sum(r["n"] for r in rows),
+        ))
+
+    # ── Untiered rows under a sitting official ──────────────────────────
+    # ⚠ `wrong-tier` compares an office class against `boundary_kind`. NULL is
+    # neither a match nor a mismatch, so it passes — which is how 257 sitting
+    # municipal officials came to sit on rows with no tier at all and nothing
+    # said a word. Absence of a tier is its own defect, not a free pass.
+    rows = await db.fetch(
+        """
+        SELECT split_part(p.source_id, ':', 2) AS council, count(*) AS n
+          FROM politicians p
+          JOIN constituency_boundaries b
+            ON b.constituency_id = p.constituency_id
+         WHERE p.is_active AND p.level = 'municipal'
+           AND b.boundary_kind IS NULL
+           AND b.effective_from <= CURRENT_DATE
+           AND (b.effective_to IS NULL OR b.effective_to >= CURRENT_DATE)
+         GROUP BY 1 ORDER BY n DESC
+        """
+    )
+    if rows:
+        out.append(MunicipalProblem(
+            "untiered",
+            "sitting officials on boundary rows with no boundary_kind, which "
+            "every tier check silently passes: "
+            + ", ".join(f"{r['council']} ×{r['n']}" for r in rows[:6]),
+            sum(r["n"] for r in rows),
+        ))
+
+    # ── One district, two live generations, DIFFERENT set names ─────────
+    # ⛔ The blind spot in `duplicate-generation` above. It groups by
+    # (level, source_set, constituency_id) — but a cutover's whole job is to
+    # strip the generation out of the set name, so the superseded row and its
+    # replacement end up under two DIFFERENT sets and never group together:
+    #
+    #   current                    federal-electoral-districts-2023-representation-order/10001
+    #   2023-representation-order  federal-electoral-districts/10001
+    #
+    # ★ Key on the district identity — the id tail — scoped by jurisdiction.
+    # ⚠ Federal/provincial only. Municipal tails are nowhere near unique
+    # (`district-1` exists in 13 Québec sets), so the same key there would
+    # report a hundred non-findings; municipal duplication is caught
+    # geometrically by `duplicate-geometry` instead.
+    rows = await db.fetch(
+        """
+        SELECT level, province_territory,
+               split_part(constituency_id, '/', 2) AS district,
+               string_agg(DISTINCT source_set, ' + ' ORDER BY source_set) AS sets
+          FROM constituency_boundaries
+         WHERE level IN ('federal', 'provincial')
+           AND effective_from <= CURRENT_DATE
+           AND (effective_to IS NULL OR effective_to >= CURRENT_DATE)
+         GROUP BY 1, 2, 3
+        HAVING count(DISTINCT source_set) > 1
+        """
+    )
+    if rows:
+        by_sets: dict = {}
+        for r in rows:
+            by_sets[r["sets"]] = by_sets.get(r["sets"], 0) + 1
+        out.append(MunicipalProblem(
+            "duplicate-district",
+            "one district live under two source_sets at once — a point-in-"
+            "polygon returns it twice: "
+            + ", ".join(f"{k} ×{n}" for k, n in
+                        sorted(by_sets.items(), key=lambda t: -t[1])[:4]),
+            len(rows),
+        ))
+
     return out

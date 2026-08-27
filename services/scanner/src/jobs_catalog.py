@@ -1019,81 +1019,9 @@ COMMANDS: dict[str, dict[str, Any]] = {
     },
 
     # ── Reps / rosters (Open North) ──────────────────────────────────
-    "ingest-mps": {
-        "description": "Federal MPs roster from Open North Represent.",
-        "cli": "ingest-mps", "category": "enrichment", "args": [],
-    },
     "ingest-senators": {
         "description": "Canadian Senate roster from sencanada.ca.",
         "cli": "ingest-senators", "category": "enrichment", "args": [],
-    },
-    "ingest-mlas": {
-        "description": "AB current MLA roster from Open North Represent (SETS['alberta_mlas'] — the name predates the per-province commands). Closes politician_terms.ended_at + flips is_active=false for politicians dropped from the upstream roster (detect_retirements). Run weekly.",
-        "cli": "ingest-mlas", "category": "enrichment", "args": [],
-    },
-    "ingest-bc-mlas": {
-        "description": "BC current MLA roster from Open North Represent. Closes politician_terms.ended_at + flips is_active=false for politicians dropped from the upstream roster (detect_retirements). Run weekly. Native LIMS IDs come from enrich-bc-member-ids, not this.",
-        "cli": "ingest-bc-mlas", "category": "enrichment",
-        "args": [
-            {"name": "limit", "type": "int", "required": False, "default": 200,
-             "help": "Cap on rows pulled per page from Open North. detect_retirements is skipped when the cap is hit."},
-        ],
-    },
-    "ingest-ontario-mpps": {
-        "description": "ON current MPP roster from Open North Represent. Closes politician_terms.ended_at + flips is_active=false for politicians dropped from the upstream roster (detect_retirements). Run weekly. Native ola_member_id stamping stays with ingest-on-former-mpps.",
-        "cli": "ingest-ontario-mpps", "category": "enrichment",
-        "args": [
-            {"name": "limit", "type": "int", "required": False, "default": 200,
-             "help": "Cap on rows pulled per page from Open North. detect_retirements is skipped when the cap is hit."},
-        ],
-    },
-    "ingest-new-brunswick-mlas": {
-        "description": "NB current MLA roster from Open North Represent. Closes politician_terms.ended_at + flips is_active=false for politicians dropped from the upstream roster (detect_retirements). Run weekly.",
-        "cli": "ingest-new-brunswick-mlas", "category": "enrichment",
-        "args": [
-            {"name": "limit", "type": "int", "required": False, "default": 200,
-             "help": "Cap on rows pulled per page from Open North. detect_retirements is skipped when the cap is hit."},
-        ],
-    },
-    "ingest-nl-mhas": {
-        "description": "NL current MHA roster from Open North Represent. Closes politician_terms.ended_at + flips is_active=false for politicians dropped from the upstream roster (detect_retirements). Run weekly.",
-        "cli": "ingest-nl-mhas", "category": "enrichment",
-        "args": [
-            {"name": "limit", "type": "int", "required": False, "default": 200,
-             "help": "Cap on rows pulled per page from Open North. detect_retirements is skipped when the cap is hit."},
-        ],
-    },
-    "ingest-pei-mlas": {
-        "description": "PE current MLA roster from Open North Represent. Closes politician_terms.ended_at + flips is_active=false for politicians dropped from the upstream roster (detect_retirements). Run weekly.",
-        "cli": "ingest-pei-mlas", "category": "enrichment",
-        "args": [
-            {"name": "limit", "type": "int", "required": False, "default": 200,
-             "help": "Cap on rows pulled per page from Open North. detect_retirements is skipped when the cap is hit."},
-        ],
-    },
-    "ingest-yukon-mlas": {
-        "description": "YT current MLA roster from Open North Represent. Closes politician_terms.ended_at + flips is_active=false for politicians dropped from the upstream roster (detect_retirements). Run weekly.",
-        "cli": "ingest-yukon-mlas", "category": "enrichment",
-        "args": [
-            {"name": "limit", "type": "int", "required": False, "default": 200,
-             "help": "Cap on rows pulled per page from Open North. detect_retirements is skipped when the cap is hit."},
-        ],
-    },
-    "ingest-manitoba-mlas": {
-        "description": "MB current MLA roster from Open North Represent (/representatives/manitoba-legislature/). Closes politician_terms.ended_at + flips is_active=false for politicians dropped from the upstream roster (detect_retirements). Run weekly.",
-        "cli": "ingest-manitoba-mlas", "category": "enrichment",
-        "args": [
-            {"name": "limit", "type": "int", "required": False, "default": 200,
-             "help": "Cap on rows pulled per page from Open North."},
-        ],
-    },
-    "ingest-quebec-mnas": {
-        "description": "QC current MNA roster from Open North Represent (/representatives/quebec-assemblee-nationale/). Closes politician_terms.ended_at + flips is_active=false for politicians dropped from the upstream roster (detect_retirements). Run weekly.",
-        "cli": "ingest-quebec-mnas", "category": "enrichment",
-        "args": [
-            {"name": "limit", "type": "int", "required": False, "default": 200,
-             "help": "Cap on rows pulled per page from Open North."},
-        ],
     },
     "ingest-mb-mlas": {
         "description": "Stamp politicians.mb_assembly_slug on existing MB rows; insert any missing MLAs. Prereq for ingest-mb-bills and ingest-mb-hansard.",
@@ -1168,14 +1096,6 @@ COMMANDS: dict[str, dict[str, Any]] = {
             {"name": "sample_sittings", "type": "int", "required": False, "default": 5,
              "help": "Newest sittings to scan (default 5 covers most speakers in a session)."},
         ],
-    },
-    "ingest-councils": {
-        "description": "Municipal councillors via Open North.",
-        "cli": "ingest-councils", "category": "enrichment", "args": [],
-    },
-    "ingest-legislatures": {
-        "description": "Full provincial/territorial legislature ingest.",
-        "cli": "ingest-legislatures", "category": "enrichment", "args": [],
     },
     "harvest-personal-socials": {
         "description": "Scrape politicians' personal sites for social handles.",

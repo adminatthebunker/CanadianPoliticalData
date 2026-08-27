@@ -520,51 +520,13 @@ const COMMAND_CATALOG = [
     ],
   },
   // enrichment
-  { key: "ingest-mps", category: "enrichment", description: "Federal MPs roster from Open North.", args: [] },
+  // ⛔ The Open North roster commands were removed from this catalogue
+  // 2026-08-27, in step with services/scanner/src/jobs_catalog.py. The two
+  // halves must stay in sync — a command here but not there is refused by the
+  // worker as `unknown command`, and a command in BOTH is queueable by hand
+  // from the admin panel. Leaving them queueable is what made a retired
+  // ingester a one-click revert of twelve cutover migrations.
   { key: "ingest-senators", category: "enrichment", description: "Canadian Senate roster.", args: [] },
-  { key: "ingest-mlas", category: "enrichment",
-    description: "AB current MLA roster from Open North Represent (name predates the per-province commands). Closes politician_terms.ended_at + flips is_active=false for dropped politicians (detect_retirements). Run weekly.",
-    args: [] },
-  { key: "ingest-bc-mlas", category: "enrichment",
-    description: "BC current MLA roster from Open North Represent. Closes politician_terms.ended_at + flips is_active=false for dropped politicians (detect_retirements). Run weekly.",
-    args: [
-      { name: "limit", type: "int", required: false, default: 200, help: "Cap on rows pulled per page (default 200). detect_retirements is skipped when the cap is hit." },
-    ] },
-  { key: "ingest-ontario-mpps", category: "enrichment",
-    description: "ON current MPP roster from Open North Represent. Closes politician_terms.ended_at + flips is_active=false for dropped politicians (detect_retirements). Run weekly.",
-    args: [
-      { name: "limit", type: "int", required: false, default: 200, help: "Cap on rows pulled per page (default 200). detect_retirements is skipped when the cap is hit." },
-    ] },
-  { key: "ingest-new-brunswick-mlas", category: "enrichment",
-    description: "NB current MLA roster from Open North Represent. Closes politician_terms.ended_at + flips is_active=false for dropped politicians (detect_retirements). Run weekly.",
-    args: [
-      { name: "limit", type: "int", required: false, default: 200, help: "Cap on rows pulled per page (default 200). detect_retirements is skipped when the cap is hit." },
-    ] },
-  { key: "ingest-nl-mhas", category: "enrichment",
-    description: "NL current MHA roster from Open North Represent. Closes politician_terms.ended_at + flips is_active=false for dropped politicians (detect_retirements). Run weekly.",
-    args: [
-      { name: "limit", type: "int", required: false, default: 200, help: "Cap on rows pulled per page (default 200). detect_retirements is skipped when the cap is hit." },
-    ] },
-  { key: "ingest-pei-mlas", category: "enrichment",
-    description: "PE current MLA roster from Open North Represent. Closes politician_terms.ended_at + flips is_active=false for dropped politicians (detect_retirements). Run weekly.",
-    args: [
-      { name: "limit", type: "int", required: false, default: 200, help: "Cap on rows pulled per page (default 200). detect_retirements is skipped when the cap is hit." },
-    ] },
-  { key: "ingest-yukon-mlas", category: "enrichment",
-    description: "YT current MLA roster from Open North Represent. Closes politician_terms.ended_at + flips is_active=false for dropped politicians (detect_retirements). Run weekly.",
-    args: [
-      { name: "limit", type: "int", required: false, default: 200, help: "Cap on rows pulled per page (default 200). detect_retirements is skipped when the cap is hit." },
-    ] },
-  { key: "ingest-manitoba-mlas", category: "enrichment",
-    description: "MB current MLA roster from Open North Represent. Closes politician_terms.ended_at + flips is_active=false for politicians dropped from the upstream roster (detect_retirements). Run weekly.",
-    args: [
-      { name: "limit", type: "int", required: false, default: 200, help: "Cap on rows pulled per page from Open North." },
-    ] },
-  { key: "ingest-quebec-mnas", category: "enrichment",
-    description: "QC current MNA roster from Open North Represent. Closes politician_terms.ended_at + flips is_active=false for politicians dropped from the upstream roster (detect_retirements). Run weekly.",
-    args: [
-      { name: "limit", type: "int", required: false, default: 200, help: "Cap on rows pulled per page from Open North." },
-    ] },
   { key: "ingest-mb-mlas", category: "enrichment",
     description: "Stamp politicians.mb_assembly_slug on existing MB rows; insert any missing MLAs. Prereq for ingest-mb-bills and ingest-mb-hansard.",
     args: [] },
@@ -612,8 +574,6 @@ const COMMAND_CATALOG = [
       { name: "sample_sittings", type: "int", required: false, default: 5, help: "Newest sittings to scan." },
     ],
   },
-  { key: "ingest-councils", category: "enrichment", description: "Municipal councillors via Open North.", args: [] },
-  { key: "ingest-legislatures", category: "enrichment", description: "Full provincial/territorial legislature ingest.", args: [] },
   { key: "harvest-personal-socials", category: "enrichment", description: "Scrape personal sites for social handles.",
     args: [{ name: "limit", type: "int", required: false, help: "Max politicians this run." }] },
   // socials audit + tiered backfill

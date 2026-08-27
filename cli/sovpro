@@ -124,21 +124,26 @@ cmd_rebuild() {
 
 scan_run() { $COMPOSE run --rm scanner "$@"; }
 
+# ⛔ `mps`, `mlas` and `councils` were REMOVED 2026-08-27. They were the three
+# Open North Represent commands, and `sovpro ingest all` ran all three. The
+# mirror was retired 2026-08-19 after it was found overwriting authoritative
+# data three ways in one evening; on 2026-08-23 a re-ingest reverted twelve
+# cutover migrations, left every jurisdiction with two live generations, and
+# detached 120 sitting members. Rosters now come from each jurisdiction's own
+# source — see `legislative/qc_municipal_roster.py` for the pattern. Boundary
+# writes carrying the mirror signature are refused by the database itself
+# (`trg_block_mirror_boundary`, migration 0105).
 cmd_ingest() {
     require_env
     case "${1:-}" in
-        mps)      scan_run ingest-mps ;;
-        mlas)     scan_run ingest-mlas ;;
-        councils) scan_run ingest-councils ;;
         ab-extras) scan_run ingest-ab-extras ;;
         all)
             scan_run seed-orgs
-            scan_run ingest-mps
-            scan_run ingest-mlas
-            scan_run ingest-councils
             scan_run ingest-ab-extras
             ;;
-        *) die "Usage: sovpro ingest {mps|mlas|councils|ab-extras|all}" ;;
+        mps|mlas|councils)
+            die "sovpro ingest $1 is retired — Open North ingestion was removed 2026-08-27. See db/migrations/0105." ;;
+        *) die "Usage: sovpro ingest {ab-extras|all}" ;;
     esac
 }
 
