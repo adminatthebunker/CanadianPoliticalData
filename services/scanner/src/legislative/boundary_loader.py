@@ -4278,4 +4278,46 @@ SPECS: dict[str, BoundarySpec] = {
               "the search collections endpoint is 401; reach it by org id."
     ),
 
+
+    # ⛔ FUTURE — live only from the 2026-10-26 election, and the count cannot
+    # tell it from the current map: Pickering has three wards before AND after.
+    # Ruling A7 with nothing else to fall back on, exactly like Ottawa and
+    # Burlington.
+    #
+    # ★ Dated from an instrument with a resolved tribunal step, the strongest
+    # evidence class: By-law 8196/25, passed by Council 2025-07-15, appealed to
+    # the Ontario Land Tribunal 2025-08-29, **appeal WITHDRAWN 2025-10-06** — so
+    # the boundaries are in full force for the 2026 municipal election. Third
+    # Ontario case of this shape after Haldimand's 2588/25 (OLT dismissed) and
+    # Markham's 2013-29 (OMB dismissed).
+    #
+    # ⚠ Note what it supersedes: a ward boundary review adopted in 2021 had
+    # ALREADY set new boundaries to take effect for 2026. Council reopened it on
+    # 2025-01-27 against updated population data and replaced it. A 2021-adopted
+    # map that never governed an election is not a generation we should hold.
+    #
+    # ⚠ Pickering's CURRENT map is deliberately not loaded — no in-force date
+    # was established for it. Its published layer also carries two zero-area
+    # sliver polygons labelled "Ward 1" beside the three real wards, so a naive
+    # count reads 5.
+    "pickering-wards-2026": BoundarySpec(
+        jurisdiction="pickering-wards-2026",
+        source_path="municipal-ontario/current/pickering-wards-2026.geojson",
+        src_epsg=4326,
+        level="municipal",
+        province_territory="ON",
+        source_set="pickering-wards",
+        id_prefix="pickering-wards",
+        authority="city-of-pickering",
+        boundaries_version="2026",
+        effective_from=date(2026, 10, 26),
+        name_field="WARD",
+        authority_id_field="WARD",
+        boundary_kind="district",
+        expect_districts=3,
+        licence="none-stated",
+        notes="City of Pickering 'New Wards'. By-law 8196/25 (2025-07-15), OLT "
+              "appeal withdrawn 2025-10-06."
+    ),
+
 }
