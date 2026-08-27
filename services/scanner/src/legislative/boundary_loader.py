@@ -4320,4 +4320,120 @@ SPECS: dict[str, BoundarySpec] = {
               "appeal withdrawn 2025-10-06."
     ),
 
+
+    # ═══ Ontario — Durham, the four with both a date and a licence ══════
+    # ⛔ Clarington and Vaughan were researched, dated and DELIBERATELY NOT
+    # LOADED — both carry an explicit licence prohibition rather than the usual
+    # silence. See the dossier; that is an operator call, not a data gap.
+
+    "ajax-wards": BoundarySpec(
+        jurisdiction="ajax-wards",
+        source_path="municipal-ontario/current/ajax-wards-2018.geojson",
+        src_epsg=4326, level="municipal", province_territory="ON",
+        source_set="ajax-wards", id_prefix="ajax-wards",
+        authority="town-of-ajax", boundaries_version="2018",
+        # By-law 26-2017, passed 2017-04-18 under s.222 of the Municipal Act,
+        # "to change the number of wards in the Town of Ajax from four to three
+        # in order to allow for the addition of one regional councillor seat".
+        # Appeal deadline 2017-06-02; the 2018 election was contested in Wards
+        # 1-3, so the conditional "pending no appeals" is discharged by outcome.
+        # ★ This also disposes of the byte-identical "New_Wards" sibling: there
+        # is one generation and 2018 is it.
+        effective_from=date(2018, 10, 22),
+        name_field="WARD_NUM", name_builder=_on_ward_from("WARD_NUM"),
+        authority_id_field="WARD_NUM", boundary_kind="district",
+        expect_districts=3,
+        licence="town-of-ajax-open-data-licence-1.0",
+        notes="ajaxmaps.ajax.ca Public/Ajax_Open_Data/MapServer/28. ⚠ ajax.ca "
+              "403s even with a browser UA — the by-law notice is reachable "
+              "only via Wayback; the GIS host itself is open."
+    ),
+
+    "oshawa-wards": BoundarySpec(
+        jurisdiction="oshawa-wards",
+        source_path="municipal-ontario/current/oshawa-wards-2018.geojson",
+        src_epsg=4326, level="municipal", province_territory="ON",
+        source_set="oshawa-wards", id_prefix="oshawa-wards",
+        authority="city-of-oshawa", boundaries_version="2018",
+        # By-law 55-2017, passed 2017-06-26, recital: "ward boundaries to be
+        # used starting with the 2018 election". Repeals By-laws 115-2005 and
+        # 45-2007.
+        #
+        # ⛔ ITS CLAUSE 11 IS A TRAP AND IS DELIBERATELY NOT USED: "This by-law
+        # comes into effect on the day it is passed." That is the instrument's
+        # legal commencement, sixteen months before the election it governs.
+        # A10.4 wants the election. This is the mirror image of Lincoln's
+        # By-law 2025-28, which names a date sixteen months too LATE — same
+        # failure mode, opposite direction. Neither printed date is the answer.
+        effective_from=date(2018, 10, 22),
+        name_field="WARDNUMBER", name_builder=_on_ward_from("WARDNUMBER"),
+        authority_id_field="WARDNUMBER", boundary_kind="district",
+        expect_districts=5,
+        licence="ogl-city-of-oshawa-2.0",
+        notes="map.oshawa.ca Operational/OpenData/MapServer/11, WARDS_2018. "
+              "⚠ The item's licenseInfo RENDERS as a disclaimer ('for reference "
+              "use only') wrapped around a hyperlink — the hyperlink is the "
+              "grant. Reading the visible text alone records Oshawa as "
+              "restrictively licensed, which is wrong."
+    ),
+
+    "uxbridge-wards": BoundarySpec(
+        jurisdiction="uxbridge-wards",
+        source_path="municipal-ontario/current/uxbridge-wards-2018.geojson",
+        src_epsg=4326, level="municipal", province_territory="ON",
+        source_set="uxbridge-wards", id_prefix="uxbridge-wards",
+        authority="township-of-uxbridge", boundaries_version="2018",
+        # ★ OVERTURNS THE OBVIOUS ASSUMPTION. Uxbridge reads like a sleepy
+        # township with ancient wards; the wards were COMPLETELY REDRAWN in
+        # 2017. By-law No. 2017-96, passed 2017-07-10 "to re-divide the Township
+        # of Uxbridge ward boundaries" (Township's own 2018 voter-information
+        # page). Pre-2018 the wards were a southern strip, a north-west rural, a
+        # north-east rural and two urban; now Ward 1 is the former Township of
+        # Uxbridge minus the urban area and Ward 2 is the former Township of
+        # Scott. Different wards entirely — the five-ward COUNT is old (attested
+        # 2003) but the lines are not. ⛔ Any pre-2010 date for Uxbridge is wrong.
+        effective_from=date(2018, 10, 22),
+        name_field="Ward_Full", authority_id_field="Ward",
+        boundary_kind="district", expect_districts=5,
+        licence="region-of-durham-open-data-licence-1.0",
+        notes="maps.durham.ca Open_Data/Durham_OpenData/MapServer/32. Uxbridge "
+              "does not publish the geometry; Durham is distributor and "
+              "licensor. ⚠ The licence URL in the dataset metadata "
+              "(durham.ca/.../OpenDataLicenceAgreement.pdf) is a 404 — live "
+              "text is on durham.ca/en/regional-government/open-data.aspx. "
+              "Affects Uxbridge, Brock and Scugog alike."
+    ),
+
+    "whitby-wards": BoundarySpec(
+        jurisdiction="whitby-wards",
+        source_path="municipal-ontario/current/whitby-wards-1997.geojson",
+        src_epsg=4326, level="municipal", province_territory="ON",
+        source_set="whitby-wards", id_prefix="whitby-wards",
+        authority="town-of-whitby", boundaries_version="1997",
+        # Clerk's report CLK 01-21 (2021-01-18): "Throughout its 52 year history
+        # since amalgamation in 1968, the Town has only adjusted ward boundaries
+        # once in 1996." Corroborated by policy G-060, whose appendices are
+        # titled "1968 to 1996 Ward Boundary Map" and "1996 to Present Ward
+        # Boundary Map". A 1996 adjustment first governs 1997-11-10 — there was
+        # no 1996 general election.
+        # ⚠ Confidence medium-high, not high: no by-law number was located
+        # (Whitby numbers ####-YY, so ####-96; the online repository does not
+        # reach back that far).
+        effective_from=date(1997, 11, 10),
+        # ⛔ THE LAYER'S DESCRIPTION DATE IS POISON. It said "Updated January
+        # 2021" and now says "Updated January 2026" — both track councillor-name
+        # attribute refreshes, not the boundary. A pipeline reading that field
+        # would have produced three different wrong dates across three harvests.
+        name_field="WARD_DESC", authority_id_field="WARD",
+        boundary_kind="district", expect_districts=4,
+        licence="ogl-town-of-whitby-1.0",
+        notes="services5.arcgis.com/ATdLnvuMRJk8AGkQ WhitbyWard/FeatureServer/0, "
+              "item 31ab4780b412445db594aaadc2bf0de2. ⛔ Harvest that item ONLY "
+              "— a superseded item c19a0498130d49ff87775aad3e7804be carries the "
+              "old restrictive text ('personal, non-commercial use'). Same "
+              "municipality, same geometry, opposite licence answer. "
+              "⚠ Staleness watch: Centre Ward was -28.77% variance in 2021 "
+              "against a policy band of ±25%."
+    ),
+
 }
