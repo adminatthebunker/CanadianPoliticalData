@@ -91,6 +91,17 @@ class BoundarySpec:
     # avoids inserting bespoke rows into spatial_ref_sys.
     src_proj4: Optional[str] = None
     boundary_kind: str = "district"
+    # ⛔ PER-FEATURE TIERING. Some publishers ship two tiers in ONE file, and a
+    # spec-level boundary_kind cannot say so. Sherbrooke is the case that forced
+    # this: its 2025 file carries `3.0 de Lennoxville` (a borough seat) beside
+    # `3.1 d'Uplands (district d'arrondissement)` and `3.2 de Fairview
+    # (district d'arrondissement)` — the borough polygon geometrically CONTAINS
+    # the other two, so tiering all sixteen as `district` made a Lennoxville
+    # address resolve to two districts at once. Nothing but the point-in-polygon
+    # integrity test saw it: the count was right, the overlap comparison was
+    # right, and every name matched.
+    # Return a kind for a feature, or None to fall back to spec.boundary_kind.
+    kind_builder: Optional[Callable[[dict], Optional[str]]] = None
     name_field: str = "NAME"
     name_fr_field: Optional[str] = None
     # ⛔ Some agencies publish ONE bilingual field rather than two. New Brunswick's
@@ -586,6 +597,9 @@ def group_features(
                 "name_fr": None,
                 "authority_district_id": None,
                 "province_territory": None,
+                # None here means "use spec.boundary_kind" at write time.
+                "boundary_kind": (spec.kind_builder(props)
+                                  if spec.kind_builder else None),
                 # Every distinct spelling seen in this group, for the consistency
                 # check below.
                 "_names": Counter(),
@@ -835,7 +849,7 @@ async def load_boundaries(
                 r.get("province_territory") or spec.province_territory,
                 r.get("source_set") or spec.source_set,
                 spec.authority, r["authority_district_id"],
-                spec.boundary_kind,
+                r.get("boundary_kind") or spec.boundary_kind,
                 spec.boundaries_version, spec.effective_from, spec.effective_to,
             )
             if res:
@@ -1469,6 +1483,53 @@ def _regina_label(props: dict) -> str | None:
     return f"Ward {int(wid)}" if wid is not None else None
 
 
+# ── Sherbrooke ──────────────────────────────────────────────────────────────
+# The city writes its districts with the leading French article — `de Brompton`,
+# `du Lac-Magog`, `d’Ascot` — and appends `(district d’arrondissement)` to the
+# two borough-council seats.
+#
+# ⛔ THIS DELIBERATELY DOES NOT FOLLOW THE QUÉBEC-CITY PRECEDENT. Migration 0099
+# ADOPTED the article for Ville de Québec (`plateau` -> `le-plateau`) on the
+# grounds that the city and MAMH both write it. That reasoning does not carry to
+# Sherbrooke, for two reasons measured against the actual strings:
+#
+#   1. `slugify` DELETES the apostrophe rather than breaking on it, so the elided
+#      articles do not survive as a readable prefix — `d’Ascot` -> `dascot` and
+#      `d’Uplands` -> `duplands`. Québec City's five were `le-`/`la-`, which read
+#      fine. Adopting the article here mints two ids nobody would ever guess.
+#   2. It buys nothing. `qc_municipal_roster`'s fallback pass already de-articles
+#      both sides before matching — its own comment names `de Lennoxville` ->
+#      `Lennoxville` as the worked example — so MAMH's article-bearing roster
+#      resolves onto article-free ids today, and all fifteen of ours are attached
+#      right now on exactly that path.
+#
+# Stripping instead re-keys NOTHING: all 15 slugs we already hold are reproduced
+# byte-for-byte and `lennoxville` is the single genuinely new id. Adopting the
+# article would have re-keyed all 15 to close one hole.
+#
+# ⚠ Anchored at the start and applied ONCE. `du Lac-des-Nations` must lose `du `
+# and keep `des` — a repeated or unanchored strip yields `Nations`.
+_SHERBROOKE_ARTICLES = (
+    "de l'", "de la ", "des ", "du ", "de ", "d'", "les ", "le ", "la ",
+)
+
+
+def _sherbrooke_label(props: dict) -> str | None:
+    """`NOM` -> the article-free display name our ids are already keyed on."""
+    nom = str(props.get("NOM") or "").strip()
+    if not nom:
+        return None
+    # The two borough-council seats carry a parenthetical role, not a name.
+    nom = re.sub(r"\s*\(district d[’']arrondissement\)\s*$", "", nom).strip()
+    # ⚠ Normalise the typographic apostrophe first — the layer uses U+2019 and
+    # the prefix table is written with U+0027.
+    probe = nom.replace("’", "'")
+    for art in _SHERBROOKE_ARTICLES:
+        if probe.lower().startswith(art):
+            return nom[len(art):].strip()
+    return nom
+
+
 # Montréal — the 2025 electoral districts, from the city's own open data.
 #
 # ⛔ Our 44 district polygons are the 2021 map, superseded at the 2025-11-02
@@ -1567,6 +1628,25 @@ def _niagara_label(props: dict) -> str | None:
 # display name has to be built. Held rows already use the "Ward N" form, and the
 # roster joins on the slug of that name, so a divergence here silently detaches
 # a whole council.
+def _sherbrooke_kind(props: dict) -> Optional[str]:
+    """Sherbrooke ships two tiers in one file; `NUMERO` is what distinguishes them.
+
+    ⛔ `3.0 de Lennoxville` is the ARRONDISSEMENT seat and its polygon
+    geometrically contains `3.1 d'Uplands` and `3.2 de Fairview`, both of which
+    the file itself labels "(district d'arrondissement)". Lennoxville is the
+    only borough in Sherbrooke with this structure — a legacy of its distinct
+    status at the 2002 merger — so it is the only `.0` in the file.
+
+    ⚠ Tiering all sixteen as `district` made a Lennoxville address resolve to
+    TWO districts at once. Nothing caught it but the point-in-polygon integrity
+    test: the feature count was right (16), the overlap comparison against the
+    held map was right (99.38% mean over the 15 that matched), and every name
+    agreed. A containment relationship is invisible to all three.
+    """
+    num = str(props.get("NUMERO") or "").strip()
+    return "borough" if num.endswith(".0") else None
+
+
 def _on_ward_label(props: dict) -> str | None:
     """`WARD` as a bare number -> "Ward N"."""
     w = str(props.get("WARD") or "").strip()
@@ -3517,6 +3597,62 @@ SPECS: dict[str, BoundarySpec] = {
         expect_districts=21,
         licence="cc-by-4.0",
         notes="donneesquebec.ca vque_43, resource vdq-districtelectoral.geojson"
+    ),
+    "sherbrooke-districts": BoundarySpec(
+        jurisdiction="sherbrooke-districts",
+        source_path="municipal-quebec/current/sherbrooke-districts-2025.geojson",
+        kind_builder=_sherbrooke_kind,
+        # ⛔ EPSG:3857, NOT 4326 — and it is the ONLY Québec municipal file in the
+        # corpus that is. Montréal, Laval and Ville de Québec all publish WGS84
+        # degrees; the ArcGIS Hub `download/v1/items/.../geojson` endpoint that
+        # serves Sherbrooke hands back Web Mercator metres with an explicit
+        # `crs: {name: "EPSG:3857"}` member, in flat contradiction of RFC 7946.
+        # First coordinate is [-8005013.2, 5680...]. Declared, per rule 2 — a
+        # loader that assumed 4326 from the sibling QC specs would relabel metres
+        # as degrees and put every centroid past the edge of the world.
+        src_epsg=3857,
+        level="municipal",
+        province_territory="QC",
+        source_set="sherbrooke-districts",
+        id_prefix="sherbrooke-districts",
+        authority="ville-de-sherbrooke",
+        boundaries_version="2025",
+        # Ruling A10.4 — the municipal general election this map first governed.
+        # Instrument: Règlement numéro 1289 divisant le territoire des
+        # arrondissements de la Ville de Sherbrooke en districts électoraux,
+        # adopted at the ordinary council sitting of 2024-05-21 and approved by
+        # the Commission de la représentation électorale on 2024-10-31, in force
+        # from that date. Its technical descriptions were prepared 2024-04-08 by
+        # arpenteure-géomètre Maylis Casenave, plan 3856-15, minute 802.
+        effective_from=date(2025, 11, 2),
+        effective_to=None,
+        name_field="NOM",
+        name_builder=_sherbrooke_label,
+        # ⚠ `ID` is the district number with the dot removed — 1.1 -> 11, 3.0 ->
+        # 30, 4.5 -> 45 — so it sorts by arrondissement then district and is
+        # stable across the redraw. `NUMERO` carries the human form ('1.1').
+        authority_id_field="ID",
+        boundary_kind="district",
+        # ⛔ 16, from 32 FEATURES. The layer publishes every district TWICE
+        # (OBJECTID 1–16 and 17–32, identical attributes and identical geometry).
+        # Rule 3 saves this — grouping is by slug, so the pairs union back into
+        # one row each and `parts_merged` reports 16. A loader that counted
+        # records would report a 32-district Sherbrooke and be believed.
+        expect_districts=16,
+        licence="cc-by-4.0",
+        notes="donneesquebec.ca 3579a4b8ceb24c7896edc0d86ee4714e_0 (publisher "
+              "'Ville de Sherbrooke - Données géomatiques'), resource "
+              "'Districts électoraux - GeoJSON' off the city's own ArcGIS Hub "
+              "at donneesouvertes-sherbrooke.opendata.arcgis.com. CC-BY 4.0. "
+              "⚠ DISTRICT 3.0 DE LENNOXVILLE IS THE EXACT UNION OF 3.1 D'UPLANDS "
+              "AND 3.2 DE FAIRVIEW (58,289,370 = 25,351,810 + 32,937,560 map "
+              "units), and that is Sherbrooke's real structure, not a defect: "
+              "Lennoxville is a bilingual-status arrondissement whose limits "
+              "cannot be redrawn, so it elects ONE conseiller municipal over the "
+              "whole borough plus TWO conseillers d'arrondissement over its "
+              "halves. A point in Lennoxville therefore returns two districts. "
+              "⚠ The layer also names the sitting councillor (CONSEILLER), as "
+              "Laval and Ville de Québec do."
     ),
 
     # ═══ Ontario large cities ═══════════════════════════════════════════

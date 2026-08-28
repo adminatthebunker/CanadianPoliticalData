@@ -827,6 +827,50 @@ async def check_municipal_integrity(db: Database) -> list[MunicipalProblem]:
             advisory=True,
         ))
 
+    # ── no-live-districts ────────────────────────────────────────────────
+    #
+    # ★ A set that HAS district geometry but none of it live. This is what an
+    # end-date without a successor leaves behind, and it is silent in every
+    # other check: the rows exist, so nothing reports them missing; no member
+    # points at them, so nothing reports an orphan; the count checks are
+    # federal/provincial only. A point in that municipality simply returns
+    # nothing, and the API cannot tell "no district here" from "we have no map".
+    #
+    # ⓘ Being listed here is not automatically a defect. Brossard is the first
+    # entry and it is a REASONED state: we held nine polygons that were a
+    # partial ingest of a superseded ten-district map, the city redrew to
+    # twelve for 2025-11-02, and it publishes the new map as a PDF only. Nine
+    # wrong-twice-over polygons served as current is worse than an honest gap
+    # (migration 0119). What was not acceptable was that the gap was invisible.
+    rows = await db.fetch(
+        """
+        SELECT source_set,
+               count(*) FILTER (WHERE boundary_kind = 'district') AS held,
+               max(effective_to) FILTER (WHERE boundary_kind = 'district')
+                 AS ended
+          FROM constituency_boundaries
+         WHERE level = 'municipal'
+         GROUP BY 1
+        HAVING count(*) FILTER (WHERE boundary_kind = 'district') > 0
+           AND count(*) FILTER (
+                 WHERE boundary_kind = 'district'
+                   AND effective_from <= CURRENT_DATE
+                   AND (effective_to IS NULL
+                        OR effective_to >= CURRENT_DATE)) = 0
+         ORDER BY 1
+        """
+    )
+    if rows:
+        out.append(MunicipalProblem(
+            "no-live-districts",
+            "municipalities holding district geometry with NONE of it live — a "
+            "point there resolves to no district at all: "
+            + ", ".join(f"{r['source_set']} ({r['held']} held, ended "
+                        f"{r['ended']})" for r in rows[:6]),
+            len(rows),
+            advisory=True,
+        ))
+
     return out
 
 
