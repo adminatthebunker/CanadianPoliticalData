@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Optional
 
 from ..db import Database
@@ -151,11 +152,23 @@ async def check_boundary_coverage(
                       ELSE province_territory END AS ju,
                  count(*) AS actives,
                  count(*) FILTER (WHERE constituency_id IS NOT NULL) AS attached,
+                 -- ⛔ The live-window predicate is load-bearing. Without it
+                 -- this asks "was this ever a district?", not "is it one
+                 -- today?" — and a superseded generation is END-DATED, never
+                 -- deleted, so EXISTS stays true forever and the check passes
+                 -- for all time. That is the same fail-open shape that blinded
+                 -- duplicate-generation, duplicate-geometry, wrong-tier and
+                 -- displaced in August; this was the fifth instance, found
+                 -- 2026-08-27 while checking what Quebec's flip would do. It
+                 -- would have reported 0 orphans while six MNAs detached.
                  count(*) FILTER (
                    WHERE constituency_id IS NOT NULL
                      AND NOT EXISTS (
                        SELECT 1 FROM constituency_boundaries b
-                        WHERE b.constituency_id = politicians.constituency_id)
+                        WHERE b.constituency_id = politicians.constituency_id
+                          AND b.effective_from <= CURRENT_DATE
+                          AND (b.effective_to IS NULL
+                               OR b.effective_to >= CURRENT_DATE))
                  ) AS orphans
             FROM politicians
            WHERE is_active
@@ -298,8 +311,15 @@ async def check_municipal_integrity(db: Database) -> list[MunicipalProblem]:
           FROM politicians p
          WHERE p.is_active AND p.level = 'municipal'
            AND p.constituency_id IS NOT NULL
+           -- ⛔ Live window, same reason as the provincial/federal orphan
+           -- check above: end-dated rows are still rows. Without this, a
+           -- municipal cutover that retires a generation detaches the whole
+           -- council and this check reports nothing.
            AND NOT EXISTS (SELECT 1 FROM constituency_boundaries b
-                            WHERE b.constituency_id = p.constituency_id)
+                            WHERE b.constituency_id = p.constituency_id
+                              AND b.effective_from <= CURRENT_DATE
+                              AND (b.effective_to IS NULL
+                                   OR b.effective_to >= CURRENT_DATE))
          ORDER BY p.constituency_id
         """
     )
@@ -691,4 +711,135 @@ async def check_municipal_integrity(db: Database) -> list[MunicipalProblem]:
             len(rows),
         ))
 
+    return out
+
+
+# ── Pending flips ────────────────────────────────────────────────────────────
+
+PENDING_FLIP_HORIZON_DAYS = 60
+
+
+@dataclass
+class PendingFlip:
+    level: str
+    jurisdiction: str
+    source_set: str
+    version: str
+    starts: date
+    incoming: int
+    outgoing: int
+    orphans: int
+    seats: Optional[int]
+
+    def describe(self) -> str:
+        delta = self.incoming - self.outgoing
+        sign = f"+{delta}" if delta > 0 else str(delta)
+        bits = [
+            f"{self.starts} {self.level}/{self.jurisdiction} {self.source_set}"
+            f" -> v{self.version}: {self.outgoing} live districts become "
+            f"{self.incoming} ({sign})"
+        ]
+        if self.orphans:
+            bits.append(f"⛔ {self.orphans} sitting members would detach")
+        if self.seats is not None and self.incoming != self.seats:
+            bits.append(
+                f"⚠ jurisdiction_sources.seats is {self.seats} and will not "
+                f"agree — update it in the same change that ingests the "
+                f"election result"
+            )
+        return " | ".join(bits)
+
+
+async def check_pending_flips(
+    db: Database, horizon_days: int = PENDING_FLIP_HORIZON_DAYS
+) -> list[PendingFlip]:
+    """Generations that go live soon, and what they will do when they do.
+
+    ★ Every boundary regression this programme has hit was visible in advance
+    and nobody was looking. A flip is not an event that happens to us — it is
+    a dated row already sitting in the table. This turns each one into a task
+    with a deadline instead of a Monday-morning surprise.
+
+    Reports rather than breaches: a pending flip is normal. It is the
+    *contents* of the report — orphaned members, a seat count that will stop
+    agreeing — that need acting on before the date arrives.
+    """
+    rows = await db.fetch(
+        """
+        WITH upcoming AS (
+          SELECT level,
+                 COALESCE(province_territory, 'CA') AS ju,
+                 source_set,
+                 boundaries_version AS version,
+                 min(effective_from) AS starts,
+                 -- ⚠ Districts only, on BOTH sides of the comparison. A
+                 -- municipal set holds the city outline (boundary_kind
+                 -- 'municipality') and sometimes boroughs alongside its
+                 -- wards, and an incoming generation usually reloads only the
+                 -- wards. Counting raw rows made every Ontario 2026 map look
+                 -- like it was losing a ward when it was not.
+                 count(*) FILTER (
+                   WHERE boundary_kind = 'district' OR boundary_kind IS NULL
+                 ) AS incoming
+            FROM constituency_boundaries
+           WHERE effective_from > CURRENT_DATE
+             AND effective_from <= CURRENT_DATE + $1::int
+           GROUP BY 1, 2, 3, 4
+        )
+        SELECT u.*,
+               -- What is live in that set the day before the flip.
+               (SELECT count(*) FROM constituency_boundaries o
+                 WHERE o.source_set = u.source_set
+                   AND (o.boundary_kind = 'district' OR o.boundary_kind IS NULL)
+                   AND o.effective_from <= u.starts - 1
+                   AND (o.effective_to IS NULL
+                        OR o.effective_to >= u.starts - 1)) AS outgoing,
+               -- Members who resolve today but will not on the flip date.
+               --
+               -- ⚠ Keyed on the boundary row the member currently resolves
+               -- to, NOT on a prefix match against source_set. id_prefix and
+               -- source_set are allowed to differ (Montréal's roster sits in
+               -- `montreal-boroughs-and-districts`), and a cutover renames the
+               -- set while leaving ids alone — a LIKE would silently score
+               -- those sets zero.
+               (SELECT count(*) FROM politicians p
+                 WHERE p.is_active
+                   AND p.constituency_id IS NOT NULL
+                   AND EXISTS (SELECT 1 FROM constituency_boundaries b
+                                WHERE b.constituency_id = p.constituency_id
+                                  AND b.source_set = u.source_set
+                                  AND b.effective_from <= CURRENT_DATE
+                                  AND (b.effective_to IS NULL
+                                       OR b.effective_to >= CURRENT_DATE))
+                   AND NOT EXISTS (SELECT 1 FROM constituency_boundaries b
+                                    WHERE b.constituency_id = p.constituency_id
+                                      AND b.effective_from <= u.starts
+                                      AND (b.effective_to IS NULL
+                                           OR b.effective_to >= u.starts))
+               ) AS orphans
+          FROM upcoming u
+         ORDER BY u.starts, u.level, u.source_set
+        """,
+        horizon_days,
+    )
+
+    seats_by_ju = {
+        r["jurisdiction"]: r["seats"]
+        for r in await db.fetch(
+            "SELECT jurisdiction, seats FROM jurisdiction_sources "
+            "WHERE level = 'provincial'"
+        )
+    }
+
+    out: list[PendingFlip] = []
+    for r in rows:
+        # Seat counts only exist for provincial/federal; a council has no
+        # one-seat-one-polygon rule (see the municipal section above).
+        seats = seats_by_ju.get(r["ju"]) if r["level"] == "provincial" else None
+        out.append(PendingFlip(
+            level=r["level"], jurisdiction=r["ju"], source_set=r["source_set"],
+            version=r["version"], starts=r["starts"],
+            incoming=r["incoming"], outgoing=r["outgoing"],
+            orphans=r["orphans"], seats=seats,
+        ))
     return out

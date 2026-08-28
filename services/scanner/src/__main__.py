@@ -4138,7 +4138,7 @@ def cmd_check_boundary_coverage(ctx: click.Context, no_area: bool) -> None:
     surfaces as a FAILED job in the admin panel.
     """
     from .legislative.boundary_coverage import (
-        check_boundary_coverage, check_municipal_integrity,
+        check_boundary_coverage, check_municipal_integrity, check_pending_flips,
     )
 
     async def _wrap(db: Database) -> None:
@@ -4164,11 +4164,23 @@ def cmd_check_boundary_coverage(ctx: click.Context, no_area: bool) -> None:
         if not muni:
             console.print("[green]ok[/green] municipal: per-seat integrity clean")
 
+        # Flips are dated rows already in the table, not events that happen
+        # to us. Reported, never a breach — it is what the report SAYS (a
+        # member about to detach, a seat count about to disagree) that needs
+        # acting on, and always before the date, never after.
+        flips = await check_pending_flips(db)
+        for f in flips:
+            colour = "red" if f.orphans else "yellow"
+            console.print(f"[{colour}]flip[/{colour}] {f.describe()}")
+        if not flips:
+            console.print("[green]ok[/green] no boundary generation flips in the next 60 days")
+
         total_vac = sum(r.vacancies for r in rows)
         console.print(
             f"check-boundary-coverage: jurisdictions={len(rows)} "
             f"breaches={len(breaches)} vacancies={total_vac} "
             f"municipal_problems={len(muni)} "
+            f"pending_flips={len(flips)} "
             f"roster_frozen={sum(r.roster_frozen for r in rows)}"
         )
         if breaches or muni:

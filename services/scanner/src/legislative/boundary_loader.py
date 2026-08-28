@@ -2171,17 +2171,40 @@ SPECS: dict[str, BoundarySpec] = {
     # calendar year after the last general election. Last GE 2022-10-03, so
     # 2026-08-29. The LG may dissolve earlier; it cannot run later.
     #
-    # ★ The error is therefore ONE-SIDED and that is the safety argument.
-    # 2026-08-29 is the LATEST lawful date, so this value can only make us late
-    # — serving the still-lawful 2017 map a few extra days if dissolution comes
-    # early. It can never activate a map that is not yet law. A date taken from
-    # the polling day (2026-10-05) would have failed the other way and served a
-    # REPEALED map for the whole five-week writ period.
+    # ⛔ REVERSED 2026-08-28 by migration 0117 — effective_from is now
+    #    2026-10-05, the polling day. The reasoning that produced 2026-08-29 is
+    #    kept below because it is correct on its own terms, and a future reader
+    #    deciding a similar case needs both halves.
     #
-    # ⚠ Loading this is only half the cutover. Migration 0070 sets
-    # effective_to = 2026-08-28 on the 2017 generation; without it BOTH satisfy
-    # the current-date predicate on the 29th and every Quebec address returns
-    # two districts.
+    #    THE ORIGINAL ARGUMENT. The error at 2026-08-29 is ONE-SIDED: it is the
+    #    latest lawful date, so it can only make us late — serving the
+    #    still-lawful 2017 map a few extra days if dissolution comes early. It
+    #    can never activate a map that is not yet law. Polling day fails the
+    #    other way and serves a REPEALED map for the whole five-week writ
+    #    period.
+    #
+    #    WHY IT WAS REVERSED ANYWAY. That argument optimises for a consumer
+    #    asking "what is the electoral map of Quebec?" This dataset's primary
+    #    join is to sitting members — `politicians.constituency_id` against a
+    #    live boundary — so its primary question is "who represents this
+    #    address?" Flipping on the legal date answers that with two falsehoods
+    #    for six weeks: six MNAs pointing at districts that have never held an
+    #    election, and two districts (bellefeuille,
+    #    marie-lacoste-gerin-lajoie) with no member at all. Serving a repealed
+    #    map to a geometry consumer is a smaller error than detaching a sixth
+    #    of a caucus from the people who elected them.
+    #
+    #    It is also what ruling A10.4 already requires everywhere else: the
+    #    in-force date is the election the boundaries first governed. Six
+    #    Ontario municipal 2026 maps sit dormant at 2026-10-26 on that rule,
+    #    and the federal 2023 order took effect at a dissolution rather than at
+    #    proclamation. Quebec provincial was the last place the programme had
+    #    not applied its own rule to itself.
+    #
+    # ⚠ Loading this is only half the cutover. Migration 0070 set
+    # effective_to = 2026-08-28 on the 2017 generation and 0117 moved it to
+    # 2026-10-04; without an end-date BOTH generations satisfy the current-date
+    # predicate and every Quebec address returns two districts.
     "quebec": BoundarySpec(
         jurisdiction="quebec",
         # ⚠ FILENAME TRAP: the enclosing directory is plural and accented
@@ -2211,7 +2234,7 @@ SPECS: dict[str, BoundarySpec] = {
         id_prefix="quebec-electoral-districts",
         authority="elections-quebec",
         boundaries_version="2026",
-        effective_from=date(2026, 8, 29),
+        effective_from=date(2026, 10, 5),   # ⛔ polling day, not the legal date — see above + 0117
         effective_to=None,
         # ⚠ FIELD DRIFT is why Quebec needs a separate spec per generation
         # rather than one parameterised by year:
