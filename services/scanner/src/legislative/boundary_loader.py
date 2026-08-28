@@ -1530,6 +1530,46 @@ def _sherbrooke_label(props: dict) -> str | None:
     return nom
 
 
+# Terrebonne — where the GIS layer and the by-law disagree, the by-law wins.
+#
+# ⛔ THIS IS NOT ARTICLE-STRIPPING, and it is deliberately the OPPOSITE of
+# `_sherbrooke_label` above. Sherbrooke's layer over-decorates its names with
+# articles our ids never carried; Terrebonne's layer UNDER-decorates two of them
+# relative to Règlement numéro 929, the instrument that designates and delimits
+# the districts. The by-law is the naming authority for its own districts —
+# the same reasoning that put Montréal's `Étienne-Desmarteau` ahead of MAMH's
+# `Étienne-Desmarteaux` in `constituency_name_alias`.
+#
+# Only two of the sixteen differ, and only one of those matters:
+#
+#   layer `Boisé Laurier`            R929 `Du Boisé-Laurier`     ← slug-changing
+#   layer `Seigneurie-île-Saint-Jean` R929 `Seigneurie-Île-Saint-Jean`  ← case only
+#
+# ★ Correcting district 2 is what preserves its `constituency_id` across the
+# generation. We hold `terrebonne-districts/du-boise-laurier`; the layer's
+# spelling slugifies to `boise-laurier`, which would have minted a SECOND id for
+# a district that is continuing under its own name. It also aligns the polygon
+# with MAMH, which writes `Du Boisé-Laurier` — so the exact-slug join carries it
+# rather than the article/hyphen fallback pass having to.
+#
+# ⚠ District 15 is left alone on purpose. R929 writes `Saint-Charles-Des Fleurs`
+# and the layer writes `Saint-Charles-Des-Fleurs`; both slugify to
+# `saint-charles-des-fleurs`, so there is nothing to fix and no reason to touch
+# a name the publisher owns.
+_TERREBONNE_BY_LAW_NAMES = {
+    "Boisé Laurier": "Du Boisé-Laurier",
+    "Seigneurie-île-Saint-Jean": "Seigneurie-Île-Saint-Jean",
+}
+
+
+def _terrebonne_label(props: dict) -> str | None:
+    """`de_nom` -> the Règlement 929 designation where the layer diverges."""
+    nom = str(props.get("de_nom") or "").strip()
+    if not nom:
+        return None
+    return _TERREBONNE_BY_LAW_NAMES.get(nom, nom)
+
+
 # Montréal — the 2025 electoral districts, from the city's own open data.
 #
 # ⛔ Our 44 district polygons are the 2021 map, superseded at the 2025-11-02
@@ -3653,6 +3693,162 @@ SPECS: dict[str, BoundarySpec] = {
               "halves. A point in Lennoxville therefore returns two districts. "
               "⚠ The layer also names the sitting councillor (CONSEILLER), as "
               "Laval and Ville de Québec do."
+    ),
+    "longueuil-districts": BoundarySpec(
+        jurisdiction="longueuil-districts",
+        source_path="municipal-quebec/current/longueuil-districts-2025-11.geojson",
+        # ⚠ Native SR is EPSG:32188 (NAD83 MTM zone 8, metres). The harvest asked
+        # the FeatureServer for `outSR=4326`, so the STAGED FILE is WGS84 degrees
+        # and 4326 is what the loader must be told. Declared, per rule 2 — re-fetch
+        # without `outSR` and this spec silently relabels metres as degrees.
+        src_epsg=4326,
+        level="municipal",
+        province_territory="QC",
+        source_set="longueuil-districts",
+        id_prefix="longueuil-districts",
+        authority="ville-de-longueuil",
+        boundaries_version="2025",
+        # Ruling A10.4 — the municipal general election this map first governed.
+        # ⛔ NOT the by-law's own in-force date, which is well evidenced and is
+        # 2024-10-31: **Règlement CO-2024-1269 divisant le territoire de la
+        # municipalité en districts électoraux**, avis de motion 2024-04-16,
+        # adopted 2024-06-11, in force 2024-10-31 — a date fixed by statute
+        # rather than by council (LERM art. 30: the division by-law "entre en
+        # vigueur le 31 octobre de l'année civile qui précède celle où doit avoir
+        # lieu l'élection générale"). The 18 toponyms were attached afterwards by
+        # **Règlement CO-2024-1293**, adopted 2025-01-21, in force 2025-01-23.
+        # The CRE did not intervene: Longueuil appears on neither Élections
+        # Québec's list of 2025 division decisions (Brossard, La Pêche,
+        # Saint-Aubert, Saint-Cyrille-de-Wendover) nor its list of public
+        # hearings, and fewer than the required 500 electors opposed.
+        # ⚠ The city's own ArcGIS metadata says the map is "en vigueur depuis le
+        # 19 septembre 2025". That is NOT an entry into force — 2025-09-19 is
+        # polling day minus 44, the first day of the période électorale (LERM
+        # art. 364) and of the nomination window named in Longueuil's own avis
+        # public d'élection. GIS shorthand, not an instrument.
+        effective_from=date(2025, 11, 2),
+        effective_to=None,
+        name_field="NOM",
+        # ⛔ No authority id. The by-law numbers the districts 1–18 and the
+        # `Elections2025_Districts` sibling layer carries those numbers as
+        # `NUMERO`, but THIS layer's only integer is `OBJECTID`, which is not the
+        # by-law number (OBJECTID 1 is by-law district 10). Recording OBJECTID as
+        # `authority_district_id` would invent an authority that does not exist;
+        # the held rows carry none either, so nothing is lost.
+        boundary_kind="district",
+        # ⛔ 18, up from the 15 we held. A REAL REDRAW, not a partial ingest:
+        # 13 slugs carry over, `explorateurs` and `iberville` are gone, and
+        # `boise-fonrouge`, `boise-pilon`, `croydon-iberville`,
+        # `longueuil-montreal-sud` and `ruisseau-masse` are new. The 15→18
+        # increase needed a Charter amendment (PL 204, Loi concernant la Ville de
+        # Longueuil, sanctioned 2024-02-14).
+        expect_districts=18,
+        licence="cc-by-4.0",
+        notes="Ville de Longueuil ArcGIS Online item acb5405480754fd4a41734bd81fafbe6 "
+              "('Districts électoraux', owner VilleLongueuil, org h4XWvDXfYYyD6jNu), "
+              "service DO_DistrictElectoral/FeatureServer/0. The item's own "
+              "`licenseInfo` carries the licence verbatim: \"Cette donnée est mise à "
+              "disposition selon les termes de la Licence Creative Commons Attribution "
+              "4.0 International\". Attribution: 'Service de la géomatique, Direction de "
+              "l'aménagement et de l'urbanisme'. "
+              "⛔ NOT Données Québec. Its `districts-electoraux-longueuil` package still "
+              "serves the SUPERSEDED 15-district map (resource dated 2024-03-01, "
+              "councillors from the 2021-25 council); a file staged from it in a previous "
+              "pass was deliberately never loaded, and re-probing on 2026-08-28 confirmed "
+              "it is still stale. The city publishes the current map only to its own "
+              "ArcGIS org. "
+              "⚠ A SECOND city layer, Elections2025_Districts/FeatureServer, holds the "
+              "SAME 18 districts (min IoU 0.999982 district-for-district — precision "
+              "only) plus a `NUMERO` by-law number, and publishes them TWICE as layers 1 "
+              "and 2 with byte-identical geometry. It carries no licence text, which is "
+              "why this spec reads the open-data layer instead. "
+              "⚠ The layer also names the sitting councillor (CONSEILLER) and party "
+              "(PARTI), refreshed to the 2025-elected council — a roster source as well "
+              "as a geometry source, as Laval, Ville de Québec and Sherbrooke are. "
+              "ⓘ ONE TIER ONLY, despite Longueuil having three arrondissements — the "
+              "Sherbrooke/Lennoxville containment trap does NOT apply here. The 18 "
+              "districts split 10 Vieux-Longueuil / 7 Saint-Hubert / 1 Greenfield Park, "
+              "and district 11 Greenfield Park IS the borough (coterminous, hence exempt "
+              "from the ±15% rule at +21.03%). Greenfield Park also elects 2 conseillers "
+              "d'arrondissement, but they are elected borough-wide over that same single "
+              "polygon rather than over sub-districts, and the borough ships no sub-"
+              "district geometry. So three people name `de Greenfield Park` and all "
+              "three correctly resolve to one polygon — 20 councillors, 18 districts, no "
+              "nested tier."
+    ),
+    "terrebonne-districts": BoundarySpec(
+        jurisdiction="terrebonne-districts",
+        source_path="municipal-quebec/current/terrebonne-districts-2025-11.geojson",
+        # ⚠ Native SR is EPSG:2950 (NAD83(CSRS) MTM zone 8, metres); the harvest
+        # asked for `outSR=4326`. Same caveat as Longueuil above.
+        src_epsg=4326,
+        level="municipal",
+        province_territory="QC",
+        source_set="terrebonne-districts",
+        id_prefix="terrebonne-districts",
+        authority="ville-de-terrebonne",
+        boundaries_version="2025",
+        # Ruling A10.4 — the municipal general election this map first governed.
+        # ⛔ NOT the by-law's in-force date of 2024-10-31. Instrument:
+        # **Règlement numéro 929, "Règlement concernant la division du territoire
+        # de la Ville de Terrebonne en seize (16) districts électoraux, désignant
+        # et délimitant ces districts"** — avis de motion 2024-05-07 (rés.
+        # 234-05-2024), zero oppositions certified 2024-05-24 against a threshold
+        # of 500, adopted at a séance extraordinaire 2024-05-31 (rés.
+        # 262-05-2024), in force 2024-10-31 by the same LERM art. 30 statutory
+        # rule as Longueuil. R929 art. 4 expressly repeals Règlement numéro 764
+        # (adopted 2020-05-11), which is the map we held.
+        # ⚠ The CRE DID act, administratively rather than by hearing: it
+        # confirmed conformity on 2024-08-23, and council then adopted résolution
+        # 449-09-2024 on 2024-09-04 amending R929 on the CRE's recommendations,
+        # which forms part of the by-law as if adopted with it (LERM art. 21).
+        # ⚠ The standalone R929 PDF posted in June 2024 leaves the in-force line
+        # BLANK ("Date d'entrée en vigueur : ___________ 2024"). The filled and
+        # signed copy is the one appended to the October promulgation notice —
+        # cite the promulgation PDF, not the June one.
+        effective_from=date(2025, 11, 2),
+        effective_to=None,
+        name_field="de_nom",
+        name_builder=_terrebonne_label,
+        authority_id_field="de_numero",
+        boundary_kind="district",
+        # ⛔ 16 BEFORE AND 16 AFTER — the count is blind here, and this is exactly
+        # the case ruling A10.4's siblings warn about. R929 moved the lines of
+        # THIRTEEN of the sixteen districts (1,2,3,4,5,6,7,8,9,11,13,14,15);
+        # only 10, 12 and 16 kept their limits. Two districts were renamed
+        # BECAUSE their geometry changed, and the direction matters: the Urbanova
+        # sector moved OUT of district 5 and INTO district 7, so 5 became
+        # `La Bergeronne` (was `Grand Ruisseau`) and 7 became `Côte de
+        # Terrebonne-Urbanova` (was `Côte de Terrebonne`). Treating either as a
+        # rename would have left Urbanova's polygon under the wrong district.
+        expect_districts=16,
+        licence="cc-by-4.0",
+        notes="Ville de Terrebonne ArcGIS Online item f2edea41fd2c46aab4ba9d7d7c06885f "
+              "('TRB_DistrictsElectoraux', owner Ville_Terrebonne, org "
+              "a73949cd742c49f48a4110e454889211), service "
+              "services3.arcgis.com/kKl4g5Ltuw8RvFq1/.../districts_electoraux/"
+              "FeatureServer/0. "
+              "⚠ LICENCE IS BY POLICY, NOT BY ITEM. The ArcGIS item's `licenseInfo` is "
+              "EMPTY — unlike Longueuil's and Sherbrooke's, which carry the licence "
+              "inline. The city's council-adopted **Politique sur les données ouvertes** "
+              "(POL.1201.21, résolution du conseil municipal #284-05-2021 adopted "
+              "2021-05-10) settles it at s. 9 verbatim: \"La « Licence Creative Commons "
+              "Attribution 4.0 International (CC-BY) » fait office de référence et de "
+              "consensus international dans le domaine des données ouvertes. […] Les "
+              "données ouvertes de la Ville de Terrebonne seront donc assujetties à "
+              "cette licence.\" Cited from "
+              "terrebonne.ca/wp-content/uploads/2023/08/"
+              "Terrebonne_Politique_de_donnees_ouvertes_VF.pdf. "
+              "⛔ NOT on Données Québec — `package_search?q=terrebonne` returns 2 "
+              "packages, a GTFS feed and a provincial geodesy layer, neither electoral. "
+              "The city publishes only to its own ArcGIS org. "
+              "★ HOW THE VINTAGE WAS PROVEN, since the count could not: the org also "
+              "holds `districts_electoraux_vector_tile_archive_20251103`, an archive "
+              "copy cut the day after the 2025-11-02 election, and the live layer was "
+              "modified 2025-11-03. The publisher archived the old map and replaced it "
+              "at the election — corroborating R929 independently of the by-law. "
+              "⚠ The layer names the sitting councillor (de_conseiller), refreshed to "
+              "the 2025-elected council."
     ),
 
     # ═══ Ontario large cities ═══════════════════════════════════════════
