@@ -4121,6 +4121,49 @@ def cmd_ingest_qc_municipal_roster(ctx, csv_path: str, dry_run: bool) -> None:
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 
 
+@cli.command("apply-on-municipal-roster")
+@click.option("--cycle", type=int, default=2022, show_default=True,
+              help="AMO election cycle to write from.")
+@click.option("--council", "councils", multiple=True,
+              help="Limit to one or more council slugs. Default: all tier-1.")
+@click.option("--apply", "do_apply", is_flag=True,
+              help="Actually write. Without this the run only reports its plan.")
+@click.pass_context
+def cmd_apply_on_municipal_roster(ctx: click.Context, cycle, councils, do_apply) -> None:
+    """Write the ward seats the comparison proved stale, and fill the gaps.
+
+    ⛔ THE VERDICT IS THE AUTHORISATION. Only seats classified STALE (we hold
+    the previous cycle's winner, proven against that cycle's own result) or gap
+    (we hold nobody) can be written. The unknown-holders it cannot date, the
+    spelling variants it will not upgrade to a match, and every agreeing seat
+    are unreachable from here.
+
+    ⚠ Ward seats only — mayors and at-large councillors carry no ward, so this
+    path cannot touch them. That is also why writing cycle 2022 cannot revert
+    Toronto's mayor to John Tory.
+
+    Retires only the specific incumbent of a seat being replaced, never a whole
+    council's cohort: this runs BEFORE the election, against 19 evidenced seats
+    out of 185 held rows.
+    """
+    from .legislative.on_municipal_roster import apply_on_municipal_roster
+
+    async def _wrap(db: Database) -> None:
+        st = await apply_on_municipal_roster(
+            db, cycle=cycle, councils=list(councils) or None, apply=do_apply)
+        for line in st.actions:
+            console.print(line)
+        console.print(
+            f"[green]apply-on-municipal-roster[/green]: cycle={st.cycle} "
+            f"councils={st.councils} wards={st.wards_examined} "
+            f"writable={st.writable} installed={st.installed} "
+            f"rekeyed={st.rekeyed} retired={st.retired}"
+            + ("" if do_apply else " [yellow](plan only — pass --apply)[/yellow]")
+        )
+        _print_problems(st.problems)
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
 @cli.command("compare-on-municipal-wards")
 @click.option("--cycle", type=int, default=2026, show_default=True,
               help="AMO election cycle to compare against: 2022 or 2026.")

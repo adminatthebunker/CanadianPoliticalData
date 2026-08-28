@@ -213,6 +213,17 @@ COMMANDS: dict[str, dict[str, Any]] = {
              "help": "Send email even when no committees are stale (audit cadence)."},
         ],
     },
+    "apply-on-municipal-roster": {
+        "description": "Write the Ontario ward seats the AMO comparison proved stale, and fill the ones we hold nobody for. THE VERDICT IS THE AUTHORISATION: retiring a sitting person requires the STALE verdict (positive proof they are the previous cycle winner, established against that cycle own result); installing requires only that AMO filled the seat and we hold nobody, which is strictly weaker and only ever adds a row. Ward seats only -- mayors and at-large councillors carry no ward, which is why writing cycle 2022 cannot revert Toronto mayor to John Tory. Retires ONLY the specific incumbent of a seat being replaced, never a whole council cohort: unlike the Quebec ingester this runs BEFORE the election, against a handful of evidenced seats out of hundreds of correct rows. Re-keys a re-elected member rather than replacing them so socials, offices and websites are not stranded on an inactive row. Defaults to reporting its plan; --apply to write.",
+        "cli": "apply-on-municipal-roster",
+        "category": "maintenance",
+        "args": [
+            {"name": "cycle", "type": "int", "required": False,
+             "help": "AMO election cycle to write from. Default 2022."},
+            {"name": "apply", "type": "bool", "required": False,
+             "help": "Actually write. Without it the run only reports its plan."},
+        ],
+    },
     "compare-on-municipal-wards": {
         "description": "Seat-by-seat diff of AMO Ontario election results against our roster, anchored on the WARD rather than on names. READ-ONLY. Distinguishes 'we hold the previous cycle winner' (STALE, confirmed against the 2018 API) from 'we hold somebody neither cycle elected' (a by-election, or pre-2018 residue) -- a distinction council-level name-set comparison cannot make. Seat-anchoring also makes a LOOSE name match safe: inside one ward the pool is one or two people, so Matt matches Matthew Luloff and Gurpreet Dhillon matches Gurpreet Singh Dhillon without the collisions a loose match across a whole council would cause. Matches per SEAT within the ward, because Brampton elects a city and a regional councillor per ward pair and an any-match rule let one correct name mask one stale one. Bridges AMO ward numbers to our constituency_ids via authority_district_id (format varies: Toronto zero-pads, Brampton writes WARD 1, Kingston uses bare integers). Verifies its urlId table against the publisher every run.",
         "cli": "compare-on-municipal-wards",

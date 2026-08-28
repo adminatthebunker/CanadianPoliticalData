@@ -494,6 +494,44 @@ class WardVerdict:
     # person for one seat says nothing about the other.
     unmatched_held: list[str] = field(default_factory=list)
     unmatched_amo: list[str] = field(default_factory=list)
+    # The AMO seats with no counterpart we hold — what an apply would INSTALL.
+    # Carried as Seat rather than name so the office survives the comparison.
+    install: list["Seat"] = field(default_factory=list)
+    council: str = ""
+    source_set: str = ""
+
+    @property
+    def installable(self) -> bool:
+        """Seats AMO filled that we hold nobody for.
+
+        ⛔ `incomplete` belongs here alongside `gap`, and leaving it out was a
+        real defect. The two differ only by an artifact of ward-PAIR councils:
+        `gap` means the whole ward is empty, `incomplete` means one seat of a
+        multi-seat ward is. Both mean "AMO elected somebody here and we hold
+        nobody", which is the same evidence and the same authorisation.
+
+        Excluding it stranded Brampton's four installs: once their predecessors
+        were retired, those wards stopped reading `STALE` and started reading
+        `incomplete`, so the writer could no longer reach rows it had itself
+        created — and they kept a constituency_name that matched no ward.
+        """
+        return (self.status.startswith("STALE")
+                or self.status.startswith("gap")
+                or self.status.startswith("incomplete"))
+
+    @property
+    def writable(self) -> bool:
+        """★ THE VERDICT IS THE AUTHORISATION.
+
+        An apply may only touch a seat this comparison classified as STALE
+        (we hold the previous cycle's winner, proven against that cycle's own
+        result) or as a gap (we hold nobody). Everything else — the
+        unknown-holders it cannot date, the spelling variants it will not
+        upgrade to a match, the `incomplete` and `extra` shapes — is outside
+        what the evidence established, so the writer cannot reach it. This is
+        what stops an apply from quietly exceeding its own comparison.
+        """
+        return self.status.startswith("STALE") or self.status.startswith("gap")
 
     def line(self) -> str:
         def j(v): return ", ".join(v) if v else "—"
@@ -592,42 +630,71 @@ async def compare_wards(
             for r in held_rows:
                 held_by_cid.setdefault(r["constituency_id"], []).append(r["name"])
 
-            def by_ward(seats: list[Seat]) -> dict[int, list[str]]:
-                d: dict[int, list[str]] = {}
+            def by_ward(seats: list[Seat]) -> dict[int, list[Seat]]:
+                # ⚠ Seats, not names. The comparison only ever needed the name,
+                # but the apply path needs the office too, and re-deriving it
+                # from a name later would mean matching twice.
+                d: dict[int, list[Seat]] = {}
                 for s in seats:
                     for w in s.wards:          # a seat may cover two wards
-                        d.setdefault(w, []).append(s.name)
+                        d.setdefault(w, []).append(s)
                 return d
 
             n_by, p_by = by_ward(now), by_ward(before)
             verdicts: list[WardVerdict] = []
             for ward in sorted(idx):
                 cid, wname = idx[ward]
-                a_now, a_prev = n_by.get(ward, []), p_by.get(ward, [])
-                h = held_by_cid.get(cid, [])
+                seats_now = n_by.get(ward, [])
+                seats_prev = p_by.get(ward, [])
+                a_now = [x.name for x in seats_now]
+                a_prev = [x.name for x in seats_prev]
+
+                # ⛔ A SEAT CAN COVER TWO WARDS, so "who do we hold for this
+                # ward" is not "who is attached to this ward's polygon".
+                # Brampton elects one city and one regional councillor per ward
+                # PAIR, and `politicians.constituency_id` is single-valued, so
+                # the mirror attached each of them to one ward of their pair.
+                # Ward 10 therefore had nobody attached and read as a `gap` —
+                # while Harkirat Singh, who represents it, sat on ward 9. The
+                # first apply plan proposed re-keying him a second time for a
+                # ward he already covers.
+                #
+                # So the held set for a ward is the union across every ward that
+                # any seat covering THIS ward also covers. For a single-seat
+                # council the sibling set is the ward itself and nothing changes.
+                siblings = {ward}
+                for s_ in seats_now:
+                    siblings.update(s_.wards)
+                h: list[str] = []
+                for w_ in sorted(siblings):
+                    sib = idx.get(w_)
+                    if sib:
+                        for nm_ in held_by_cid.get(sib[0], []):
+                            if nm_ not in h:
+                                h.append(nm_)
                 if not a_now and not h:
                     continue
 
                 # Match seat-wise, not ward-wise. Exact/loose first, then the
                 # spelling-variant pass, so a typo does not consume a slot a
                 # real match wanted.
-                rem_amo = list(a_now)
+                rem_amo: list[Seat] = list(seats_now)
                 rem_held: list[str] = []
                 spelling: list[tuple[str, str]] = []
                 for x in h:
-                    hit = next((y for y in rem_amo if loose_same_person(x, y)), None)
+                    hit = next((y for y in rem_amo if loose_same_person(x, y.name)), None)
                     if hit is None:
                         rem_held.append(x)
                     else:
                         rem_amo.remove(hit)
                 still: list[str] = []
                 for x in rem_held:
-                    hit = next((y for y in rem_amo if near_same_person(x, y)), None)
+                    hit = next((y for y in rem_amo if near_same_person(x, y.name)), None)
                     if hit is None:
                         still.append(x)
                     else:
                         rem_amo.remove(hit)
-                        spelling.append((x, hit))
+                        spelling.append((x, hit.name))
                 rem_held = still
 
                 if not h:
@@ -648,10 +715,247 @@ async def compare_wards(
                     status = "unknown-holder — by-election or pre-cycle residue"
                 verdicts.append(WardVerdict(
                     ward, cid, wname, a_now, a_prev, h, status,
-                    unmatched_held=rem_held, unmatched_amo=rem_amo))
+                    unmatched_held=rem_held,
+                    unmatched_amo=[y.name for y in rem_amo],
+                    install=rem_amo, council=council, source_set=source_set))
             results[council] = verdicts
             st.councils += 1
             st.seats += len(verdicts)
             st.identical += sum(1 for v in verdicts if v.status == "agree")
             st.diverged += sum(1 for v in verdicts if v.status != "agree")
     return st, results
+
+
+# ── Apply ────────────────────────────────────────────────────────────────────
+#
+# ⛔ THE ONE ADAPTATION FROM THE QUÉBEC PRECEDENT, AND IT IS THE WHOLE SAFETY
+# STORY. `qc_municipal_roster.py` deactivates a council's ENTIRE
+# `opennorth:<council>:%` cohort, which is correct there because it ingests a
+# whole general election — every seat is refilled on the same day, so anything
+# left over genuinely is not on the council any more.
+#
+# This writer runs BEFORE Ontario's election, against 19 evidenced seats out of
+# 185 held rows. A cohort-wide deactivation here would retire 166 people who are
+# sitting right now. So partial mode retires ONLY the specific person occupying
+# a seat it is replacing, and the per-seat verdict is what authorises it.
+#
+# ⚠ Ward seats only. Mayors and at-large councillors carry no ward, so they are
+# not in the ward comparison and cannot be written by this path — which is also
+# why applying cycle 2022 cannot revert Toronto's mayor to John Tory. Mayoral
+# seats belong to the post-election full mode, where an election has actually
+# refilled them.
+
+import orjson  # noqa: E402
+
+
+@dataclass
+class ApplyStats:
+    cycle: int = 0
+    councils: int = 0
+    wards_examined: int = 0
+    writable: int = 0
+    installed: int = 0
+    rekeyed: int = 0
+    retired: int = 0
+    actions: list[str] = field(default_factory=list)
+    problems: list[str] = field(default_factory=list)
+
+
+async def _install_seat(
+    db: Database, council: str, seat: Seat, ward_name: str,
+    st: ApplyStats, apply: bool,
+) -> None:
+    """Upsert one AMO winner, re-keying a sitting mirror row where one matches.
+
+    ⛔ RE-KEY, NEVER REPLACE — the reasoning is `qc_municipal_roster.py`'s and it
+    holds here. A sitting person's row carries their socials, constituency
+    offices and websites. Deactivating them and inserting a fresh row strands
+    every one of those attachments on an inactive record, which is the defect
+    migration 0069 exists to undo. If the winner matches a sitting
+    `opennorth:<council>:%` row by name, that row is kept, its `source_id` moves
+    to `amo-on:`, and the person simultaneously leaves the Open North sweep.
+    """
+    # ⛔ constituency_name is the WARD'S OWN DISPLAY NAME from our boundary
+    # table, not AMO's positionWard label. The first run wrote the raw label
+    # ("Councillor, Ward 3, 4"), which slugifies to `councillor-ward-3-4` and
+    # matches no ward slug — so all 17 installs landed unattached and
+    # reattach-municipal-roster found nothing to do. The held convention is
+    # `Ward 4` (Brampton) and `Sydenham` (Kingston, whose wards are named), and
+    # both come straight from constituency_boundaries.name.
+    sid = f"{SOURCE_PREFIX}:{council}:{slugify(seat.name)}"
+    parts = seat.name.split()
+    given = parts[0] if parts else seat.name
+    family = parts[-1] if len(parts) > 1 else ""
+
+    existing = await db.fetchrow(
+        "SELECT id FROM politicians WHERE source_id = $1", sid)
+    rekey = False
+    if existing is None:
+        existing = await db.fetchrow(
+            """
+            SELECT id FROM politicians
+             WHERE level = 'municipal' AND province_territory = 'ON' AND is_active
+               AND split_part(source_id, ':', 2) = $1
+               AND regexp_replace(lower(unaccent(name)), '[^a-z0-9]+', '', 'g')
+                 = regexp_replace(lower(unaccent($2)), '[^a-z0-9]+', '', 'g')
+             LIMIT 1
+            """,
+            council, seat.name,
+        )
+        rekey = existing is not None
+
+    if not apply:
+        st.actions.append(
+            f"  {'re-key' if rekey else 'INSTALL':7s} {seat.name:26s} "
+            f"{seat.office} ({council})")
+        st.installed += 1
+        st.rekeyed += int(rekey)
+        return
+
+    if rekey:
+        await db.execute(
+            "UPDATE politicians SET source_id = $2 WHERE id = $1::uuid",
+            existing["id"], sid)
+        st.rekeyed += 1
+
+    if existing:
+        await db.execute(
+            """
+            UPDATE politicians
+               SET name = $2, first_name = $3, last_name = $4,
+                   elected_office = $5, constituency_name = $6, is_active = true,
+                   -- ⛔ Clear the attachment. A re-keyed person may have changed
+                   -- SEAT, and carrying the old constituency_id forward is what
+                   -- left the mayor of Laval attached to a single district
+                   -- polygon. reattach-municipal-roster re-derives it.
+                   constituency_id = NULL,
+                   updated_at = now()
+             WHERE id = $1::uuid
+            """,
+            existing["id"], seat.name, given, family, seat.office, ward_name,
+        )
+    else:
+        row = await db.fetchrow(
+            """
+            INSERT INTO politicians
+                (source_id, name, first_name, last_name, level,
+                 province_territory, elected_office, constituency_name, is_active)
+            VALUES ($1,$2,$3,$4,'municipal','ON',$5,$6,true)
+            ON CONFLICT (source_id) DO NOTHING
+            RETURNING id
+            """,
+            sid, seat.name, given, family, seat.office, ward_name,
+        )
+        if row:
+            await db.execute(
+                """
+                INSERT INTO politician_changes
+                  (politician_id, change_type, old_value, new_value, severity)
+                VALUES ($1, 'newly_elected', NULL, $2, 'notable')
+                """,
+                row["id"], orjson.dumps({
+                    "name": seat.name, "office": seat.office,
+                    "ward": seat.ward_label, "source": SOURCE_PREFIX,
+                }).decode(),
+            )
+    st.installed += 1
+
+
+async def _retire_holder(
+    db: Database, council: str, name: str, st: ApplyStats, apply: bool,
+) -> None:
+    """Retire exactly one incumbent — audit row, close the term, then deactivate.
+
+    Same three steps as `sk_mlas._detect_sk_retirements`, and in that order: the
+    audit row is written FIRST so a failure part-way leaves evidence rather than
+    a silently deactivated person.
+    """
+    row = await db.fetchrow(
+        """
+        SELECT id::text AS id, name, elected_office, constituency_id
+          FROM politicians
+         WHERE is_active AND level = 'municipal' AND province_territory = 'ON'
+           AND split_part(source_id, ':', 2) = $1 AND name = $2
+         LIMIT 1
+        """,
+        council, name,
+    )
+    if row is None:
+        st.problems.append(f"{council}: cannot retire '{name}' — no active row")
+        return
+    if not apply:
+        st.actions.append(f"  retire  {name:26s} {row['elected_office']} ({council})")
+        st.retired += 1
+        return
+    await db.execute(
+        """
+        INSERT INTO politician_changes
+          (politician_id, change_type, old_value, new_value, severity)
+        VALUES ($1::uuid, 'retired', $2, NULL, 'notable')
+        """,
+        row["id"],
+        orjson.dumps({
+            "name": row["name"], "elected_office": row["elected_office"],
+            "constituency_id": row["constituency_id"],
+            "reason": f"superseded by the AMO {st.cycle} result for this seat",
+        }).decode(),
+    )
+    await db.execute(
+        "UPDATE politician_terms SET ended_at = now() "
+        " WHERE politician_id = $1::uuid AND ended_at IS NULL",
+        row["id"])
+    await db.execute(
+        "UPDATE politicians SET is_active = false, updated_at = now() "
+        " WHERE id = $1::uuid",
+        row["id"])
+    st.retired += 1
+
+
+async def apply_on_municipal_roster(
+    db: Database, cycle: int = 2022, councils: Optional[list[str]] = None,
+    apply: bool = False,
+) -> ApplyStats:
+    """Write only the seats the ward comparison classified as writable."""
+    st = ApplyStats(cycle=cycle)
+    cmp_st, results = await compare_wards(db, cycle=cycle, councils=councils)
+    st.problems.extend(cmp_st.problems)
+    if cmp_st.problems:
+        # ⛔ verify_mapping() failing means the id table no longer names the
+        # councils we think. Nothing is writable under that doubt.
+        return st
+
+    for council, verdicts in sorted(results.items()):
+        st.councils += 1
+        st.wards_examined += len(verdicts)
+        # ⚠ Two different authorisations, deliberately. Retiring a sitting
+        # person needs the STALE verdict — positive proof they are the previous
+        # cycle's winner. Installing someone only needs "AMO filled this seat
+        # and we hold nobody", which is strictly weaker and strictly safer: it
+        # adds a row rather than ending a term.
+        writable = [v for v in verdicts if v.installable]
+        if not writable:
+            continue
+        st.actions.append(f"{council}:")
+        # ⛔ A ward-pair seat surfaces the SAME finding on both of its wards —
+        # Brampton's ward 3 and ward 4 each report "retire Jeff Bowman, install
+        # Dennis Keenan", because one councillor represents both. Acting on each
+        # occurrence would retire him twice (the second failing with "no active
+        # row" and logging a spurious problem) and install his successor twice.
+        # The unit of action is the PERSON within the council, not the ward.
+        done_retire: set[str] = set()
+        done_install: set[str] = set()
+        for v in writable:
+            st.writable += 1
+            st.actions.append(
+                f"  ward {v.ward} ({v.ward_name}) — {v.status}")
+            for nm in (v.unmatched_held if v.writable else []):
+                if nm in done_retire:
+                    continue
+                done_retire.add(nm)
+                await _retire_holder(db, council, nm, st, apply)
+            for seat in v.install:
+                if seat.name in done_install:
+                    continue
+                done_install.add(seat.name)
+                await _install_seat(db, council, seat, v.ward_name, st, apply)
+    return st
