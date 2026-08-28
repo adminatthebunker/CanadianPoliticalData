@@ -166,3 +166,125 @@ Large". Loads as `at-large`.
 (Grimsby's ward 3), none below 95%. Per the A8.1 refinement that says nothing about
 currency if both sides share a lineage; what it establishes is that the load is
 additive rather than a substitution.
+
+## Clarington + Vaughan — staged 2026-08-28, the two explicit-prohibition sets
+
+The last two Ontario municipalities held back in the Wave 3 programme. Both were
+researched and dated on 2026-08-27 but **not** staged into the repo and **not**
+loaded, because each carries the programme's first *explicit* licence
+prohibition rather than the usual silence (see `db/migrations/0116` and the
+dossier's "An explicit licence prohibition is not the same as silence").
+
+⚖ **Operator decision, 2026-08-28: load both.** The standing rule "licence
+recorded, never a gate" stands, and now covers explicit prohibitions as well as
+unstated ones. The licence text below is recorded **verbatim** and is not
+paraphrased anywhere in the spec, the migration, or this table.
+
+| File | Source URL | Retrieved (UTC) | Bytes | sha256 |
+|---|---|---|---|---|
+| `current/clarington-wards-1997.geojson` | https://services6.arcgis.com/rtNHzl5XDmZaetYm/arcgis/rest/services/Clarington_Wards/FeatureServer/0/query?where=1=1&outFields=*&outSR=4326&f=geojson | 2026-08-28T16:06Z | 467941 | `8c0147c07f4735533724cb76faf64c2eee57c64e0f2ac5d5520178cc7c95cce0` |
+| `current/vaughan-wards-2010.geojson` | https://services2.arcgis.com/9LnN9037wYhPG904/arcgis/rest/services/Ward/FeatureServer/0/query?where=1=1&outFields=*&outSR=4326&f=geojson | 2026-08-28T16:06Z | 68496 | `ab17e2b91aa1601e6ebbab6938f647d252bb0e5b0c1ed2326b6cd4b6d55d8a12` |
+
+ⓘ **Both are byte-identical to the 2026-08-27 harvest** (`clarington.geojson`,
+`vaughan_alt.geojson`), re-fetched independently on 2026-08-28 and matching on
+sha256. The staging delay changed nothing upstream.
+
+### Licences — verbatim, as published
+
+**Clarington** — AGOL item `5ec95110bbbf48aab03c6926da0af1d0` ("Ward_Map", owner
+`GIS@Clarington`, `accessInformation` = "Municipality of Clarington"), field
+`licenseInfo`, HTML tags stripped and entities decoded, otherwise unaltered:
+
+> The data provided within any of these web maps is derived from a variety of
+> sources, historic and current. The Municipality of Clarington does not
+> warranty the fitness, accuracy, completeness, correctness or currency of the
+> information contained within. The Municipality expressly excludes any
+> liability in connection with the use of the data. The data is made available
+> for personal informational purposes only and has not been prepared for, is not
+> suitable for, and may not be used for, any commercial, legal, engineering, or
+> surveying purpose. The information and data does not have the accuracy of a
+> survey and represents only the approximate relative location of property
+> boundaries. Each user of these maps is responsible for determining its
+> suitability for his or her intended use or purpose.
+
+⛔ **Unlike Oshawa, this really is the licence.** Oshawa's `licenseInfo` renders
+as a disclaimer wrapped around a hyperlink and the hyperlink is the grant;
+Clarington's has no linked grant behind it. The restrictive reading is correct
+here and wrong there — the discriminator is whether an `<a href>` survives the
+tag strip, not the tone of the prose.
+
+**Vaughan** — all four candidate ward layers carry an **empty** `licenseInfo`
+and an empty `accessInformation`, and `copyrightText` is the empty string
+(re-verified live 2026-08-28 for items `04a102f180dd48b5a1e98d93e8baf289` and
+`b8f3327011d54dc1b9f624d9b57c076f`). Vaughan runs no open-data catalogue and
+York Region does not republish its wards, so the only governing text is the
+site-wide terms at `https://www.vaughan.ca/privacy-statement-and-terms-use`:
+
+> No part of this web site, or the information contained therein, may be
+> reproduced, stored in a retrieval system, or transmitted, in any form or by
+> any means, electronic, mechanical recording or otherwise, without the prior
+> written permission of the City.
+
+⚠ **The live terms page is unreachable and the text above is from Wayback** —
+`www.vaughan.ca` sits behind Akamai and returns HTTP 403 to a scripted GET on
+every terms-page path tried, with or without a browser UA. Snapshot:
+`https://web.archive.org/web/20260519002546/https://www.vaughan.ca/privacy-statement-and-terms-use`.
+The AGOL layers themselves are open; it is only the terms page that is blocked.
+
+### In-force dates and the instruments that establish them
+
+**Clarington — 1997-11-10, By-law 96-151 (passed 1996-08-12).** Municipality of
+Clarington staff report **CLD-036-16**: "Clarington's existing ward boundaries
+were established by Council on August 12, 1996 through By-law 96-151", and, on
+the same page, "In 1996, effective for the 1997 elections, Regional Council was
+reduced to a 28-member Council … In order to accommodate this reduction, a
+review of our ward system was undertaken and the Municipality was divided into
+the current four wards". 1997-11-10 is the Ontario municipal general election.
+The by-law's own date, 1996-08-12, is fifteen months early — the A10.4 recital
+rule, same shape as Oshawa's By-law 55-2017.
+
+**Vaughan — 2010-10-25, and the by-law is NOT the operative instrument.**
+Vaughan Ward Boundary Review Final Report (December 2016), §2: "In 2009 City
+staff undertook Vaughan's most recent review, resulting in 5 wards and adopted
+by By-law 89-2009, which was appealed to the Ontario Municipal Board (OMB). The
+OMB imposed a different ward structure than the one approved by Vaughan Council,
+but maintained the number of wards at 5. This ward structure was implemented for
+the 2010 municipal elections and is still in place today." Cite the OMB order;
+note the by-law. Corroborated by a later Vaughan staff report: "The City of
+Vaughan's current ward boundaries were imposed by order of the Ontario Municipal
+Board (OMB) in 2009 and have not been updated since that time", and the 2020
+review closed "with no changes made to the existing five ward structure".
+
+★ **Vaughan is the corpus's cleanest demonstration that a count check cannot see
+an appeal.** Five wards before the OMB, five after — the count survived and the
+map did not. Anything keyed on `expect_districts` alone would have accepted
+By-law 89-2009's superseded structure without a murmur.
+
+### Choosing among Vaughan's four candidate layers
+
+All four are 5 wards with identical `WARD_NO`/`DESCRIP` values, so no attribute
+tells them apart. Geometry does:
+
+| Item | Title / owner | Vertices, W1 | Area vs chosen |
+|---|---|---:|---|
+| `04a102f180dd48b5a1e98d93e8baf289` | "Ward" / `planning.gis_vaughan` | 586 | — **chosen** |
+| `b8f3327011d54dc1b9f624d9b57c076f` | "Wards" / `shreyes.shiv_vaughan` | 586 | **byte-identical geometry** |
+| `43ef9df09ccd45e39fb3d1d9dc848f18` | "Vaughan Wards" / `pmomaps_vaughan` | 593 | 0.0001–0.0244% |
+| `982a8b1cbf004b8bbe77aa6f57bd8c67` | "Ward Boundary_CRM" / `alberto.zappacosta_vaughan` | 447 | **0.60–5.12%** |
+
+The chosen item is the one whose snippet names the authority — "Wards as per the
+latest ward boundary review from City Clerks, Vaughan" — and it is corroborated
+by a second, independently-owned item carrying byte-identical geometry. The
+`pmomaps` copy is the same generation at slightly finer precision and would have
+been an acceptable second choice.
+
+⛔ **`Ward_Boundary_CRM` is the wrong pick and looks right.** Five wards, correct
+names, correct owner domain, and Ward 1 off by 5.1% — a generalised service-
+request copy, not the Clerk's map. Four sibling layers with the same count is not
+a corroboration; it is four chances to take the wrong one.
+
+⚠ **The set is re-keyed by this load.** Held Vaughan ids are slugged from the
+neighbourhood name (`vaughan-wards/maplekleinburg`, `…/thornhill`) while the
+display names are "Ward N". The programme's uniform label wins, so the ids become
+`vaughan-wards/ward-1 … ward-5` and the roster is severed and re-attached.
+Clarington's ids are already `ward-N` and survive unchanged.

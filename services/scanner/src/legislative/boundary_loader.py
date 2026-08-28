@@ -4345,9 +4345,11 @@ SPECS: dict[str, BoundarySpec] = {
 
 
     # ═══ Ontario — Durham, the four with both a date and a licence ══════
-    # ⛔ Clarington and Vaughan were researched, dated and DELIBERATELY NOT
-    # LOADED — both carry an explicit licence prohibition rather than the usual
-    # silence. See the dossier; that is an operator call, not a data gap.
+    # ⚖ Clarington and Vaughan were researched and dated on 2026-08-27 but held
+    # back, because each carries the programme's first EXPLICIT licence
+    # prohibition rather than the usual silence. Released by operator decision
+    # 2026-08-28: "licence recorded, never a gate" stands and now covers explicit
+    # prohibitions too. Their specs are at the end of this Ontario block.
 
     "ajax-wards": BoundarySpec(
         jurisdiction="ajax-wards",

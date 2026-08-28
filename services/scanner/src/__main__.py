@@ -4170,6 +4170,7 @@ def cmd_check_boundary_coverage(ctx: click.Context, no_area: bool) -> None:
     """
     from .legislative.boundary_coverage import (
         check_boundary_coverage, check_municipal_integrity, check_pending_flips,
+        check_municipal_roster_freeze,
     )
 
     async def _wrap(db: Database) -> None:
@@ -4210,12 +4211,21 @@ def cmd_check_boundary_coverage(ctx: click.Context, no_area: bool) -> None:
         if not flips:
             console.print("[green]ok[/green] no boundary generation flips in the next 60 days")
 
+        # ⚠ Advisory. The federal/provincial roster_frozen figure below has
+        # never counted a municipal official, so it has been understating the
+        # freeze by roughly 900 rows. A frozen roster is a currency claim we
+        # should not be making, not a corruption to repair.
+        frozen_muni = await check_municipal_roster_freeze(db)
+        for fm in frozen_muni:
+            console.print(f"[yellow]frozen[/yellow] municipal/{fm.describe()}")
+
         total_vac = sum(r.vacancies for r in rows)
         console.print(
             f"check-boundary-coverage: jurisdictions={len(rows)} "
             f"breaches={len(breaches)} vacancies={total_vac} "
             f"municipal_problems={len(muni)} "
             f"pending_flips={len(flips)} "
+            f"municipal_roster_frozen={sum(f.frozen for f in frozen_muni)} "
             f"roster_frozen={sum(r.roster_frozen for r in rows)}"
         )
         if breaches or muni:

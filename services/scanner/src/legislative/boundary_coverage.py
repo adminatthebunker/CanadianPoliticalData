@@ -830,6 +830,66 @@ async def check_municipal_integrity(db: Database) -> list[MunicipalProblem]:
     return out
 
 
+# ── Municipal roster freeze ──────────────────────────────────────────────────
+
+
+@dataclass
+class FrozenMunicipalRoster:
+    province: str
+    total: int
+    frozen: int
+    stale_days: Optional[int]
+
+    def describe(self) -> str:
+        pct = (100.0 * self.frozen / self.total) if self.total else 0.0
+        # ⚠ "touch", not "verified". updated_at is bumped by any write,
+        # cosmetic ones included, so it is a floor on staleness and never
+        # evidence of currency. politician_changes.detected_at only advances on
+        # a real delta and is the better proxy when one is needed.
+        age = f", oldest write {self.stale_days}d ago" if self.stale_days else ""
+        return (f"{self.province}: {self.frozen}/{self.total} sitting municipal "
+                f"officials ({pct:.0f}%) still source from the retired Open "
+                f"North mirror{age}")
+
+
+async def check_municipal_roster_freeze(db: Database) -> list[FrozenMunicipalRoster]:
+    """How much of the municipal roster is frozen, per province.
+
+    ★ WHY THIS IS SEPARATE FROM `roster_frozen`. The federal/provincial frozen
+    count in check_boundary_coverage() filters `level IN ('federal',
+    'provincial')` and so has never counted a single municipal official. It
+    reported 1057 while another ~912 sat frozen underneath it, unmentioned.
+    A freshness number that silently excludes the least-fresh half of the
+    dataset is worse than no number.
+
+    ⚠ Advisory by construction. A frozen roster is not a corruption — the rows
+    are the last thing the mirror said and they are still internally
+    consistent. It is a CURRENCY claim the dataset should not be making, and
+    the fix is a replacement ingester per province, not a repair. Québec is the
+    only province that has one (MAMH's election result, source prefix
+    `mamh-qc:`); everywhere else is 100% frozen.
+    """
+    return [
+        FrozenMunicipalRoster(
+            province=r["pt"], total=r["total"], frozen=r["frozen"],
+            stale_days=r["stale_days"],
+        )
+        for r in await db.fetch(
+            """
+            SELECT COALESCE(province_territory, '??') AS pt,
+                   count(*) AS total,
+                   count(*) FILTER (WHERE source_id LIKE 'opennorth:%') AS frozen,
+                   (now()::date - min(updated_at)::date) AS stale_days
+              FROM politicians
+             WHERE is_active AND level = 'municipal'
+             GROUP BY 1
+            HAVING count(*) FILTER (WHERE source_id LIKE 'opennorth:%') > 0
+             ORDER BY 3 DESC
+            """
+        )
+    ]
+
+
 # ── Pending flips ────────────────────────────────────────────────────────────
 
 PENDING_FLIP_HORIZON_DAYS = 60
