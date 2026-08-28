@@ -213,6 +213,15 @@ COMMANDS: dict[str, dict[str, Any]] = {
              "help": "Send email even when no committees are stale (audit cadence)."},
         ],
     },
+    "compare-on-municipal-roster": {
+        "description": "Diff AMO Ontario municipal election results against the roster we hold, per council. READ-ONLY. AMO runs one API per election cycle (elections2018/2022/2026.amo.on.ca, unauthenticated, 444 municipalities); members[] is a CANDIDATE list until `elected` is populated -- Toronto 2026 carries 243 members for a 26-seat council. Even a completed result is only an election-night snapshot and knows nothing about later by-elections, so this compares rather than writes: our Ontario roster is inconsistently vintaged (Toronto is post-2023 with Olivia Chow and two by-election councillors, while Brampton and Kitchener are pre-2022), and ingesting a cycle wholesale would revert Torontos mayor to John Tory. Verifies its hardcoded urlId table against the publisher every run and refuses the whole run on any mismatch -- Ontario reuses municipality names across tiers and a stale id silently returns another councils roster.",
+        "cli": "compare-on-municipal-roster",
+        "category": "maintenance",
+        "args": [
+            {"name": "cycle", "type": "int", "required": False,
+             "help": "AMO election cycle: 2018, 2022 or 2026. Default 2026."},
+        ],
+    },
     "reattach-municipal-roster": {
         "description": "Re-link municipal rosters to geometry that a boundary cutover re-keyed underneath them. A cutover renames the source_set and re-keys constituency_id; the roster joins on that id and nothing in the cutover touches it, so every cutover silently severs its council. Found 2026-08-28: 142 sitting officials across 18 councils held a NULL constituency_id while their ward polygon sat right there (Calgary 14, Winnipeg 14, Welland 12, Fredericton 12, Edmonton 12, Regina 10). Matches a WHOLE COUNCIL at a time and picks the set GEOGRAPHICALLY — Ward 1..14 is covered identically by hamilton-wards and london-wards, so names only narrow the field and ST_Contains against the council municipality polygon decides. Refuses rather than guessing on a tie; see migration 0089, where a Gatineau councillor was attached to a Quebec City district 400 km away. Idempotent. Run after any municipal cutover.",
         "cli": "reattach-municipal-roster",

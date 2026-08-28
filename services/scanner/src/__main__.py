@@ -4121,6 +4121,49 @@ def cmd_ingest_qc_municipal_roster(ctx, csv_path: str, dry_run: bool) -> None:
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 
 
+@cli.command("compare-on-municipal-roster")
+@click.option("--cycle", type=int, default=2026, show_default=True,
+              help="AMO election cycle: 2018, 2022 or 2026.")
+@click.option("--council", "councils", multiple=True,
+              help="Limit to one or more council slugs. Default: all tier-1.")
+@click.pass_context
+def cmd_compare_on_municipal_roster(ctx: click.Context, cycle: int, councils) -> None:
+    """Diff AMO's Ontario election results against the roster we hold.
+
+    ⛔ READ-ONLY, AND DELIBERATELY SO. AMO's members[] is a CANDIDATE list until
+    `elected` is populated, and even a completed result is only an
+    election-night snapshot — it knows nothing about the by-elections that
+    follow. Our Ontario roster is inconsistently vintaged: Toronto is post-2023
+    (Olivia Chow, two by-election councillors) while Brampton and Kitchener are
+    pre-2022. Ingesting a cycle wholesale would revert Toronto's mayor to John
+    Tory. Compare first; decide per council.
+    """
+    from .legislative.on_municipal_roster import compare_on_municipal_roster
+
+    async def _wrap(db: Database) -> None:
+        st, diffs = await compare_on_municipal_roster(
+            db, cycle=cycle, councils=list(councils) or None)
+        for d in diffs:
+            colour = {"identical": "green", "no results yet": "yellow"}.get(
+                d.verdict, "red")
+            console.print(
+                f"[{colour}]{d.verdict:34s}[/{colour}] {d.council:30s} "
+                f"amo={len(d.amo_seats):3d} held={len(d.held):3d} "
+                f"only_amo={len(d.only_amo):2d} only_held={len(d.only_held):2d}"
+            )
+            for seat in d.only_amo:
+                console.print(f"      [red]+ amo[/red]  {seat.name:26s} {seat.ward_label or seat.office}")
+            for nm, off in d.only_held:
+                console.print(f"      [yellow]- held[/yellow] {nm:26s} {off}")
+        console.print(
+            f"[green]compare-on-municipal-roster[/green]: cycle={st.cycle} "
+            f"councils={st.councils} seats={st.seats} identical={st.identical} "
+            f"diverged={st.diverged}"
+        )
+        _print_problems(st.problems)
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
 @cli.command("reattach-municipal-roster")
 @click.option("--council", type=str, default=None,
               help="Limit to one council slug (the middle field of source_id).")
