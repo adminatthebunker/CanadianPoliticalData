@@ -10,7 +10,13 @@ description: What jurisdictions Canadian Political Data covers, and where the da
 For the current, machine-readable status of every jurisdiction we cover,
 see the live [coverage dashboard](https://canadianpoliticaldata.org/coverage)
 on the main site. It is generated from the same database the rest of the
-app reads, so it's never out of date.
+app reads, so the dashboard never disagrees with what the API will return.
+
+⚠ That is a narrower claim than it sounds, and worth stating plainly: it
+means the dashboard matches **our database**, not that our database matches
+**reality**. Where an upstream has no live ingester, the dashboard will
+faithfully report data that has stopped moving. See *How current is this?*
+below.
 
 The dashboard tells you, for each legislature:
 
@@ -33,7 +39,9 @@ not paraphrase or rewrite. Specifically:
 | Provincial MLAs / MNAs / MPPs | Each legislature's official member directory |
 | Provincial Hansard | Each legislature's official transcripts (HTML, XML, JSON, or PDF depending on the province) |
 | Provincial bills | Each legislature's bill index |
-| Riding boundaries | Elections Canada and provincial chief electoral officers |
+| Municipal councillors | Each province's own election result where one is published — Québec's MAMH, Ontario's AMO — otherwise the municipality's roster |
+| Riding boundaries | Elections Canada and the thirteen provincial and territorial chief electoral officers |
+| Municipal ward boundaries | Each municipality's own open-data portal, GIS service, or by-law |
 | Hosting / domain data | Public DNS, WHOIS, and certificate transparency logs |
 
 Where multiple official sources exist for the same fact (e.g. a federal MP's
@@ -52,6 +60,39 @@ A jurisdiction is **fully covered** when:
 A jurisdiction is **partially covered** when (1) and (2) are running but
 Hansard is missing, or vice versa. The coverage dashboard makes this
 distinction explicit.
+
+## How current is this?
+
+Different layers are current in different ways, and we would rather say so
+than average them into one number.
+
+**Electoral boundaries — current, and independently so.** Every federal,
+provincial and territorial map, and the municipal wards we hold, comes from
+the agency that drew it. There is no intermediary between that agency and
+us, which means there is nothing in the middle that can go dark and take the
+data with it.
+
+⚠ Boundaries are also *dated*, not merely present. A map has a generation and
+an in-force date, superseded maps are retained rather than deleted, and a
+lookup answers for the date you ask about. Québec's provincial map changes on
+2026-10-05 and Ontario's municipal maps on 2026-10-26; both are already
+loaded and dormant, waiting for those dates.
+
+**Federal and provincial rosters — ingested on a daily schedule** from each
+legislature's own member directory.
+
+**Municipal rosters — mixed, and this is the honest gap.** Québec and Ontario
+are rebuilt from the province's own election results. The remaining
+provinces' municipal rosters came from a third-party mirror we stopped
+ingesting from in August 2026. Those records are **frozen**: they were
+accurate when that source last ran, and they will not pick up a change until
+we ship a replacement ingester for that province.
+
+⛔ Frozen is not the same as wrong, and we try not to blur the two. A frozen
+record was correct at a known moment; what it lacks is a way to notice that
+it has stopped being correct. The point at which it goes wrong is that
+province's next municipal election, which is why replacements are built
+*ahead* of those dates rather than after them.
 
 A jurisdiction is **on the roadmap** when the upstream publisher's data is
 known to be machine-readable but we haven't built the ingester yet.

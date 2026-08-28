@@ -85,8 +85,9 @@ export function WhoWeTrack() {
       )}
 
       <footer className="who-we-track__foot">
-        Data from <a href="https://represent.opennorth.ca" target="_blank" rel="noopener noreferrer">Open North</a>,
-        Wikidata, parl.ca, provincial legislature sites, and council rosters.
+        Data from Elections Canada and the provincial and territorial chief
+        electoral officers, Wikidata, parl.ca, provincial legislature sites,
+        and council rosters.
         Personal / campaign sites discovered via web scraping.
       </footer>
     </aside>

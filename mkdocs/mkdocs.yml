@@ -160,6 +160,7 @@ nav:
   - Politicians and ridings:
       - politicians/index.md
       - The map: politicians/map.md
+      - Electoral boundaries: politicians/boundaries.md
       - Submitting corrections: politicians/corrections.md
   - Reports and credits:
       - reports/index.md

@@ -94,12 +94,20 @@ https://ipinfo.io/<ip>`}</pre>
     q: "Where does the data come from?",
     a: (
       <>
-        <p>Three sources:</p>
+        <p>Directly from the bodies that publish them:</p>
         <ul>
-          <li><a href="https://represent.opennorth.ca/" target="_blank" rel="noopener">Open North's Represent API</a> — politicians, ridings, constituency boundaries (Open Government Licence — Canada)</li>
+          <li><a href="https://www.elections.ca/" target="_blank" rel="noopener">Elections Canada</a> and the thirteen provincial and territorial chief electoral officers — electoral district boundaries. ⚠ Fourteen agencies means fourteen sets of terms, not one blanket licence; see <a href="https://docs.canadianpoliticaldata.org/developers/licences/" target="_blank" rel="noopener">Boundary licences</a> before reusing geometry.</li>
+          <li>Legislature and municipal rosters — who currently holds each seat, taken from each legislature's own member directory or the province's own election result.</li>
           <li><a href="https://api.openparliament.ca/" target="_blank" rel="noopener">Open Parliament</a> — used to find each MP's official ourcommons.ca page</li>
           <li>Web search + manual curation — for the personal/campaign URL itself, plus the referendum organization list</li>
         </ul>
+        <p>
+          We used to take boundaries and rosters from Open North's Represent
+          API. That dependency was removed in August 2026 — the geometry now
+          comes from the agencies themselves. Some politician records still
+          carry provenance from that earlier ingest and are marked accordingly
+          on the coverage page.
+        </p>
         <p>IP geolocation uses MaxMind's GeoLite2 databases. All scans are publicly observable — we don't see anything you couldn't see yourself.</p>
       </>
     ),

@@ -136,8 +136,21 @@ export function Layout() {
         </div>
         <div className="shell__footer-row shell__footer-row--muted">
           <span>
-            Open data from <a href="https://represent.opennorth.ca" target="_blank" rel="noopener noreferrer">Open North</a>
-            {" and "}<a href="https://openparliament.ca" target="_blank" rel="noopener noreferrer">openparliament.ca</a>
+            {/* ⛔ The Open North credit was removed 2026-08-28 with the last of
+                the dependency. Electoral geometry now comes from the agencies
+                that draw it, and postcodes from the StatCan National Address
+                Register (rebuilt 2026-08-07). Some politician rows still carry
+                `opennorth:` provenance and are frozen at that mirror's final
+                state — that is disclosed per-row on the coverage page rather
+                than as a blanket footer credit, because a footer credit reads
+                as "this is where our data comes from", which is no longer
+                true. ⚠ Do not re-add a blanket credit; if the frozen rows are
+                ever refreshed from a live source the statement becomes wrong
+                in the other direction. */}
+            Electoral boundaries from <a href="https://www.elections.ca" target="_blank" rel="noopener noreferrer">Elections Canada</a>
+            {" and the provincial and territorial chief electoral officers · Addresses from "}
+            <a href="https://www.statcan.gc.ca/en/lode/databases/oda" target="_blank" rel="noopener noreferrer">StatCan</a>
+            {" · Federal Hansard via "}<a href="https://openparliament.ca" target="_blank" rel="noopener noreferrer">openparliament.ca</a>
             {" · Geolocation via MaxMind GeoLite2 · Source-available under "}
             <a href="https://github.com/adminatthebunker/CanadianPoliticalData/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">PolyForm Noncommercial 1.0.0</a>
           </span>

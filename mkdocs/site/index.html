@@ -6,7 +6,7 @@
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width,initial-scale=1">
       
-        <meta name="description" content="How to search Hansard, find your representatives, set up alerts, and generate AI-assisted reports on Canadian Political Data.">
+        <meta name="description" content="A sovereign record of Canadian political activity — electoral boundaries, rosters and Hansard taken directly from the agencies that produce them and held on Canadian infrastructure, with no third-party mirror in between. How to search Hansard, find your representatives, set up alerts, and generate AI-assisted reports.">
       
       
         <meta name="author" content="Canadian Political Data">
@@ -589,6 +589,17 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#sovereign-by-construction" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sovereign by construction
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#where-to-start" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1139,6 +1150,8 @@
       
         
       
+        
+      
     
     
     
@@ -1208,6 +1221,34 @@
     
   
     The map
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="politicians/boundaries/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Electoral boundaries
   
 
     
@@ -1401,6 +1442,8 @@
       
         
           
+        
+      
         
       
         
@@ -1778,6 +1821,34 @@
     
   
     Constituency boundaries
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="developers/licences/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Boundary licences
   
 
     
@@ -2303,6 +2374,17 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#sovereign-by-construction" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Sovereign by construction
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#where-to-start" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2368,6 +2450,35 @@ all in one place, with semantic search across federal and provincial
 legislatures.</p>
 <p>The site is free to use. An optional account unlocks saved searches, email
 alerts, and credit-funded AI reports.</p>
+<h2 id="sovereign-by-construction">Sovereign by construction<a class="headerlink" href="#sovereign-by-construction" title="Anchor link to this section">&para;</a></h2>
+<p>Canadian political data has a habit of being held one step removed from the
+people it describes — aggregated by an intermediary, mirrored abroad, or
+dependent on a service that can quietly stop being maintained.</p>
+<p>This project is built the other way round:</p>
+<ul>
+<li><strong>Primary sources, not a mirror.</strong> Electoral boundaries come from Elections
+  Canada, the thirteen provincial and territorial chief electoral officers,
+  and individual municipalities. Rosters come from each legislature's own
+  member directory, or from the province's own published election result.
+  Nothing sits between those agencies and this database.</li>
+<li><strong>Held here, not rented.</strong> The corpus, the geometry and the search index all
+  live on Canadian infrastructure we run. Answering "who represents this
+  address?" needs no live call to anyone else — which matters, because in
+  August 2026 the aggregator this project used to depend on was unreachable
+  for eleven days and every postal-code lookup in the country failed with it.
+  That dependency is gone.</li>
+<li><strong>Dated, not just current.</strong> Boundaries carry the generation they belong to
+  and the date it took effect, and superseded maps are kept rather than
+  deleted — so the site can answer for a date, not only for today.</li>
+</ul>
+<p>⚠ <strong>And where it is not current, it says so.</strong> Federal and provincial rosters
+are ingested daily. Municipal rosters are rebuilt from official election
+results in Québec and Ontario; for the remaining provinces they are <em>frozen</em>
+at the last state of a source we no longer ingest from — accurate as of a
+known date, but unable to notice a change since. The
+<a href="getting-started/coverage/">coverage page</a> breaks this down rather than
+averaging it into a single reassuring number. A record that tells you where it
+is weak is worth more than one that claims to be uniformly strong.</p>
 <p><a class="md-button md-button--primary" href="https://canadianpoliticaldata.org">Open the main site <span class="twemoji"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg></span></a>
 <a class="md-button" href="getting-started/coverage/">Coverage status <span class="twemoji"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 2c3.86 0 7 3.14 7 7 0 5.25-7 13-7 13S5 14.25 5 9c0-3.86 3.14-7 7-7m-1.53 12L17 7.41 15.6 6l-5.13 5.18L8.4 9.09 7 10.5z"/></svg></span></a>
 <a class="md-button" href="contributors/local-install/">Local installation <span class="twemoji"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21.81 10.25c-.06-.04-.56-.43-1.64-.43-.28 0-.56.03-.84.08-.21-1.4-1.38-2.11-1.43-2.14l-.29-.17-.18.27c-.24.36-.43.77-.51 1.19-.2.8-.08 1.56.33 2.21-.49.28-1.29.35-1.46.35H2.62c-.34 0-.62.28-.62.63 0 1.15.18 2.3.58 3.38.45 1.19 1.13 2.07 2 2.61.98.6 2.59.94 4.42.94.79 0 1.61-.07 2.42-.22 1.12-.2 2.2-.59 3.19-1.16A8.3 8.3 0 0 0 16.78 16c1.05-1.17 1.67-2.5 2.12-3.65h.19c1.14 0 1.85-.46 2.24-.85.26-.24.45-.53.59-.87l.08-.24zm-17.96.99h1.76c.08 0 .16-.07.16-.16V9.5c0-.08-.07-.16-.16-.16H3.85c-.09 0-.16.07-.16.16v1.58c.01.09.07.16.16.16m2.43 0h1.76c.08 0 .16-.07.16-.16V9.5c0-.08-.07-.16-.16-.16H6.28c-.09 0-.16.07-.16.16v1.58c.01.09.07.16.16.16m2.47 0h1.75c.1 0 .17-.07.17-.16V9.5c0-.08-.06-.16-.17-.16H8.75c-.08 0-.15.07-.15.16v1.58c0 .09.06.16.15.16m2.44 0h1.77c.08 0 .15-.07.15-.16V9.5c0-.08-.06-.16-.15-.16h-1.77c-.08 0-.15.07-.15.16v1.58c0 .09.07.16.15.16M6.28 9h1.76c.08 0 .16-.09.16-.18V7.25c0-.09-.07-.16-.16-.16H6.28c-.09 0-.16.06-.16.16v1.57c.01.09.07.18.16.18m2.47 0h1.75c.1 0 .17-.09.17-.18V7.25c0-.09-.06-.16-.17-.16H8.75c-.08 0-.15.06-.15.16v1.57c0 .09.06.18.15.18m2.44 0h1.77c.08 0 .15-.09.15-.18V7.25c0-.09-.07-.16-.15-.16h-1.77c-.08 0-.15.06-.15.16v1.57c0 .09.07.18.15.18m0-2.28h1.77c.08 0 .15-.07.15-.16V5c0-.1-.07-.17-.15-.17h-1.77c-.08 0-.15.06-.15.17v1.56c0 .08.07.16.15.16m2.46 4.52h1.76c.09 0 .16-.07.16-.16V9.5c0-.08-.07-.16-.16-.16h-1.76c-.08 0-.15.07-.15.16v1.58c0 .09.07.16.15.16"/></svg></span></a></p>
