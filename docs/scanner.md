@@ -41,18 +41,33 @@ Re-run scans (`sovpro scan full`) to apply.
 
 ## Adding a new ingestion source
 
-Each source is a row in `services/scanner/src/opennorth.py::SETS`. Add an `OpenNorthSet` and a wrapper in `__main__.py`. The pattern is:
+⛔ **NOT via `opennorth.py::SETS`.** That module is retired: every ingest entry
+point raises, the Click commands were deleted 2026-08-27, and
+`trg_block_mirror_boundary` refuses its boundary signature at the database. The
+file stays on disk only for the `SETS` definitions that replacement ingesters
+still reference. Adding a row there would write nothing and reintroduce the path
+that caused the 2026-08-23 regression.
 
-```python
-"my_source": OpenNorthSet(
-    path="/representatives/<name>/",
-    level="provincial",
-    province="BC",
-    office="MLA",
-    boundary_set="<bc-set-name>",
-    boundary_level="provincial",
-),
-```
+Sources now come from the agency itself, and the shape depends on what you are
+ingesting:
+
+**Electoral geometry** — add a `BoundarySpec` to the registry in
+`services/scanner/src/legislative/boundary_loader.py` (~85 specs). The loader is
+read-only against a **staged** file tree; it never makes an HTTP request, so
+fetch out of band and record the file in the jurisdiction's `PROVENANCE.md`
+with its source URL, retrieval timestamp, sha256, licence **verbatim**, and the
+in-force date plus the instrument that establishes it. Then
+`load-boundaries --jurisdiction <key> --compare` → `--dry-run` → load → write a
+cutover migration. ⚠ A load INSERTS BESIDE a generation; retiring the old one is
+the migration's job.
+
+**A municipal roster** — see `qc_municipal_roster.py` (MAMH, one province-wide
+CSV) and `on_municipal_roster.py` (AMO, one API per election cycle) for the two
+worked shapes. Both use a source prefix outside `opennorth:` so
+`compare_politicians.detect_retirements` cannot sweep them.
+
+⛔ Read `docs/gotchas.md` § *Electoral boundaries & municipal rosters* first —
+every rule there was paid for.
 
 ## Provincial bills pipelines
 

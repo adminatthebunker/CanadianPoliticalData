@@ -45,15 +45,18 @@ We will remove or substantially edit content in any of these cases:
 - **Office contact info** (email, phone, fax, office addresses) — when
   there's an active harassment / safety case. We expose the same
   email/phone/office addresses that every legislature publishes on
-  their member pages and that Open North redistributes, but we make
-  bulk programmatic access easier. If you're a public official facing
-  an active threat and need a contact channel pulled from our API
-  while the underlying upstream is being addressed, we'll honour that.
-  Because our data is mirrored from Open North, we will also forward
-  your request to them as the canonical source — a takedown on our
-  side is effective immediately for `/api/public/v1/*` consumers but
-  the data remains available at Open North until they process the
-  same request.
+  their member pages, but we make bulk programmatic access easier. If
+  you're a public official facing an active threat and need a contact
+  channel pulled from our API while the underlying upstream is being
+  addressed, we'll honour that.
+
+  A takedown on our side is effective immediately for
+  `/api/public/v1/*` consumers. **We can only remove our copy.** The
+  same details remain published by the legislature, municipality or
+  electoral agency that originally released them, and those requests
+  have to be made to that body directly — we can tell you which source
+  a given record came from so you know who to approach, but we cannot
+  make the request on your behalf or compel them to act.
 
 ## What we won't remove on request
 

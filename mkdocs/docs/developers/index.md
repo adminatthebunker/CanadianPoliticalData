@@ -192,7 +192,7 @@ for details on both the per-tier bucket and the GPU semaphore.
 - **[Contact info](./contact.md)** — email / phone / addresses, plus the structured offices subresource.
 - **[Politician socials](./socials.md)** — handles + scraped posts per politician.
 - **[Constituency boundaries](./boundaries.md)** — federal / provincial / municipal boundary list, point-in-polygon lookup (lat/lng or postcode), GeoJSON detail.
-- **[Postcodes](./postcodes.md)** — postcode (or FSA) → lat/lng + containing ridings; real-time Open North proxy.
+- **[Postcodes](./postcodes.md)** — postcode (or FSA) → lat/lng + containing ridings, from the StatCan National Address Register.
 - **[Errors](./errors.md)** — 400 / 401 / 403 / 404 / 429 / 503
   catalog.
 

@@ -590,7 +590,35 @@ No migration needed. Cost-formula knobs persist across model swaps; revisit them
 `scanner-cron` runs an hourly loop:
 - Quick scan every hour for sites stale > 6h
 - Full sweep daily at 06:00 UTC
-- Re-ingest from Open North weekly Sunday 02:00 UTC
+- Weekly enrichment + socials normalization Sunday 04:00 UTC
+- Weekly socials liveness verification Monday 03:00 UTC
+
+⛔ **The weekly Open North re-ingest was REMOVED 2026-08-27 and must not come
+back.** It fired here every Sunday 02:00 UTC and on 2026-08-23 it re-created
+1,155 mirror boundary rows and reverted twelve applied cutover migrations in one
+pass. ★ The Python guard added a week earlier could not stop it: `scanner-cron`
+was the only scanner-family container with **no `./services/scanner/src:/app/src`
+mount**, so it ran source baked into an image built 2026-06-02, and
+`restart: unless-stopped` carried that image across every rebuild of everything
+else. It also wrote no `scanner_jobs` row and never read `scanner_schedules`, so
+disabling the schedules had no effect on it and the run left no audit trail —
+which is why five days passed before anyone noticed. The mount now exists and
+`trg_block_mirror_boundary` refuses the mirror's signature at the database.
+
+Scheduled in `scanner_schedules` (seeded by `scripts/seed-daily-ingest-schedules.sql`):
+- `45 13 * * *` — `reattach-municipal-roster`. A boundary cutover re-keys
+  `constituency_id` and severs its council's roster; this relinks it. Runs
+  twelve minutes before the sentinel deliberately, so the fix goes first and the
+  check reports what the fix could not do.
+- `57 13 * * *` — `check-boundary-coverage`. ⛔ Daily, not weekly, since
+  2026-08-27: the 2026-08-23 regression failed this sentinel on the 24th and the
+  failure sat unread for five days because the next run was a week out.
+  Problem classes: `duplicate-generation`, `duplicate-geometry`, `wrong-tier`,
+  `displaced`, `invalid-geometry`, `mirror-signature`, `untiered`,
+  `duplicate-district`, `detached-council` (breach — the polygon exists and
+  nothing linked it), `missing-district-polygon` and `no-live-districts`
+  (advisory — a map somebody has to go and get), plus `pending-flip`, which
+  reports any generation going live within 60 days and who it would detach.
 
 OS-level cron entries (the operator's user crontab, `crontab -l`):
 - `0 0 * * *` — daily Postgres backup (`scripts/backup-database.sh`).

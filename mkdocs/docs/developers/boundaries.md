@@ -1,16 +1,22 @@
 ---
 title: Constituency boundaries
-description: Federal, provincial, and municipal electoral district boundaries mirrored from Open North, with paginated lookup, point-in-polygon, and full GeoJSON detail endpoints.
+description: Federal, provincial, and municipal electoral district boundaries sourced from Elections Canada, the provincial and territorial chief electoral officers, and individual municipalities, with paginated lookup, point-in-polygon, and full GeoJSON detail endpoints.
 ---
 
 # Constituency boundaries
 
 `/api/public/v1/boundaries/*` exposes electoral-district geometry for
-342 federal ridings, ~700 provincial ridings (every province + territory
-except Nunavut), and ~450 municipal wards across Canada. **Free-tier** —
-boundaries are mirrored from
-[Open North's free public API](https://represent.opennorth.ca/), so they
-ship at the same tier the upstream data is available at.
+343 federal ridings, every provincial and territorial legislature
+including Nunavut, and municipal wards across Canada. **Free-tier.**
+
+Boundaries come from the agencies that draw them — Elections Canada,
+the provincial and territorial chief electoral officers, and individual
+municipalities — not from a third-party mirror. That matters for reuse:
+there is no single licence covering the set. The fourteen jurisdictions
+publish under at least nine different sets of terms and several publish
+none at all, so **read [Boundary licences](./licences.md) before you
+redistribute anything**. Each response carries a `licence` object and a
+`Link: rel="license"` header for the specific source behind that row.
 
 For the full per-endpoint schema with "Try it out" buttons see the
 **[Swagger UI](https://canadianpoliticaldata.org/api/public/v1/docs/)**
@@ -88,7 +94,7 @@ MLA, and city councillor"** civic-app pattern in a single call.
 |---|---|---|
 | `lat` | number, 40 – 85 | WGS84 latitude. Bounded to roughly Canada-plus-buffer; out-of-range inputs return 400. Pass alongside `lng`. |
 | `lng` | number, -145 – -50 | WGS84 longitude. Pass alongside `lat`. |
-| `postcode` | string | 6-char Canadian postcode (`K1A0A6`) or 3-char FSA (`K1A`). Alternative to `lat`/`lng`; if both are passed, `postcode` wins. Resolves via Open North in real time — see [Postcodes](./postcodes.md) for the licensing posture and FSA caveats. |
+| `postcode` | string | 6-char Canadian postcode (`K1A0A6`) or 3-char FSA (`K1A`). Alternative to `lat`/`lng`; if both are passed, `postcode` wins. Resolved from the StatCan National Address Register — see [Postcodes](./postcodes.md) for the licensing posture and FSA caveats. |
 | `level` | `federal` \| `provincial` \| `municipal` | Optional — narrows to one level. Omit to look up all three. |
 
 At least one of `(lat, lng)` or `postcode` must be present, else 400.
@@ -165,7 +171,7 @@ slashes out of the URL path so you don't have to URL-encode.
 
 | Name | Type | Notes |
 |---|---|---|
-| `source_set` | string | Open North boundary-set name, e.g. `federal-electoral-districts-2023-representation-order` or `alberta-electoral-districts`. |
+| `source_set` | string | Boundary-set name, e.g. `federal-electoral-districts`, `alberta-electoral-districts` or `nunavut-electoral-districts`. ⚠ **Renamed 2026-08**: sets no longer carry the generation in the name — `federal-electoral-districts-2023-representation-order` is now `federal-electoral-districts` with `boundaries_version = "2023-representation-order"`. Pin the pair, not the name. |
 | `slug` | string | Per-set slug. Federal ridings use numeric codes (`35079`); most provincial sets use kebab-case names (`calgary-bow`). |
 
 ### Query parameters
@@ -249,24 +255,30 @@ navigator.geolocation.getCurrentPosition(async (pos) => {
 
 ## Caveats
 
-- **No Nunavut.** Open North doesn't publish boundaries for Nunavut's
-  Legislative Assembly (the upstream is HTML-only). Provincial-level
-  filters for `province_territory=NU` return zero rows.
-- **Federal ridings have `province_territory = null`.** Federal
-  ridings span provincial borders by definition; the column reflects
-  what Open North publishes. Filter on `level=federal` instead.
+- **Federal ridings have `province_territory = null`.** Federal ridings
+  can span provincial borders, so the column is left null by design.
+  Filter on `level=federal` instead.
 - **Simplified geometry is for rendering, not law.** The `boundary_simple`
   geometry returned in detail responses is simplified at ~555 m
   tolerance — visually identical to the full boundary at typical web
   zoom levels, but **not authoritative for edge cases**. For exact
   district membership at a point, use `/boundaries/lookup` (which
   queries the full unsimplified geometry server-side).
-- **Versioning is temporal but currently single-state.** All live rows
-  have `boundaries_version = "current"` and `effective_to = null`.
-  When redistricting events ship (federal 2033, provincial cycles
-  vary), historical versions will land with `effective_to` set; the
-  list and detail endpoints will continue to default to the current
-  version.
+- **Versioning is temporal and NO LONGER single-state.** ⚠ This page
+  previously said every live row carried `boundaries_version =
+  "current"` with `effective_to = null`. That has not been true since
+  2026-08: rows now carry the generation the agency actually named
+  (`2023-representation-order`, `2025`, `2026`, …) and superseded
+  generations are **end-dated, not deleted**, so `effective_to` is
+  frequently populated. **If you pinned a client to `"current"` or
+  assumed a null `effective_to`, it is already wrong.**
+
+  Generations also flip on dates that are already in the table. The
+  next one is **Québec on 2026-10-05**, when the province's map goes
+  from 125 to 127 districts — six existing districts are renamed or
+  expanded, and two are new. The list and detail endpoints continue to
+  default to whatever is live on the day of the request, so a caller
+  that does not pin a version will simply start receiving the new map.
 - **Centroid is unweighted.** Centroids are computed from the polygon
   geometry, not population. For population-weighted centroids
   (campaign targeting, demographic mapping), join your own data.

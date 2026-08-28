@@ -142,8 +142,8 @@ Key files:
 - `services/api/src/routes/public/boundaries.ts` — 3 boundary endpoints: list (with bbox filter), `lookup` (point-in-polygon, accepts `?lat=&lng=` OR `?postcode=`), and detail-with-GeoJSON. Free-tier. Lookup uses the full `boundary` for exactness; detail/list use `boundary_simple` (~555m tolerance) for transit-size economy. Detail URL is `/boundaries/:source_set/:slug` (two path params) to avoid URL-encoded slashes inside the Open North `constituency_id`. Exports `lookupBoundariesAtPoint(lng, lat, levels?)` for cross-plugin reuse from `postcodes.ts`.
 - `services/api/src/routes/public/politicians.ts` — list endpoint + extended detail. List has civic-app filter ergonomics (`?jurisdiction=AB&role=mla&status=sitting&constituency_id=&q=`); detail returns contact fields (`email`, `phone`, `fax`, `constituency_office_address`, `legislature_office_address`, `mailing_address` (always null in v1), `honorific` (regex-derived from name), `status` (`sitting | former`, no `deceased` tracking), `term_start_at`, `term_end_at`).
 - `services/api/src/routes/public/offices.ts` — 1 endpoint, the offices subresource: full structured list (kind/address/phone/fax/email/hours/lat/lng) — multi-office discipline preserved (a politician with two constituency offices keeps both rows).
-- `services/api/src/routes/public/postcodes.ts` — 1 endpoint, `/postcodes/:postcode`. Cached proxy to Open North; runs own PIP against centroid so `boundaries.*` shape is byte-identical to `/boundaries/lookup` (parser reuse). Response includes `source: cache | cache_stale | live` and `fetched_at` so callers + monitoring can see hit-rate; same value on `X-Cache-Source` response header.
-- `services/api/src/lib/postcode.ts` — `resolvePostcode()` helper + `PostcodeUpstreamError`. Used by `postcodes.ts` and `boundaries.ts`. Handles 6-char postcodes directly; FSAs (3-char) resolved by probing Open North with three fallback suffixes (`1A1`, `0A0`, `1B1`). Backed by the `public.postcode_cache` table (migration `0055`) with 30-day TTL + stale-while-revalidate semantics: serves stale on Open North 5xx (postcodes don't move; stale data is still correct), only evicts on confirmed 404. Caching is operationally defensible — postcode geocoding redistributed by Open North is not under active Canada Post enforcement (2012 Geolytica lawsuit was abandoned in 2016; no Canadian case law establishes postcodes as copyrightable). The cache is a query-result cache (same legal substance as `Cache-Control: max-age=86400`), not a redistribution of PCAD.
+- `services/api/src/routes/public/postcodes.ts` — 1 endpoint, `/postcodes/:postcode`. Runs its own PIP against the centroid so `boundaries.*` is byte-identical to `/boundaries/lookup` (parser reuse). Response `source` is `nar | cache | fsa_derived`; same value on the `X-Cache-Source` header.
+- `services/api/src/lib/postcode.ts` — `resolvePostcode()` + `PostcodeUpstreamError`. Used by `postcodes.ts` and `boundaries.ts`. ⛔ **No longer proxies Open North.** On 2026-08-07 that host's TLS certificate expired *and* its origin began 502ing for eleven days; the cache held eight rows, so effectively every Canadian postal code returned 503. Rebuilt on the **Statistics Canada National Address Register** (`public.postcode_centroids`, migration `0062`, populated by `ingest-nar-postcodes`) — a dataset we hold ourselves, which removes the failure mode rather than mitigating it. ⚠ Open North was deliberately NOT kept as a fallback: a fallback exercised only during an outage is a fallback that fails during an outage. Resolution order: (1) `postcode_centroids` exact → `nar`; (2) `postcode_cache` exact → `cache`; (3) averaged from other codes in the same FSA → `fsa_derived`; (4) `PostcodeUpstreamError("not_found")`. `postcode_cache` (migration `0055`) is now the RETAINED-OVERRIDE layer, not a proxy cache — NAR registers civic addresses, so PO-box-only, rural-route-only and large-volume-receiver codes are absent by construction (`K1A 0A6`, the House of Commons, has zero NAR rows). ⚠ `approximate` on a `fsa_derived` answer is load-bearing: 33–71% of FSAs cross a federal riding boundary.
 - `services/api/src/middleware/api-key-auth.ts` — `requireApiKey` / `optionalApiKey`.
 - `services/api/src/middleware/api-tier-gate.ts` — `requireTier('dev'|'pro')`.
 - `services/api/src/middleware/api-scope-gate.ts` — `requireScope` capability-scope gate (currently only `read:public`; inert seam after the bulk-export teardown).
@@ -217,7 +217,16 @@ For current row counts, ingestion coverage, or what's shipped: query the DB or r
 - `politician_changes` — audit trail of mutations to the politicians table.
 - `organizations` — referendum orgs, advocacy, media.
 - `websites`, `infrastructure_scans`, `scan_changes` — the hosting-sovereignty layer.
-- `constituency_boundaries` — temporal (`effective_from` / `effective_to`).
+- `constituency_boundaries` — temporal (`effective_from` / `effective_to`). Electoral
+  geometry comes from the agencies themselves, **not** from the retired Open North
+  mirror; a DB trigger (`trg_block_mirror_boundary`, migration `0105`) refuses the
+  mirror's signature outright. ⚠ A load INSERTS BESIDE a generation, it does not
+  replace one — retiring the old generation is the cutover migration's job.
+- `constituency_name_alias` (migration `0120`) — explicit per-council equivalences
+  where a roster publisher and a boundary publisher spell the same district
+  differently. ⛔ One reasoned row each with a mandatory `reason`; never a fuzzy
+  matcher — an algorithmic rule pairs `Saint-Charles` in Kirkland with
+  `Saint-Charles` in Longueuil.
 
 ### Legislative tables
 
@@ -260,7 +269,9 @@ sovpro up                 # docker compose up -d --build
 sovpro logs <service>     # tail a service
 sovpro db psql            # interactive psql as sw on sovereignwatch
 sovpro db backup          # writes backups/<timestamp>.sql.gz
-sovpro ingest all         # seed-orgs + ingest-mps + ingest-mlas + ingest-councils + ingest-ab-extras
+sovpro ingest all         # seed-orgs + ingest-ab-extras. ⛔ ingest-mps / ingest-mlas /
+                          # ingest-councils were REMOVED 2026-08-27 with the Open North
+                          # retirement and now `die` with a message. See db/migrations/0105.
 sovpro scan full          # scan --stale-hours 0 (re-scan everything, ignore staleness)
 sovpro doctor             # sanity-check all services
 docker compose run --rm scanner python -m src <subcommand>

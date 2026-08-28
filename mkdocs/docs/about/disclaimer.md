@@ -36,8 +36,11 @@ Each politician's profile shows the social-media accounts we've linked
 to them. Those handles come from four kinds of sources, and we tag
 each with a confidence score so you can tell them apart:
 
-1. **Open North's roster feed** — the original handles we ingest with
-   the politician record itself. Most baseline coverage comes from here.
+1. **The roster feed the politician record arrived with** — handles
+   ingested alongside the politician themselves. Historically that was
+   Open North's Represent API, retired in August 2026; newer rows come
+   from the electoral agencies directly. Most baseline coverage still
+   traces to that original ingest.
 2. **Wikidata SPARQL + OpenParliament.ca + Mastodon directory walks** —
    deterministic enrichers that match politicians to public structured
    sources by name and jurisdiction.

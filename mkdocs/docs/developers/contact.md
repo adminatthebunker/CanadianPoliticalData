@@ -162,5 +162,11 @@ spam-marketing fall under [our takedown policy](https://docs.canadianpoliticalda
 - **`mailing_address` is always null in v1.** Use
   `legislature_office_address` as a fallback for mail — most
   legislatures consider that the canonical mailing endpoint.
-- **`source` is always `opennorth` today.** Reserved for future
-  direct-from-legislature ingest that bypasses Open North.
+- **`source` is no longer always `opennorth`.** That mirror was retired
+  in August 2026 and replacement ingesters have started landing:
+  Québec municipal rows carry `mamh-qc` (the province's own election
+  result) and Ontario municipal rows `amo-on`. Most rows are still
+  `opennorth` — those are frozen at the mirror's final state, which
+  captured every election up to its retirement, so they are broadly
+  accurate but will not pick up future changes. Treat `source` as a
+  provenance field with an open set of values, not a constant.

@@ -4,7 +4,11 @@
 
 | Source | Used for | License |
 |--------|----------|---------|
-| [Open North Represent](https://represent.opennorth.ca/) | MPs, MLAs, councils, constituency boundaries | Open Government License — Canada |
+| ⛔ ~~[Open North Represent](https://represent.opennorth.ca/)~~ | **RETIRED 2026-08-27.** Was MPs, MLAs, councils + all constituency boundaries. Ingestion removed; `trg_block_mirror_boundary` refuses its signature at the DB. Existing `opennorth:`-sourced roster rows remain and are FROZEN — see below | was OGL-Canada |
+| Elections Canada + the 13 provincial/territorial chief electoral officers | Federal and provincial/territorial electoral district geometry | ⚠ **No single licence.** Nine-plus different sets of terms across 14 jurisdictions, several with none stated. Per-source terms in `research/boundaries/` and, publicly, `mkdocs/docs/developers/licences.md` |
+| Individual municipalities (open-data portals, ArcGIS orgs, by-law PDFs) | Municipal ward geometry | Per-municipality; recorded verbatim in each `data/boundaries/*/PROVENANCE.md`. Two carry explicit prohibitions (Clarington non-commercial, Vaughan prior-written-permission) and are loaded under the standing "licence recorded, never a gate" rule |
+| [MAMH Québec](https://donneesouvertes.affmunqc.net/) | Québec municipal roster (`mamh-qc:`) — the 2025-11-02 general election result | CC-BY 4.0 |
+| [AMO Ontario](https://elections2026.amo.on.ca/) | Ontario municipal roster (`amo-on:`) — per-cycle election results | Unstated; unauthenticated public API |
 | [MaxMind GeoLite2](https://www.maxmind.com/en/geolite2/signup) | IP → country/city/lat/lng/ASN | GeoLite2 EULA (free with attribution) |
 | [Thedurancode/change](https://github.com/Thedurancode/change) | Website content change detection | Per upstream |
 | [Uptime Kuma](https://uptimekuma.org/) | Uptime monitoring | MIT |
@@ -31,7 +35,30 @@ Per-jurisdiction probe history, endpoint findings, and module pointers live in [
 
 ## Attribution required
 
-The frontend footer credits Open North and MaxMind. Do not remove the attribution if you redistribute. For Quebec bills data, CC-BY-NC-4.0 requires attribution to Assemblée nationale du Québec and restricts commercial use.
+The frontend footer credits MaxMind. For Quebec bills data, CC-BY-NC-4.0
+requires attribution to Assemblée nationale du Québec and restricts commercial
+use.
+
+⚠ **The footer's Open North credit is now historical, not current.** Boundaries
+no longer come from there. Whether to keep the credit for the frozen
+`opennorth:`-sourced roster rows that remain is an open call — it is honest
+while those rows are served and misleading once they are all replaced.
+
+⛔ **There is no blanket boundary licence to attribute.** Fourteen agencies,
+at least nine sets of terms, several unstated. If you redistribute geometry,
+check the specific source: the per-row `licence` object and `Link: rel="license"`
+header on the public API, `mkdocs/docs/developers/licences.md`, or the
+`PROVENANCE.md` beside each staged file.
+
+## Roster freeze
+
+⚠ **894 sitting municipal officials still carry `opennorth:` provenance**, plus
+1,057 federal/provincial. Frozen is **not** the same as wrong: the mirror's rows
+were written 2026-04-13 → 06-07 and captured every election up to its
+retirement, so the data is broadly accurate today. It goes wrong at each
+province's next municipal election. Québec (`mamh-qc:`) and Ontario (`amo-on:`)
+are the only provinces with a replacement ingester so far.
+`check-boundary-coverage` reports the freeze per province.
 
 ## Refreshing GeoLite2
 
