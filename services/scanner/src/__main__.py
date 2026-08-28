@@ -4121,6 +4121,50 @@ def cmd_ingest_qc_municipal_roster(ctx, csv_path: str, dry_run: bool) -> None:
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 
 
+@cli.command("compare-on-municipal-wards")
+@click.option("--cycle", type=int, default=2026, show_default=True,
+              help="AMO election cycle to compare against: 2022 or 2026.")
+@click.option("--council", "councils", multiple=True,
+              help="Limit to one or more council slugs. Default: all tier-1.")
+@click.option("--only", type=click.Choice(["all", "problems"]), default="problems",
+              show_default=True, help="Print every ward, or only the ones that disagree.")
+@click.pass_context
+def cmd_compare_on_municipal_wards(ctx: click.Context, cycle, councils, only) -> None:
+    """Seat-by-seat diff of AMO against our roster, per ward. READ-ONLY.
+
+    ★ Anchoring on the WARD rather than on the set of names does two things the
+    council-level compare could not. It distinguishes "we hold the previous
+    cycle's winner" (stale) from "we hold somebody neither cycle elected" (a
+    by-election, or pre-2018 residue). And it makes a LOOSE name match safe:
+    inside one ward the pool is one or two people, so `Matt` matches `Matthew
+    Luloff` and `Gurpreet Dhillon` matches `Gurpreet Singh Dhillon` without the
+    collisions a loose match across a whole council would cause.
+    """
+    from .legislative.on_municipal_roster import compare_wards
+
+    async def _wrap(db: Database) -> None:
+        st, res = await compare_wards(db, cycle=cycle, councils=list(councils) or None)
+        for council, verdicts in sorted(res.items()):
+            bad = [v for v in verdicts if v.status != "agree"]
+            shown = verdicts if only == "all" else bad
+            console.print(
+                f"[bold]{council}[/bold]  wards={len(verdicts)} "
+                f"agree={len(verdicts) - len(bad)} disagree={len(bad)}"
+            )
+            for v in shown:
+                colour = ("green" if v.status == "agree"
+                          else "red" if v.status.startswith("STALE")
+                          else "yellow")
+                console.print(f"   [{colour}]{v.line()}[/{colour}]")
+        console.print(
+            f"[green]compare-on-municipal-wards[/green]: cycle={st.cycle} "
+            f"councils={st.councils} wards={st.seats} agree={st.identical} "
+            f"disagree={st.diverged}"
+        )
+        _print_problems(st.problems)
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
 @cli.command("compare-on-municipal-roster")
 @click.option("--cycle", type=int, default=2026, show_default=True,
               help="AMO election cycle: 2018, 2022 or 2026.")

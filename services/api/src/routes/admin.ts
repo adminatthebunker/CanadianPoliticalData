@@ -132,6 +132,12 @@ const COMMAND_CATALOG = [
       { name: "always_email", type: "bool", required: false, help: "Send email even when no committees are stale (audit cadence)." },
     ],
   },
+  { key: "compare-on-municipal-wards", category: "maintenance",
+    description: "Seat-by-seat diff of AMO Ontario election results against our roster, anchored on the WARD rather than on names. READ-ONLY. Distinguishes 'we hold the previous cycle winner' (STALE, confirmed against the 2018 API) from 'we hold somebody neither cycle elected' (a by-election, or pre-2018 residue) -- a distinction council-level name-set comparison cannot make. Seat-anchoring also makes a LOOSE name match safe: inside one ward the pool is one or two people, so Matt matches Matthew Luloff and Gurpreet Dhillon matches Gurpreet Singh Dhillon without the collisions a loose match across a whole council would cause. Matches per SEAT within the ward, because Brampton elects a city and a regional councillor per ward pair and an any-match rule let one correct name mask one stale one. Bridges AMO ward numbers to our constituency_ids via authority_district_id (format varies: Toronto zero-pads, Brampton writes WARD 1, Kingston uses bare integers). Verifies its urlId table against the publisher every run.",
+    args: [
+      { name: "cycle", type: "int", required: false, help: "AMO election cycle: 2022 or 2026. Default 2026." },
+    ],
+  },
   { key: "compare-on-municipal-roster", category: "maintenance",
     description: "Diff AMO Ontario municipal election results against the roster we hold, per council. READ-ONLY. AMO runs one API per election cycle (elections2018/2022/2026.amo.on.ca, unauthenticated, 444 municipalities); members[] is a CANDIDATE list until `elected` is populated -- Toronto 2026 carries 243 members for a 26-seat council. Even a completed result is only an election-night snapshot and knows nothing about later by-elections, so this compares rather than writes: our Ontario roster is inconsistently vintaged (Toronto is post-2023 with Olivia Chow and two by-election councillors, while Brampton and Kitchener are pre-2022), and ingesting a cycle wholesale would revert Torontos mayor to John Tory. Verifies its hardcoded urlId table against the publisher every run and refuses the whole run on any mismatch -- Ontario reuses municipality names across tiers and a stale id silently returns another councils roster.",
     args: [

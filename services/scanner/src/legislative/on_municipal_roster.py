@@ -216,14 +216,24 @@ def parse_position(position_ward: str) -> tuple[str, list[int], bool]:
     tail = m.group(1)
     # ⚠ Stop at the first token that is not a number/separator, so Ottawa's
     # `1 Orleans East Cumberland` yields [1] and not a parse of the name.
+    # ⛔ BRANCH ORDER IS LOad-BEARING, and the first draft had it wrong.
+    # AMO changed its own separator between cycles: 2018 writes
+    # `Ward 3 and 4`, 2022 writes `Ward 3, 4`. With `elif nums: break` ahead of
+    # the separator test, the word "and" ended the scan and the seat came back
+    # covering ward 3 only. Half of Brampton's previous-cycle wards went
+    # missing, which made three genuinely STALE seats report as
+    # "unknown-holder" — a parser bug wearing the costume of a data question.
+    # Separators must be consumed BEFORE the "we already have digits" bail-out;
+    # the bail-out is what stops Ottawa's `1 Orleans East Cumberland` from
+    # parsing the ward NAME.
     nums: list[int] = []
     for tok in re.split(r"[,\s]+", tail):
         if re.fullmatch(r"\d+", tok):
             nums.append(int(tok))
+        elif re.fullmatch(r"[-&/]|and|et", tok, re.I):
+            continue
         elif nums:
             break
-        elif re.fullmatch(r"[-&]|and", tok, re.I):
-            continue
         else:
             break
     return (office or "Councillor", nums, not nums)
@@ -365,3 +375,283 @@ async def compare_on_municipal_roster(
             elif diff.verdict != "no results yet":
                 st.diverged += 1
     return st, diffs
+
+
+# ── Per-ward comparison ──────────────────────────────────────────────────────
+#
+# ★ WHY SEAT-ANCHORING, AND WHY IT ALSO FIXES THE NAME MATCHING
+# ─────────────────────────────────────────────────────────────
+# The first comparison compared SETS OF NAMES per council: everyone AMO lists as
+# elected against everyone we hold. That answers "who is on this council?" but
+# not "who holds this seat?", and it failed twice in ways that were only visible
+# once measured:
+#
+#   1. A held member absent from cycle C is either a later by-election winner
+#      (we are ahead) or an earlier holdover (we are behind), and set membership
+#      cannot tell those apart. Neethan Shan sat 2016-2018 and LOST in 2018;
+#      set-comparison scored him as post-2022.
+#   2. Set comparison forces a STRICT name match, because a loose one across a
+#      whole council will collide. Strict then breaks on ordinary variance —
+#      AMO 2018 writes `Gurpreet Singh Dhillon`, we hold `Gurpreet Dhillon`, and
+#      he was scored post-2022 when he is a 2018 holdover.
+#
+# Anchoring on the ward fixes both. A ward's candidate pool is one or two
+# people, so a LOOSE name match is safe there in a way it never is across a
+# council — `Matt` vs `Matthew Luloff` resolves correctly because there is
+# nobody else in Ward 1 to confuse him with. And comparing the same seat across
+# two cycles distinguishes "we hold the previous cycle's winner" (stale) from
+# "we hold somebody neither cycle elected" (a by-election, or pre-2018 residue).
+#
+# ⚠ The residual ambiguity is honest and is NOT guessed at. With no
+# elections2014 API (DNS does not resolve), a holder in neither cycle cannot be
+# dated from AMO alone, and politician_terms.started_at cannot break the tie
+# either — the Open North ingest stamped it with the INGEST date rather than the
+# election date, a defect already recorded in the timeline. Those seats are
+# reported as `unknown-holder` and left for a human. After 2026-10-26 the
+# ambiguity disappears by construction, because the cycle being compared is then
+# the most recent one and there is no "later" to be ahead of.
+
+_STOP_PARTICLES = {"de", "van", "von", "del", "della", "di", "la", "le", "st",
+                   "ste", "saint", "mac", "mc", "singh", "kaur", "jr", "sr"}
+
+
+def name_tokens(n: str) -> list[str]:
+    return [t for t in norm_name(n).split() if t]
+
+
+def loose_same_person(a: str, b: str) -> bool:
+    """Is this the same person, judged WITHIN one ward?
+
+    ⛔ Only ever call this seat-anchored. Across a whole council the surname +
+    first-initial rule is far too loose; inside a single ward the pool is one or
+    two people and it is exactly right.
+
+    Handles, all from real data:
+        `Matt Luloff`            vs `Matthew Luloff`          (diminutive)
+        `Gurpreet Dhillon`       vs `Gurpreet Singh Dhillon`  (dropped middle)
+        `Amanda Yeung Collucci`  vs `Amanda Collucci`         (compound surname)
+    """
+    ta, tb = name_tokens(a), name_tokens(b)
+    if not ta or not tb:
+        return False
+    if ta == tb:
+        return True
+    # Surname = last token; particles and patronymics are not surnames on their
+    # own, so fall back through them.
+    def surname(t: list[str]) -> str:
+        for tok in reversed(t):
+            if tok not in _STOP_PARTICLES:
+                return tok
+        return t[-1]
+    sa, sb = surname(ta), surname(tb)
+    if sa != sb:
+        # Compound surname on one side only: `Yeung Collucci` vs `Collucci`.
+        if not (sa in tb or sb in ta):
+            return False
+    # Same surname — now the given name, allowing a diminutive or an initial.
+    ga, gb = ta[0], tb[0]
+    if ga == gb:
+        return True
+    if ga.startswith(gb) or gb.startswith(ga):
+        return True          # Matt / Matthew
+    return ga[0] == gb[0]    # M. / Matthew, inside one ward
+
+
+def near_same_person(a: str, b: str) -> bool:
+    """Same given name, surname differing only by a trailing letter or two.
+
+    ⚠ Deliberately NOT folded into loose_same_person. Kingston's Sydenham seat
+    has AMO writing `Conny Glenn` against our `Conny Glen` — almost certainly
+    one person and one publisher's typo, but "almost certainly" is not the same
+    claim as a match, and quietly upgrading it to `agree` would hide a real
+    disagreement if it ever turned out to be two people. It gets its own status
+    so a human sees it.
+    """
+    ta, tb = name_tokens(a), name_tokens(b)
+    if not ta or not tb or ta == tb:
+        return False
+    if ta[0] != tb[0]:
+        return False
+    sa, sb = ta[-1], tb[-1]
+    lo, hi = sorted((sa, sb), key=len)
+    return len(lo) >= 4 and hi.startswith(lo) and len(hi) - len(lo) <= 2
+
+
+@dataclass
+class WardVerdict:
+    ward: int
+    constituency_id: str
+    ward_name: str
+    amo_now: list[str]
+    amo_prev: list[str]
+    held: list[str]
+    status: str
+    # ⛔ Per-SEAT residue, not per-ward. A ward is not one seat everywhere:
+    # Brampton elects a city and a regional councillor per ward pair, Oshawa
+    # two per ward. With an any-match rule, ward 9 reported `agree` because
+    # Harkirat Singh matched — while the second seat we held (Gurpreet
+    # Dhillon, the 2018 winner) was stale and invisible. Holding the right
+    # person for one seat says nothing about the other.
+    unmatched_held: list[str] = field(default_factory=list)
+    unmatched_amo: list[str] = field(default_factory=list)
+
+    def line(self) -> str:
+        def j(v): return ", ".join(v) if v else "—"
+        extra = ""
+        if self.unmatched_held or self.unmatched_amo:
+            # ⚠ Angle brackets, not square. The console renders through Rich,
+            # which parses [...] as a style tag and silently swallows the
+            # contents — the unmatched names printed as empty space.
+            extra = f"  <ours: {j(self.unmatched_held)} | amo: {j(self.unmatched_amo)}>"
+        return (f"ward {self.ward:>3} {self.ward_name[:22]:22s} "
+                f"seats={len(self.amo_now)} {self.status}{extra}")
+
+
+async def ward_index(db: Database, source_set: str) -> dict[int, tuple[str, str]]:
+    """ward number -> (constituency_id, ward name), from the boundary table.
+
+    ⚠ `authority_district_id` is the bridge and its FORMAT VARIES by publisher:
+    Toronto zero-pads (`09`), Brampton writes `WARD 1`, Kingston and Greater
+    Sudbury use bare integers. All 157 tier-1 wards carry one, so this is a
+    complete index rather than a best-effort one — but parse it, never compare
+    it as a string.
+
+    ⛔ Do NOT derive the number from the slug instead. Kingston's wards are
+    NAMED (`kingston-wards/sydenham`), as are Toronto's, so a slug-derived
+    number finds nothing for two of the fourteen councils.
+    """
+    out: dict[int, tuple[str, str]] = {}
+    for r in await db.fetch(
+        """
+        SELECT constituency_id, name, authority_district_id
+          FROM constituency_boundaries
+         WHERE source_set = $1 AND boundary_kind = 'district'
+           AND effective_from <= CURRENT_DATE
+           AND (effective_to IS NULL OR effective_to >= CURRENT_DATE)
+        """,
+        source_set,
+    ):
+        m = re.search(r"(\d+)", str(r["authority_district_id"] or ""))
+        if m:
+            out[int(m.group(1))] = (r["constituency_id"], r["name"])
+    return out
+
+
+async def compare_wards(
+    db: Database, cycle: int = 2026, councils: Optional[list[str]] = None,
+) -> tuple[RosterStats, dict[str, list[WardVerdict]]]:
+    """Seat-by-seat diff of AMO against what we hold, with the previous cycle
+    as the tie-breaker for who is ahead of whom."""
+    prev = max((c for c in AMO_HOSTS if c < cycle), default=None)
+    st = RosterStats(cycle=cycle)
+    results: dict[str, list[WardVerdict]] = {}
+
+    targets = {uid: v for uid, v in TIER1.items()
+               if councils is None or v[0] in councils}
+
+    async with httpx.AsyncClient(
+        headers=HEADERS, timeout=REQUEST_TIMEOUT, follow_redirects=True
+    ) as client:
+        bad = await verify_mapping(client, AMO_HOSTS[cycle])
+        if bad:
+            st.problems.extend(bad)
+            return st, results
+
+        for url_id, (council, source_set, _n) in sorted(
+            targets.items(), key=lambda t: t[1][0]
+        ):
+            try:
+                now = extract_seats(
+                    (await fetch_municipality(client, AMO_HOSTS[cycle], url_id))
+                    .get("members") or [])
+                before = extract_seats(
+                    (await fetch_municipality(client, AMO_HOSTS[prev], url_id))
+                    .get("members") or []) if prev else []
+            except Exception as exc:
+                st.problems.append(f"{council}: fetch failed — {exc}")
+                continue
+
+            idx = await ward_index(db, source_set)
+            if not idx:
+                st.problems.append(
+                    f"{council}: no ward index for {source_set} — cannot compare "
+                    f"by seat")
+                continue
+
+            held_rows = await db.fetch(
+                """
+                SELECT p.name, p.constituency_id
+                  FROM politicians p
+                 WHERE p.is_active AND p.level = 'municipal'
+                   AND split_part(p.source_id, ':', 2) = $1
+                   AND p.constituency_id IS NOT NULL
+                """,
+                council,
+            )
+            held_by_cid: dict[str, list[str]] = {}
+            for r in held_rows:
+                held_by_cid.setdefault(r["constituency_id"], []).append(r["name"])
+
+            def by_ward(seats: list[Seat]) -> dict[int, list[str]]:
+                d: dict[int, list[str]] = {}
+                for s in seats:
+                    for w in s.wards:          # a seat may cover two wards
+                        d.setdefault(w, []).append(s.name)
+                return d
+
+            n_by, p_by = by_ward(now), by_ward(before)
+            verdicts: list[WardVerdict] = []
+            for ward in sorted(idx):
+                cid, wname = idx[ward]
+                a_now, a_prev = n_by.get(ward, []), p_by.get(ward, [])
+                h = held_by_cid.get(cid, [])
+                if not a_now and not h:
+                    continue
+
+                # Match seat-wise, not ward-wise. Exact/loose first, then the
+                # spelling-variant pass, so a typo does not consume a slot a
+                # real match wanted.
+                rem_amo = list(a_now)
+                rem_held: list[str] = []
+                spelling: list[tuple[str, str]] = []
+                for x in h:
+                    hit = next((y for y in rem_amo if loose_same_person(x, y)), None)
+                    if hit is None:
+                        rem_held.append(x)
+                    else:
+                        rem_amo.remove(hit)
+                still: list[str] = []
+                for x in rem_held:
+                    hit = next((y for y in rem_amo if near_same_person(x, y)), None)
+                    if hit is None:
+                        still.append(x)
+                    else:
+                        rem_amo.remove(hit)
+                        spelling.append((x, hit))
+                rem_held = still
+
+                if not h:
+                    status = "gap — we hold nobody"
+                elif not a_now:
+                    status = "extra — AMO elected nobody here"
+                elif not rem_held and not rem_amo:
+                    status = ("agree" if not spelling else
+                              "spelling differs — verify, probably the same person")
+                elif rem_held and a_prev and all(
+                        any(loose_same_person(x, y) for y in a_prev) for x in rem_held):
+                    status = (f"STALE — we hold the {prev} winner"
+                              + (f" in {len(rem_held)} of {len(a_now)} seats"
+                                 if len(a_now) > 1 else ""))
+                elif not rem_held:
+                    status = f"incomplete — {len(rem_amo)} seat(s) we do not hold"
+                else:
+                    status = "unknown-holder — by-election or pre-cycle residue"
+                verdicts.append(WardVerdict(
+                    ward, cid, wname, a_now, a_prev, h, status,
+                    unmatched_held=rem_held, unmatched_amo=rem_amo))
+            results[council] = verdicts
+            st.councils += 1
+            st.seats += len(verdicts)
+            st.identical += sum(1 for v in verdicts if v.status == "agree")
+            st.diverged += sum(1 for v in verdicts if v.status != "agree")
+    return st, results
