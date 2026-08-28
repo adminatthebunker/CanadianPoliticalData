@@ -210,6 +210,56 @@ Read this before any non-trivial change to a listed area. The structure mirrors 
 **Why:** Same reason. Even if the FK target lives in `private`, the column itself in `public` carries the link to a person and would ship in the public dump.
 **How to apply:** If you need to associate a user with a public artifact, put the linking row in `private` (e.g. `private.user_actions(user_id, public_artifact_id)`) and join from there.
 
+## Electoral boundaries & municipal rosters
+
+**Do not ship a municipal boundary cutover without re-attaching the roster.**
+A cutover renames the `source_set` and re-keys `constituency_id`. The roster is
+a different table joined on that id and nothing in the cutover touches it, so
+the council is silently detached. *Why:* found 2026-08-28 — 142 sitting
+officials across 18 councils held a NULL `constituency_id` while their ward
+polygon sat there unlinked (Calgary 14, Winnipeg 14, Welland 12, Fredericton 12,
+Edmonton 12, Regina 10). *How to apply:* run
+`reattach-municipal-roster` after any cutover (now also scheduled daily at
+13:45 UTC, twelve minutes before the sentinel); for Québec run
+`ingest-qc-municipal-roster`, which does its own attach.
+
+**Do not match a member to a district by name — not even a whole council's
+worth of names.** *Why:* `Ward 1` exists in hundreds of sets, and the
+whole-council "fingerprint" idea is also wrong because cities number wards
+identically: Calgary's fourteen names are covered exactly by `hamilton-wards`
+and `london-wards`. *How to apply:* names narrow, **geography decides** —
+`ST_Contains` the candidate districts against the council's own municipality
+polygon, using `ST_PointOnSurface` (a crescent-shaped ward's centroid can fall
+outside it). Refuse on a tie; see migration 0089, where a Gatineau councillor
+was attached to a Québec City district 400 km away.
+
+**Every `EXISTS` against `constituency_boundaries` must filter the live
+window.** *Why:* a superseded generation is end-dated, never deleted, so a bare
+`EXISTS` asks "was this ever a district?" and stays true forever. Six checks
+have now shipped with this bug (`duplicate-generation`, `duplicate-geometry`,
+`wrong-tier`, `displaced`, and both orphan checks). *How to apply:* always add
+`effective_from <= CURRENT_DATE AND (effective_to IS NULL OR effective_to >=
+CURRENT_DATE)`, and prove a new check fires by re-introducing the defect in a
+rolled-back transaction.
+
+**A boundary generation's in-force date is the election it first governed, not
+its legal date (ruling A10.4).** *Why:* between the two, sitting members point
+at districts that have never held an election. *How to apply:* date it to
+polling day, and change **both** the migration and the loader spec — the spec
+stamps `effective_from` and will restore the old date on the next load.
+⚠ `jurisdiction_sources.seats` changes with the election, not with the map.
+
+**Do not name a plpgsql variable `overlaps`.** *Why:* `OVERLAPS` is a reserved
+SQL keyword (the period operator); `IF overlaps <> 0` is a syntax error that
+reads as nonsense. *How to apply:* use `n_overlap`.
+
+**`constituency_name_alias` is not a fuzzy matcher.** *Why:* algorithmic
+abbreviation-normalising would pair `Saint-Charles` in Kirkland with
+`Saint-Charles` in Longueuil. *How to apply:* one explicit row per reasoned
+decision, scoped per council, with the evidence in `reason`. Use it only when
+two sources spell the SAME district differently — never for a district that was
+genuinely renamed, which makes the polygon's own name stale.
+
 ## Cross-cutting
 
 ### Do not make this apolitical

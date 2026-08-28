@@ -460,6 +460,22 @@ INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) V
 -- reverted twelve cutover migrations; this sentinel FAILED on 2026-08-24 and
 -- the failure sat unread for five days because the next run was a week out. It
 -- is cheap and the damage window is what matters, not the run cost.
+-- ⛔ Runs 12 min BEFORE the sentinel, deliberately. A boundary cutover renames
+-- the source_set and re-keys constituency_id; the roster joins on that id and
+-- nothing in the cutover touches it, so every cutover silently severs its
+-- council. On 2026-08-28 that was 142 sitting officials across 18 councils
+-- (Calgary 14, Winnipeg 14, Welland 12, Fredericton 12, Edmonton 12, Regina 10)
+-- whose ward polygon was sitting right there, unlinked.
+-- ⚠ Idempotent, and it REFUSES rather than guesses: it picks a council's set
+-- geographically (ST_Contains against the municipality polygon), because
+-- `Ward 1`..`Ward 14` is covered identically by hamilton-wards and
+-- london-wards. Scheduling it does not paper over the sentinel — a council it
+-- cannot fix still surfaces as `detached-council`, and a genuinely missing
+-- polygon surfaces as the `missing-district-polygon` advisory.
+('Municipal roster re-attach (daily, before the sentinel)',
+ 'reattach-municipal-roster', '{}'::jsonb,
+ '45 13 * * *', true, 'daily-ingest-rollout'),
+
 ('Boundary coverage sentinel (daily)',
  'check-boundary-coverage', '{}'::jsonb,
  '57 13 * * *', true, 'daily-ingest-rollout'),
