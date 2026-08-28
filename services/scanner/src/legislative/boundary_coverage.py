@@ -752,9 +752,17 @@ async def check_municipal_integrity(db: Database) -> list[MunicipalProblem]:
     rows = await db.fetch(
         """
         WITH detached AS (
+          -- Resolved through constituency_name_alias (0120) so a spelling
+          -- disagreement between the roster and the boundary publisher is not
+          -- reported as missing geometry. Montréal's three were exactly that.
           SELECT split_part(p.source_id, ':', 2) AS council,
-                 p.id, cpd_slugify(p.constituency_name) AS want
+                 p.id,
+                 COALESCE(a.target_slug,
+                          cpd_slugify(p.constituency_name)) AS want
             FROM politicians p
+            LEFT JOIN constituency_name_alias a
+                   ON a.council = split_part(p.source_id, ':', 2)
+                  AND a.alias_slug = cpd_slugify(p.constituency_name)
            WHERE p.is_active AND p.level = 'municipal'
              AND p.source_id LIKE '%:%:%'
              AND p.constituency_id IS NULL

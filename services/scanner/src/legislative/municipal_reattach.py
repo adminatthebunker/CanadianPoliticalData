@@ -88,10 +88,18 @@ async def reattach_municipal_roster(
         slug_of = c["council"]
 
         # The detached members of this council, and the slug each one wants.
+        # ⓘ `want` resolves through constituency_name_alias (migration 0120):
+        # a roster and a boundary publisher can spell the same district
+        # differently, and where they do, an explicit reasoned row says so.
+        # Never a fuzzy match — see the table comment.
         members = await db.fetch(
             """
-            SELECT p.id, p.name, cpd_slugify(p.constituency_name) AS want
+            SELECT p.id, p.name,
+                   COALESCE(a.target_slug, cpd_slugify(p.constituency_name)) AS want
               FROM politicians p
+              LEFT JOIN constituency_name_alias a
+                     ON a.council = split_part(p.source_id, ':', 2)
+                    AND a.alias_slug = cpd_slugify(p.constituency_name)
              WHERE p.is_active AND p.level = 'municipal'
                AND p.constituency_id IS NULL
                AND p.constituency_name IS NOT NULL
@@ -204,6 +212,9 @@ async def reattach_municipal_roster(
             UPDATE politicians p
                SET constituency_id = b.constituency_id, updated_at = now()
               FROM constituency_boundaries b
+             -- ⚠ Scalar subquery, not a LEFT JOIN: `p` is the UPDATE target
+             -- and Postgres will not let a FROM-clause join reference it
+             -- ("invalid reference to FROM-clause entry for table p").
              WHERE p.is_active AND p.level = 'municipal'
                AND p.constituency_id IS NULL
                AND split_part(p.source_id, ':', 2) = $1
@@ -212,7 +223,11 @@ async def reattach_municipal_roster(
                AND b.effective_from <= CURRENT_DATE
                AND (b.effective_to IS NULL OR b.effective_to >= CURRENT_DATE)
                AND split_part(b.constituency_id, '/', 2)
-                 = cpd_slugify(p.constituency_name)
+                 = COALESCE(
+                     (SELECT a.target_slug FROM constituency_name_alias a
+                       WHERE a.council = split_part(p.source_id, ':', 2)
+                         AND a.alias_slug = cpd_slugify(p.constituency_name)),
+                     cpd_slugify(p.constituency_name))
             """,
             slug_of, best["source_set"],
         )
