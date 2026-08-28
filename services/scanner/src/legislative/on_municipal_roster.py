@@ -108,6 +108,58 @@ TIER1: dict[int, tuple[str, str, str]] = {
     10367: ("kingston-city-council", "kingston-wards", "Kingston, City of"),
     10579: ("oshawa-city-council", "oshawa-wards", "Oshawa, City of"),
     10128: ("burlington-city-council", "burlington-wards", "Burlington, City of"),
+    # ── Widened 2026-08-28 from the 14 seeded councils to every Ontario
+    # municipality that has BOTH ward geometry and an existing council
+    # grouping. ⚠ Derived by matching our source_set against the AMO list and
+    # REPORTING every ambiguity rather than resolving it silently; two needed a
+    # human and one is a genuine near-collision:
+    #   waterloo-wards  -> 10800 City of Waterloo, NOT 10374 Region of Waterloo
+    #   haldimand       -> 19429 `Haldimand County` (no comma-type, so the
+    #                      normaliser missed it) and note 19412
+    #                      `Alnwick/Haldimand, Township of` sitting beside it
+    #   hamilton-wards  -> already seeded as 19430 City; 10173 is the Township
+    #                      in Northumberland County
+    # Every id below is checked against the publisher on every run by
+    # verify_mapping(); none of this table is trusted on its own.
+    10029: ("ajax-town-council", "ajax-wards", "Ajax, Town of"),
+    10083: ("belleville-city-council", "belleville-wards", "Belleville, City of"),
+    10109: ("brantford-city-council", "brantford-wards", "Brantford, City of"),
+    10130: ("caledon-town-council", "caledon-wards", "Caledon, Town of"),
+    10132: ("cambridge-city-council", "cambridge-wards", "Cambridge, City of"),
+    10151: ("chatham-kent-municipal-council", "chatham-kent-wards", "Chatham-Kent, Municipality of"),
+    10102: ("clarington-municipal-council", "clarington-wards", "Clarington, Municipality of"),
+    10270: ("fort-erie-town-council", "fort-erie-wards", "Fort Erie, Town of"),
+    10302: ("grimsby-town-council", "grimsby-wards", "Grimsby, Town of"),
+    10304: ("guelph-city-council", "guelph-wards", "Guelph, City of"),
+    19429: ("haldimand-county-council", "haldimand-county-wards", "Haldimand County"),
+    19434: ("kawartha-lakes-city-council", "kawartha-lakes-wards", "Kawartha Lakes, City of"),
+    10365: ("king-township-council", "king-wards", "King, Township of"),
+    10078: ("lincoln-town-council", "lincoln-wards", "Lincoln, Town of"),
+    10461: ("milton-town-council", "milton-wards", "Milton, Town of"),
+    10500: ("newmarket-town-council", "newmarket-wards", "Newmarket, Town of"),
+    10133: ("north-dumfries-township-council", "north-dumfries-wards", "North Dumfries, Township of"),
+    10513: ("oakville-town-council", "oakville-wards", "Oakville, Town of"),
+    10620: ("pickering-city-council", "pickering-wards", "Pickering, City of"),
+    10657: ("richmond-hill-town-council", "richmond-hill-wards", "Richmond Hill, City of"),
+    10668: ("sault-ste-marie-city-council", "sault-ste-marie-wards", "Sault Ste. Marie, City of"),
+    10700: ("st-catharines-city-council", "st-catharines-wards", "St. Catharines, City of"),
+    10755: ("thunder-bay-city-council", "thunder-bay-wards", "Thunder Bay, City of"),
+    10776: ("uxbridge-township-council", "uxbridge-wards", "Uxbridge, Township of"),
+    10800: ("waterloo-city-council", "waterloo-wards", "Waterloo, City of"),
+    10805: ("welland-city-council", "welland-wards", "Welland, City of"),
+    10710: ("wellesley-township-council", "wellesley-wards", "Wellesley, Township of"),
+    10813: ("whitby-town-council", "whitby-wards", "Whitby, Town of"),
+    10061: ("wilmot-township-council", "wilmot-wards", "Wilmot, Township of"),
+    10232: ("woolwich-township-council", "woolwich-wards", "Woolwich, Township of"),
+    # ⚠ HELD BACK, with reasons. Nine Ontario sets have ward geometry but no
+    # council grouping to install into: the eight Niagara-area municipalities
+    # (niagara-falls, niagara-on-the-lake, pelham, port-colborne, thorold,
+    # wainfleet, west-lincoln) plus whitchurch-stouffville. Niagara's local
+    # councillors are absent from our data entirely — the 32 rows under
+    # `niagara-regional-council` are REGIONAL councillors attached to
+    # census-divisions and census-subdivisions, not to any ward. Adding those
+    # municipalities means creating new council groupings, which is a larger
+    # change than widening a lookup table and belongs with the 0097 re-audit.
 }
 
 
@@ -473,8 +525,33 @@ def near_same_person(a: str, b: str) -> bool:
     if ta[0] != tb[0]:
         return False
     sa, sb = ta[-1], tb[-1]
-    lo, hi = sorted((sa, sb), key=len)
-    return len(lo) >= 4 and hi.startswith(lo) and len(hi) - len(lo) <= 2
+    if min(len(sa), len(sb)) < 4:
+        return False
+    # ⛔ A PREFIX TEST IS NOT ENOUGH, and shipping one nearly cost a real
+    # person's record. King Township holds `Debbie Schaefer` where AMO writes
+    # `Debbie Schaeffer` — the extra letter is in the MIDDLE, so
+    # "schaeffer".startswith("schaefer") is false and the seat was scored as a
+    # replacement. The plan was to retire her and install a new row, losing the
+    # socials, offices and websites attached to the original and leaving two
+    # records for one councillor. Kingston's `Glen`/`Glenn` happened to be a
+    # trailing difference and hid the gap.
+    return _edit_distance(sa, sb) <= 2
+
+
+def _edit_distance(a: str, b: str, cap: int = 3) -> int:
+    """Levenshtein, bounded — only ever asked whether two surnames are close."""
+    if abs(len(a) - len(b)) > cap:
+        return cap + 1
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1,
+                           prev[j - 1] + (ca != cb)))
+        if min(cur) > cap:
+            return cap + 1
+        prev = cur
+    return prev[-1]
 
 
 @dataclass
@@ -554,9 +631,23 @@ async def ward_index(db: Database, source_set: str) -> dict[int, tuple[str, str]
     complete index rather than a best-effort one — but parse it, never compare
     it as a string.
 
-    ⛔ Do NOT derive the number from the slug instead. Kingston's wards are
-    NAMED (`kingston-wards/sydenham`), as are Toronto's, so a slug-derived
-    number finds nothing for two of the fourteen councils.
+    ⛔ Do NOT derive the number from the slug INSTEAD of the authority id.
+    Kingston's wards are NAMED (`kingston-wards/sydenham`), as are Toronto's,
+    so a slug-first rule finds nothing for two of the seeded councils.
+
+    ⚠ As a FALLBACK it is correct and necessary, which is a different claim.
+    The sets still on mirror geometry carry no `authority_district_id` at all —
+    Open North never wrote one — but most of them do use `ward-N` slugs, so
+    falling back to the slug recovers chatham-kent, haldimand, king,
+    north-dumfries, pickering, richmond-hill, wellesley, wilmot and woolwich.
+    Order matters: authority id first because it is the publisher's own number,
+    slug second because it is ours.
+
+    ⛔ Two sets are recoverable by neither — `st-catharines-wards/grantham` and
+    `thunder-bay-wards/current-river` name their wards with no number anywhere.
+    They are reported as un-indexable rather than guessed at; AMO does carry the
+    ward name after the number for those cities, so a name bridge is possible
+    later, but it is not this function's job to invent one.
     """
     out: dict[int, tuple[str, str]] = {}
     for r in await db.fetch(
@@ -570,6 +661,10 @@ async def ward_index(db: Database, source_set: str) -> dict[int, tuple[str, str]
         source_set,
     ):
         m = re.search(r"(\d+)", str(r["authority_district_id"] or ""))
+        if not m:
+            # Fallback: our own slug, but only the `ward-N` shape. A bare digit
+            # anywhere in the slug would match `kingston-wards/kings-town`.
+            m = re.match(r"^ward-(\d+)$", str(r["constituency_id"]).split("/")[-1])
         if m:
             out[int(m.group(1))] = (r["constituency_id"], r["name"])
     return out
@@ -911,17 +1006,50 @@ async def _retire_holder(
     st.retired += 1
 
 
+def superseded_by(cycle: int, today: Optional[date] = None) -> Optional[int]:
+    """The later cycle whose election has already happened, if any.
+
+    ⛔ THE GUARD THAT MAKES THIS SAFE TO LEAVE RUNNING. A completed election
+    result is an election-NIGHT snapshot and knows nothing about the
+    by-elections that follow, so writing from a cycle that a later election has
+    already superseded reverses four years of corrections — applying 2022 after
+    2026-10-26 would put John Tory back in as mayor of Toronto.
+
+    Today 2022 is NOT superseded: Ontario's next general election is
+    2026-10-26, still ahead. The same code becomes a refusal the morning after,
+    with no edit and nobody having to remember. That is the point of deriving
+    it from ELECTION_DATES rather than writing it in a comment.
+    """
+    t = today or date.today()
+    later = [c for c, d in ELECTION_DATES.items() if c > cycle and d <= t]
+    return max(later) if later else None
+
+
 async def apply_on_municipal_roster(
     db: Database, cycle: int = 2022, councils: Optional[list[str]] = None,
-    apply: bool = False,
+    apply: bool = False, allow_superseded: bool = False,
 ) -> ApplyStats:
     """Write only the seats the ward comparison classified as writable."""
     st = ApplyStats(cycle=cycle)
+    sup = superseded_by(cycle)
+    if sup and not allow_superseded:
+        st.problems.append(
+            f"cycle {cycle} was superseded by the {sup} general election "
+            f"({ELECTION_DATES[sup]}) — writing it would revert every "
+            f"by-election since. REFUSING; pass allow_superseded only for a "
+            f"deliberate historical correction, per council."
+        )
+        return st
     cmp_st, results = await compare_wards(db, cycle=cycle, councils=councils)
     st.problems.extend(cmp_st.problems)
-    if cmp_st.problems:
-        # ⛔ verify_mapping() failing means the id table no longer names the
-        # councils we think. Nothing is writable under that doubt.
+    if not results:
+        # ⛔ FATAL vs PER-COUNCIL, and the first version conflated them. A
+        # verify_mapping() failure makes compare_wards return NOTHING, because
+        # the id table no longer names the councils we think and nothing is
+        # writable under that doubt. But a single council with no ward index
+        # (St. Catharines and Thunder Bay name their wards with no number
+        # anywhere) is a skip, not a stop — treating it as fatal silently
+        # dropped the entire 42-council run to zero.
         return st
 
     for council, verdicts in sorted(results.items()):

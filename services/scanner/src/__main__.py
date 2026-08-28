@@ -4128,8 +4128,12 @@ def cmd_ingest_qc_municipal_roster(ctx, csv_path: str, dry_run: bool) -> None:
               help="Limit to one or more council slugs. Default: all tier-1.")
 @click.option("--apply", "do_apply", is_flag=True,
               help="Actually write. Without this the run only reports its plan.")
+@click.option("--allow-superseded", is_flag=True,
+              help="Write a cycle a later election has already superseded. "
+                   "Deliberate historical correction only.")
 @click.pass_context
-def cmd_apply_on_municipal_roster(ctx: click.Context, cycle, councils, do_apply) -> None:
+def cmd_apply_on_municipal_roster(ctx: click.Context, cycle, councils, do_apply,
+                                  allow_superseded) -> None:
     """Write the ward seats the comparison proved stale, and fill the gaps.
 
     ⛔ THE VERDICT IS THE AUTHORISATION. Only seats classified STALE (we hold
@@ -4150,7 +4154,8 @@ def cmd_apply_on_municipal_roster(ctx: click.Context, cycle, councils, do_apply)
 
     async def _wrap(db: Database) -> None:
         st = await apply_on_municipal_roster(
-            db, cycle=cycle, councils=list(councils) or None, apply=do_apply)
+            db, cycle=cycle, councils=list(councils) or None, apply=do_apply,
+            allow_superseded=allow_superseded)
         for line in st.actions:
             console.print(line)
         console.print(
