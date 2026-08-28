@@ -299,6 +299,13 @@ class MunicipalProblem:
     kind: str
     detail: str
     count: int
+    # ⚠ Reported, never failed. Same ruling as a roster shortfall being a
+    # VACANCY rather than a breach (see the module docstring): a gap in what we
+    # have COLLECTED is not a corruption of what we hold. Failing the daily job
+    # on a known, worked-on backlog trains the operator to ignore it, and an
+    # ignored sentinel is the condition that let the 2026-08-23 regression run
+    # for five days.
+    advisory: bool = False
 
 
 async def check_municipal_integrity(db: Database) -> list[MunicipalProblem]:
@@ -709,6 +716,107 @@ async def check_municipal_integrity(db: Database) -> list[MunicipalProblem]:
             + ", ".join(f"{k} ×{n}" for k, n in
                         sorted(by_sets.items(), key=lambda t: -t[1])[:4]),
             len(rows),
+        ))
+
+    # ── detached-council ─────────────────────────────────────────────────
+    #
+    # ★ WHY THIS EXISTS. On 2026-08-28, 129 sitting Québec municipal officials
+    # held constituency_id IS NULL. 92 of them were attachable the whole time:
+    # the cutover migrations renamed and reloaded the polygon sets, and nothing
+    # re-ran the roster matcher afterwards. Re-running
+    # `ingest-qc-municipal-roster` linked all 92 with no new data. The geometry
+    # was right, the roster was right, and the edge between them was missing —
+    # a state no existing check could see, because `orphaned` only fires on a
+    # constituency_id that points at NOTHING, and these pointed at nothing at
+    # all.
+    #
+    # ⚠ The predicate is deliberately RELATIVE, not absolute. A NULL
+    # constituency_id is normal and correct for an at-large council — Vancouver
+    # elects 18 councillors city-wide, which is the BC statutory default, and
+    # asserting on NULL alone would fire on every one of them forever. What is
+    # NOT normal is a council where some members attach and others do not:
+    # that means the set resolves, the join works, and these specific people
+    # fell through it.
+    # ⛔ Two different defects wear the same symptom and must not share a
+    # severity. A member with no district is either
+    #
+    #   FIXABLE   the polygon exists, in a set this council already uses, and
+    #             nothing linked them — a cutover severed the edge. Costs one
+    #             `reattach-municipal-roster` run. This is a BREACH.
+    #   MISSING   the polygon does not exist. No amount of re-running helps;
+    #             somebody has to go and get the map. This is a coverage gap,
+    #             reported and not failed.
+    #
+    # Collapsing them makes the sentinel permanently red on a known backlog,
+    # which is worse than silence because it looks like noise.
+    rows = await db.fetch(
+        """
+        WITH detached AS (
+          SELECT split_part(p.source_id, ':', 2) AS council,
+                 p.id, cpd_slugify(p.constituency_name) AS want
+            FROM politicians p
+           WHERE p.is_active AND p.level = 'municipal'
+             AND p.source_id LIKE '%:%:%'
+             AND p.constituency_id IS NULL
+             AND p.constituency_name IS NOT NULL
+        ), used AS (
+          -- The sets this council demonstrably belongs to, evidenced by its
+          -- OWN attached members. No name or geometry heuristic needed: if a
+          -- colleague resolves into that set, so should they.
+          SELECT DISTINCT split_part(p.source_id, ':', 2) AS council,
+                 b.source_set
+            FROM politicians p
+            JOIN constituency_boundaries b
+              ON b.constituency_id = p.constituency_id
+           WHERE p.is_active AND p.level = 'municipal'
+             AND p.source_id LIKE '%:%:%'
+        )
+        SELECT d.council,
+               count(*) AS n,
+               count(*) FILTER (WHERE EXISTS (
+                 SELECT 1 FROM constituency_boundaries b
+                  JOIN used u ON u.source_set = b.source_set
+                             AND u.council = d.council
+                  WHERE split_part(b.constituency_id, '/', 2) = d.want
+                    -- ⚠ Districts only, and this matters. Without it, a
+                    -- councillor whose constituency_name is just the city
+                    -- name matches the municipality OUTLINE and is scored
+                    -- fixable — but `reattach-municipal-roster` will not
+                    -- attach a ward councillor to a whole-city polygon, so
+                    -- the sentinel would demand a fix no tool performs.
+                    -- Sainte-Anne-de-Bellevue's six posts against five
+                    -- districts is exactly that shape.
+                    AND (b.boundary_kind = 'district'
+                         OR b.boundary_kind IS NULL)
+                    AND b.effective_from <= CURRENT_DATE
+                    AND (b.effective_to IS NULL
+                         OR b.effective_to >= CURRENT_DATE)
+               )) AS fixable
+          FROM detached d
+         GROUP BY 1
+         ORDER BY 2 DESC
+        """
+    )
+    fixable = [r for r in rows if r["fixable"]]
+    missing = [r for r in rows if r["n"] > r["fixable"]]
+    if fixable:
+        out.append(MunicipalProblem(
+            "detached-council",
+            "sitting members whose district polygon EXISTS in a set their own "
+            "council already uses, but is not linked — a cutover severed the "
+            "edge. Fix with `reattach-municipal-roster`: "
+            + ", ".join(f"{r['council']} {r['fixable']}" for r in fixable[:6]),
+            sum(r["fixable"] for r in fixable),
+        ))
+    if missing:
+        out.append(MunicipalProblem(
+            "missing-district-polygon",
+            "sitting members whose district has no polygon at all — a map to "
+            "go and get, not a link to repair: "
+            + ", ".join(f"{r['council']} {r['n'] - r['fixable']}"
+                        for r in missing[:8]),
+            sum(r["n"] - r["fixable"] for r in missing),
+            advisory=True,
         ))
 
     return out

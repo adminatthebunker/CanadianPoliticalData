@@ -213,6 +213,17 @@ COMMANDS: dict[str, dict[str, Any]] = {
              "help": "Send email even when no committees are stale (audit cadence)."},
         ],
     },
+    "reattach-municipal-roster": {
+        "description": "Re-link municipal rosters to geometry that a boundary cutover re-keyed underneath them. A cutover renames the source_set and re-keys constituency_id; the roster joins on that id and nothing in the cutover touches it, so every cutover silently severs its council. Found 2026-08-28: 142 sitting officials across 18 councils held a NULL constituency_id while their ward polygon sat right there (Calgary 14, Winnipeg 14, Welland 12, Fredericton 12, Edmonton 12, Regina 10). Matches a WHOLE COUNCIL at a time and picks the set GEOGRAPHICALLY — Ward 1..14 is covered identically by hamilton-wards and london-wards, so names only narrow the field and ST_Contains against the council municipality polygon decides. Refuses rather than guessing on a tie; see migration 0089, where a Gatineau councillor was attached to a Quebec City district 400 km away. Idempotent. Run after any municipal cutover.",
+        "cli": "reattach-municipal-roster",
+        "category": "maintenance",
+        "args": [
+            {"name": "council", "type": "str", "required": False,
+             "help": "Limit to one council slug (middle field of source_id)."},
+            {"name": "dry_run", "type": "bool", "required": False,
+             "help": "Report without writing."},
+        ],
+    },
     "check-boundary-coverage": {
         "description": "Sentinel: does every jurisdiction's electoral geography still add up? Compares current district count against the agency seat count, roster size against seats, unattached sitting members, orphaned constituency_ids, and total-area drift against a recorded baseline. Exits non-zero (job shows FAILED) on any breach. NOTE a member SHORTFALL is a vacancy and is reported, not failed (Ontario legitimately sits 2 short); only an EXCESS is a breach, because that means duplicate roster rows — the defect that had BC serving two MLAs for five districts. Added after the 2026-08-19 boundary programme, in which four jurisdictions had a perfect district count over wrong or incomplete geometry.",
         "cli": "check-boundary-coverage",

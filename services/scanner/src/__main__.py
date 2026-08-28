@@ -4121,6 +4121,37 @@ def cmd_ingest_qc_municipal_roster(ctx, csv_path: str, dry_run: bool) -> None:
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 
 
+@cli.command("reattach-municipal-roster")
+@click.option("--council", type=str, default=None,
+              help="Limit to one council slug (the middle field of source_id).")
+@click.option("--dry-run", is_flag=True, help="Report without writing.")
+@click.pass_context
+def cmd_reattach_municipal_roster(ctx: click.Context, council, dry_run: bool) -> None:
+    """Re-link municipal rosters to geometry a cutover re-keyed underneath them.
+
+    ⛔ A boundary cutover renames the source_set and re-keys constituency_id.
+    The roster joins on that id and nothing in the cutover touches it, so every
+    cutover silently severs its council. Run this after any municipal cutover.
+
+    Matches a WHOLE COUNCIL at a time, never one member: `Ward 1` exists in
+    hundreds of sets, but {Ward 1 … Ward 14} identifies exactly one. Refuses on
+    a tie or a partial cover rather than guessing — see 0089, where a Gatineau
+    councillor was attached to a Québec City district 400 km away.
+    """
+    from .legislative.municipal_reattach import reattach_municipal_roster
+
+    async def _wrap(db: Database) -> None:
+        st = await reattach_municipal_roster(db, council=council, dry_run=dry_run)
+        console.print(
+            f"[green]reattach-municipal-roster[/green]: "
+            f"councils_examined={st.councils_examined} "
+            f"matched={st.councils_matched} attached={st.attached}"
+            + (" [yellow](dry run)[/yellow]" if dry_run else "")
+        )
+        _print_problems(st.problems)
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
 @cli.command("check-boundary-coverage")
 @click.option("--no-area", is_flag=True,
               help="Skip the area-drift half. Use immediately after a "
@@ -4158,10 +4189,14 @@ def cmd_check_boundary_coverage(ctx: click.Context, no_area: bool) -> None:
         # ⚠ Municipal is checked PER SEAT, not per polygon — a council is
         # mayors + ward councillors + at-large councillors + boroughs, so
         # `districts == seats` has no municipal analogue. See the module.
-        muni = await check_municipal_integrity(db)
-        for m in muni:
-            console.print(f"[red]BREACH[/red] municipal/{m.kind} ×{m.count}: {m.detail}")
-        if not muni:
+        muni_all = await check_municipal_integrity(db)
+        # Advisories are coverage gaps — reported, never failed. See the
+        # MunicipalProblem docstring for why the two do not share a severity.
+        muni = [m for m in muni_all if not m.advisory]
+        for m in muni_all:
+            tag = ("[yellow]gap[/yellow]" if m.advisory else "[red]BREACH[/red]")
+            console.print(f"{tag} municipal/{m.kind} ×{m.count}: {m.detail}")
+        if not muni_all:
             console.print("[green]ok[/green] municipal: per-seat integrity clean")
 
         # Flips are dated rows already in the table, not events that happen
