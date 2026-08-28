@@ -4461,4 +4461,111 @@ SPECS: dict[str, BoundarySpec] = {
               "against a policy band of ±25%."
     ),
 
+
+    # ═══ Ontario — the two explicit-prohibition sets ════════════════════
+    # ⚖ These are the only two specs in the corpus whose publisher STATES a
+    # restriction rather than stating nothing. Every other restrictive-looking
+    # Ontario licence turned out to be either silence or a disclaimer wrapped
+    # around a grant (Oshawa, Whitby). Loaded 2026-08-28 by operator decision:
+    # the standing rule is "licence recorded, never a gate", and it now covers
+    # explicit prohibitions as well as unstated ones.
+    #
+    # ⛔ Record the licence, do not paraphrase it. Both texts are transcribed
+    # verbatim in data/boundaries/municipal-ontario/PROVENANCE.md; the `licence`
+    # slugs below are index keys into that section, not a summary of its terms.
+
+    "clarington-wards": BoundarySpec(
+        jurisdiction="clarington-wards",
+        source_path="municipal-ontario/current/clarington-wards-1997.geojson",
+        src_epsg=4326, level="municipal", province_territory="ON",
+        source_set="clarington-wards", id_prefix="clarington-wards",
+        authority="municipality-of-clarington", boundaries_version="1997",
+        # By-law 96-151, passed by Council 1996-08-12. Report CLD-036-16:
+        # "Clarington's existing ward boundaries were established by Council on
+        # August 12, 1996 through By-law 96-151", and on the same page "In 1996,
+        # effective for the 1997 elections, Regional Council was reduced to a
+        # 28-member Council … the Municipality was divided into the current four
+        # wards". 1997-11-10 is the Ontario municipal general election.
+        #
+        # ⛔ The by-law's own date is fifteen months early and is not used —
+        # A10.4 wants the election, same recital rule as Oshawa's 55-2017.
+        #
+        # ★ Still in force: the 2020 ward boundary review (CLD-014-20, Watson &
+        # Associates) developed four options and Council adopted none. Thirty
+        # years is not staleness evidence on its own, but a review that closed
+        # without change is positive confirmation.
+        effective_from=date(1997, 11, 10),
+        # `WARD` is already "Ward 1".."Ward 4" — no builder needed, and the held
+        # ids are already clarington-wards/ward-N, so this load does not re-key.
+        name_field="WARD", authority_id_field="WARD",
+        boundary_kind="district", expect_districts=4,
+        # ⛔ EXPLICIT PROHIBITION, verbatim in PROVENANCE.md: the data "is made
+        # available for personal informational purposes only and has not been
+        # prepared for, is not suitable for, and may not be used for, any
+        # commercial, legal, engineering, or surveying purpose." Recorded, not
+        # obeyed as a gate, and not softened.
+        licence="clarington-personal-informational-use-only-explicit",
+        notes="services6.arcgis.com/rtNHzl5XDmZaetYm Clarington_Wards/"
+              "FeatureServer/0, item 5ec95110bbbf48aab03c6926da0af1d0 "
+              "('Ward_Map', owner GIS@Clarington). ⛔ Unlike Oshawa, the "
+              "licenceInfo disclaimer has NO linked grant behind it — the "
+              "restrictive reading is correct here and wrong there. The "
+              "discriminator is whether an <a href> survives the tag strip, "
+              "not the tone of the prose."
+    ),
+
+    "vaughan-wards": BoundarySpec(
+        jurisdiction="vaughan-wards",
+        source_path="municipal-ontario/current/vaughan-wards-2010.geojson",
+        src_epsg=4326, level="municipal", province_territory="ON",
+        source_set="vaughan-wards", id_prefix="vaughan-wards",
+        authority="city-of-vaughan", boundaries_version="2010",
+        # ⛔ THE BY-LAW IS NOT THE OPERATIVE INSTRUMENT. Vaughan Ward Boundary
+        # Review Final Report (December 2016), §2: "In 2009 City staff undertook
+        # Vaughan's most recent review, resulting in 5 wards and adopted by
+        # By-law 89-2009, which was appealed to the Ontario Municipal Board
+        # (OMB). The OMB imposed a different ward structure than the one
+        # approved by Vaughan Council, but maintained the number of wards at 5.
+        # This ward structure was implemented for the 2010 municipal elections
+        # and is still in place today." Cite the OMB order; note the by-law.
+        #
+        # Corroborated by a later Vaughan staff report — boundaries "imposed by
+        # order of the Ontario Municipal Board (OMB) in 2009 and have not been
+        # updated since that time" — and by the 2020 review, which closed "with
+        # no changes made to the existing five ward structure".
+        #
+        # ★ THE CLEANEST PROOF THAT A COUNT CHECK CANNOT SEE AN APPEAL. Five
+        # wards before the OMB and five after: the count survived, the map did
+        # not. expect_districts=5 passes against the SUPERSEDED structure just
+        # as happily as against this one.
+        effective_from=date(2010, 10, 25),
+        # ⚠ THIS RE-KEYS THE SET. Held ids are slugged from the neighbourhood
+        # name (vaughan-wards/maplekleinburg, /thornhill) while the held display
+        # names are already "Ward N". The uniform label wins, so ids become
+        # vaughan-wards/ward-1..5 and the roster must be re-attached after the
+        # cutover. DESCRIP still carries MAPLE/KLEINBURG et al. upstream.
+        name_field="WARD_NO", authority_id_field="WARD_NO",
+        boundary_kind="district", expect_districts=5,
+        # ⛔ EXPLICIT PROHIBITION, verbatim in PROVENANCE.md. All four candidate
+        # layers have EMPTY licenseInfo/accessInformation/copyrightText, so the
+        # governing text is the site-wide terms: "No part of this web site, or
+        # the information contained therein, may be reproduced, stored in a
+        # retrieval system, or transmitted, in any form or by any means …
+        # without the prior written permission of the City."
+        # ⚠ Sourced from Wayback — www.vaughan.ca 403s behind Akamai on every
+        # terms-page path, UA or no UA. The AGOL layers themselves are open.
+        licence="vaughan-site-terms-prior-written-permission-explicit",
+        notes="services2.arcgis.com/9LnN9037wYhPG904 Ward/FeatureServer/0, item "
+              "04a102f180dd48b5a1e98d93e8baf289 — snippet names the authority, "
+              "'Wards as per the latest ward boundary review from City Clerks'. "
+              "⛔ FOUR sibling layers each give 5 wards with identical WARD_NO "
+              "and DESCRIP, so no attribute separates them. Item b8f3327011d5 "
+              "is byte-identical geometry (independent corroboration); "
+              "43ef9df09ccd ('Vaughan Wards', pmomaps) is the same generation "
+              "0.02% finer; 982a8b1cbf00 ('Ward Boundary_CRM') is a GENERALISED "
+              "copy off by up to 5.12% on Ward 1 and is the wrong pick that "
+              "looks right. Four layers with the same count is four chances to "
+              "take the wrong one, not a corroboration."
+    ),
+
 }
