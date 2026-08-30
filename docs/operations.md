@@ -822,6 +822,37 @@ client shared one identity. Access-log analysis by source IP is now meaningful:
 docker logs sw-nginx --since 24h | awk '{print $1}' | sort | uniq -c | sort -rn | head
 ```
 
+Verified 2026-08-30 against real tunnel traffic: `$remote_addr` resolves to public
+addresses (Googlebot `66.249.64.196`, a human on `68.148.168.110`), confirming Newt
+passes X-Forwarded-For through without adding a hop. ⚠ If that ever changes,
+`real_ip_recursive off` would take Newt's own `172.19.0.6` as the client and every
+caller would silently collapse into one rate-limit bucket — fail-safe, but with no
+error signal. The check is the command above: if the top talker is `172.19.0.x`,
+that has happened.
+
+### Deferred hardening — narrowing the trusted range
+
+`set_real_ip_from 172.16.0.0/12` is broader than the `sw` network it means to
+cover, because `docker-compose.yml` pins no `ipam` subnet and Docker may reassign
+a different `/16` from its default pool if the network is recreated.
+
+⚠ Note the port publish NATs through the bridge **gateway** (`172.19.0.1`), which
+is inside that range — so a local process on the host can set its own
+`X-Forwarded-For`. Dropping the `set_real_ip_from 127.0.0.1` line does NOT change
+this; nginx's peer for published traffic is the gateway, never literally
+`127.0.0.1`.
+
+Bounded, and not a privilege-escalation path: nothing in `services/api/src` uses
+`req.ip` for authorization — only as an anti-abuse bucket key, and every
+authenticated route prefers the session or API-key identity. `sw-api` publishes no
+port, and Docker's default inter-network isolation stops other bridge networks
+reaching it.
+
+To close it properly: pin the `sw` subnet with `ipam.config.subnet`, give `newt` a
+static address, and narrow both `set_real_ip_from` and the API's `trustProxy` to
+that address. ⛔ Changing a compose network's IPAM requires recreating the network,
+i.e. a full stack down/up — schedule it, don't fold it into an unrelated change.
+
 ## Deploying
 
 ### Local/single host
