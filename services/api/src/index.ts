@@ -50,7 +50,20 @@ const app = Fastify({
       ? { target: "pino-pretty", options: { translateTime: "SYS:HH:MM:ss", ignore: "pid,hostname" } }
       : undefined,
   },
-  trustProxy: true,
+  // ⛔ NOT `true`. `trustProxy: true` walks the entire X-Forwarded-For chain
+  // and returns the LEFTMOST entry — which is attacker-supplied. Verified
+  // 2026-08-29: sending a different X-Forwarded-For per request produced a
+  // fresh rate-limit bucket every time (`x-ratelimit-remaining: 299` on each
+  // of four consecutive calls), making the 300/min global limit opt-out by
+  // header for anyone who knew to send one.
+  //
+  // A CIDR list rather than a hop count: nginx overwrites X-Forwarded-For
+  // with a single real-client value (see nginx/conf.d/default.conf), but a
+  // hop count silently returns the Docker-internal address if that line ever
+  // reverts to $proxy_add_x_forwarded_for. Skipping private ranges from the
+  // right is correct under both shapes, because a real public client is
+  // never inside 172.16/12.
+  trustProxy: ["127.0.0.1", "::1", "172.16.0.0/12"],
   bodyLimit: 1_000_000,
 });
 

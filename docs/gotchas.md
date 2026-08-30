@@ -260,6 +260,55 @@ decision, scoped per council, with the evidence in `reason`. Use it only when
 two sources spell the SAME district differently — never for a district that was
 genuinely renamed, which makes the polygon's own name stale.
 
+## Public edge & crawler policy
+
+**Do not block search or citation crawlers from `/api/`.** The frontend is a
+client-rendered SPA: `/` returns ~1.8 KB containing `<div id="root"></div>` and
+nothing else, and every page's content arrives over `/api/v1/*`. A 403 (or a
+robots.txt `Disallow: /api/`) that applies to Googlebot makes every page render
+empty, and Google concludes the site has no content.
+
+*Why:* the usual advice — "crawlers have no business in your JSON API" — assumes
+server-rendered HTML where the API is redundant with the page. Under client-side
+rendering the API **is** the page. Verified 2026-08-29: the first version of the
+`/api/` rule 403'd Googlebot, caught only because the verification pass tested the
+allowed crawlers rather than just the blocked ones.
+
+*How to apply:* `$ua_search_ok` in `nginx/nginx.conf` exempts search and citation
+crawlers from `$block_api_crawler`, and `nginx/robots.txt` gives them their own
+group with `Allow: /api/`. Both must be changed together. Revisit only if the
+frontend gains SSR or prerendering.
+
+**Do not set Fastify `trustProxy: true`.** It walks the whole `X-Forwarded-For`
+chain and returns the **leftmost** entry, which is attacker-supplied.
+
+*Why:* verified 2026-08-29 — a different `X-Forwarded-For` per request produced a
+fresh rate-limit bucket every time, making the 300/min global limit opt-out by
+header for anyone who knew to send one.
+
+*How to apply:* `services/api/src/index.ts` uses a CIDR allowlist
+(`["127.0.0.1", "::1", "172.16.0.0/12"]`), which skips private hops from the right
+and is correct whether nginx overwrites or appends the header. `nginx.conf` sets
+`real_ip_recursive off` — with it `on`, nginx lands on the leftmost entry and
+reintroduces the same forgery.
+
+**Do not let the SPA catch-all answer `/robots.txt`.** Until 2026-08-29 it
+returned `200` + `index.html`, which every crawler parses as "no rules".
+
+*Why:* a 200 of HTML is worse than a 404. Both mean "no restrictions", but the
+200 looks intentional and hides the omission from every check that only asserts
+the status code.
+
+*How to apply:* both vhosts have `location = /robots.txt` serving
+`nginx/robots.txt` from disk, ahead of the proxy catch-all. Assert the
+`Content-Type` is `text/plain`, not just that the status is 200.
+
+**A blocked crawler must still be able to read `/robots.txt`.** `$block_ai` is
+deliberately a two-variable map (trainer UA **and** not-robots.txt) rather than a
+server-level `if`, which runs in the rewrite phase and would swallow the
+robots.txt request too. A crawler that only ever sees 403 has no machine-readable
+reason to back off, and some retry harder on 403 than on an honoured `Disallow`.
+
 ## Cross-cutting
 
 ### Do not make this apolitical

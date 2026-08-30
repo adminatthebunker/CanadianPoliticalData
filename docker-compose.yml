@@ -612,6 +612,8 @@ services:
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      # Crawler policy, served verbatim at /robots.txt on both vhosts.
+      - ./nginx/robots.txt:/etc/nginx/robots.txt:ro
       - assets:/var/www/assets:ro
       # Static-built docs site. Populated by `docker compose run --rm docs build`.
       # Missing on a fresh checkout — the docs vhost will 404 cleanly until

@@ -1,0 +1,117 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# canadianpoliticaldata.org / docs.canadianpoliticaldata.org — crawler policy
+#
+# CPD is a public-interest dataset and we WANT to be found: every search engine
+# and every AI *citation* crawler is allowed in full. What this file declines is
+# bulk AI *training* harvesting, which returns nothing to the public record.
+#
+# Measured 2026-08-29, 24h of edge logs: 314,716 requests, of which ~94% were
+# crawlers and ~2,900 were humans. meta-externalagent alone was 271,978 (86%)
+# at a sustained 3.1 req/s, and 90% of all bytes served. Until this file existed
+# the SPA catch-all answered /robots.txt with 200 + index.html, which every
+# crawler correctly parses as "no rules".
+#
+# ⛔ This is the polite half only. robots.txt is a request, not a control —
+#    nginx/nginx.conf carries the matching $block_ai map that enforces it with
+#    a 403. Change one and you must change the other, or a blocked crawler
+#    gets a 403 with no machine-readable explanation of why.
+#
+# Deliberately ALLOWED, do not "tidy" these into the block list:
+#   Googlebot          — search indexing. GoogleOther is a DIFFERENT crawler
+#                        (Gemini / internal R&D); blocking it costs zero search
+#                        ranking. Conflating the two is the expensive mistake.
+#   Bingbot            — search indexing.
+#   OAI-SearchBot      — lets ChatGPT cite CPD as a source. Citation, not
+#   PerplexityBot        training. A public dataset wants to be citable.
+#   Claude-SearchBot   — same, for Claude. (ClaudeBot, below, is the training
+#                        crawler and is blocked.)
+#   ChatGPT-User       — a PERSON asking ChatGPT to open a CPD link. User-
+#   Claude-User          initiated fetch, not harvesting. Blocking these
+#                        breaks a real reader's request.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── AI training crawlers: declined ───────────────────────────────────────────
+
+User-agent: meta-externalagent
+User-agent: Meta-ExternalAgent
+User-agent: meta-externalfetcher
+User-agent: FacebookBot
+Disallow: /
+
+User-agent: GoogleOther
+User-agent: GoogleOther-Image
+User-agent: GoogleOther-Video
+User-agent: Google-Extended
+Disallow: /
+
+User-agent: GPTBot
+Disallow: /
+
+User-agent: ClaudeBot
+User-agent: anthropic-ai
+User-agent: Claude-Web
+Disallow: /
+
+User-agent: CCBot
+User-agent: Bytespider
+User-agent: Amazonbot
+User-agent: Applebot-Extended
+User-agent: cohere-ai
+User-agent: Diffbot
+User-agent: ImagesiftBot
+User-agent: Omgilibot
+User-agent: PanguBot
+User-agent: Timpibot
+User-agent: AI2Bot
+User-agent: YouBot
+User-agent: Webzio-Extended
+User-agent: Scrapy
+Disallow: /
+
+# ── Search and citation engines: full access, including /api/ ────────────────
+#
+# ⛔ These MUST be allowed to fetch /api/. The frontend is a client-rendered
+#    SPA: / returns ~1.8 KB containing <div id="root"></div> and nothing else,
+#    and all page content arrives over /api/v1/*. Google's renderer honours
+#    robots.txt for subresources, so a `Disallow: /api/` that applied to
+#    Googlebot would make every page render empty and de-index the site.
+#
+#    This is the opposite of the usual advice, which assumes server-rendered
+#    HTML. Revisit only if the frontend gains SSR or prerendering.
+#
+#    A robots.txt group is selected by MOST SPECIFIC match, so naming these
+#    agents here removes them from the `*` group entirely — the Disallow
+#    lines below do not apply to them, and each rule they DO need is repeated.
+
+User-agent: Googlebot
+User-agent: Googlebot-Image
+User-agent: Bingbot
+User-agent: Applebot
+User-agent: DuckDuckBot
+User-agent: YandexBot
+User-agent: OAI-SearchBot
+User-agent: ChatGPT-User
+User-agent: PerplexityBot
+User-agent: Perplexity-User
+User-agent: Claude-SearchBot
+User-agent: Claude-User
+Allow: /api/
+Disallow: /admin
+Disallow: /account
+Disallow: /login
+Disallow: /status/
+
+# ── Everyone else ────────────────────────────────────────────────────────────
+#
+# The residual set is SEO/backlink scrapers and unattributed clients. They get
+# the site but not the API: nothing there belongs in an index, and half of
+# Meta's traffic was landing on it. Authenticated surfaces are listed so they
+# never enter an index; they are enforced by auth, not by this file.
+
+User-agent: *
+Disallow: /api/
+Disallow: /admin
+Disallow: /account
+Disallow: /login
+Disallow: /status/
+Crawl-delay: 5

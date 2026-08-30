@@ -764,6 +764,64 @@ The HNSW vector index on `speech_chunks.embedding` rebuilds at restore time. On 
 
 For production, copy the internal backup directory to off-host storage (S3, B2, etc.) on a cron — same `rsync` invocation as the USB mirror, different destination.
 
+## Crawler policy
+
+Added 2026-08-29 after 24h of edge logs showed **314,716 requests, ~94% crawlers
+and ~2,900 humans** — 90% of bytes served. `meta-externalagent` alone was 271,978
+(86%) at a sustained 3.1 req/s. The site had no robots.txt at all: the SPA
+catch-all answered `/robots.txt` with `200` + `index.html`, and the docs vhost
+404'd. Both read as "no rules".
+
+**Policy: AI *training* crawlers declined, search and *citation* crawlers welcome.**
+CPD is a public-interest dataset and wants to be found and cited; what it declines
+is bulk harvesting that returns nothing to the public record.
+
+| file | role |
+|---|---|
+| `nginx/robots.txt` | the polite half — mounted RO at `/etc/nginx/robots.txt`, served on both vhosts |
+| `nginx/nginx.conf` | `$ua_ai_trainer` / `$block_ai` / `$is_crawler` / `$ua_search_ok` / `$block_api_crawler` maps, plus `real_ip` |
+| `nginx/conf.d/*.conf` | `location = /robots.txt`, the `$block_ai` 403, the `/api/` scraper block |
+
+⚠ **robots.txt and the nginx maps must stay in sync.** A UA blocked by one and not
+the other either leaks traffic or 403s with no machine-readable explanation.
+
+⛔ Read `docs/gotchas.md` § *Public edge & crawler policy* before changing any of
+this — it records four traps, including one that would silently de-index the site.
+
+### Verifying
+
+```bash
+# robots.txt is served as text, not as the SPA shell
+curl -sI http://127.0.0.1:8088/robots.txt | grep -i content-type   # → text/plain
+
+# blocked, and blocked from /api/
+curl -s -o /dev/null -w '%{http_code}\n' -A "meta-externalagent/1.1" http://127.0.0.1:8088/   # → 403
+
+# ⚠ MUST stay 200 — these render the SPA and their loss de-indexes the site
+curl -s -o /dev/null -w '%{http_code}\n' -A "Googlebot/2.1" http://127.0.0.1:8088/api/v1/politicians?limit=1
+
+# a blocked crawler can still read why
+curl -s -o /dev/null -w '%{http_code}\n' -A "meta-externalagent/1.1" http://127.0.0.1:8088/robots.txt  # → 200
+```
+
+Config is bind-mounted, so `docker compose up -d nginx` will NOT pick up an edited
+`.conf` — it sees no service-definition change. Reload explicitly:
+
+```bash
+docker exec sw-nginx nginx -t && docker exec sw-nginx nginx -s reload
+```
+
+### Real client IPs
+
+`real_ip` (in `nginx.conf`) recovers the true client from Pangolin's
+`X-Forwarded-For`, trusted only when the peer is inside `172.16.0.0/12`. Before
+this, `$remote_addr` in the access log was always the Newt container and every
+client shared one identity. Access-log analysis by source IP is now meaningful:
+
+```bash
+docker logs sw-nginx --since 24h | awk '{print $1}' | sort | uniq -c | sort -rn | head
+```
+
 ## Deploying
 
 ### Local/single host
