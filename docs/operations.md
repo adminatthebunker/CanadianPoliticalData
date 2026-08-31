@@ -811,6 +811,30 @@ Config is bind-mounted, so `docker compose up -d nginx` will NOT pick up an edit
 docker exec sw-nginx nginx -t && docker exec sw-nginx nginx -s reload
 ```
 
+⚠ Recreating the nginx container (`docker compose up -d nginx`) DISCARDS its
+access log. Capture any before/after traffic baseline you care about *before*
+recreating, or the comparison is gone — that happened on 2026-08-30.
+
+### Is the polite half working?
+
+Two very different situations produce a similar-looking 403 count, and they need
+different responses:
+
+```bash
+# did the crawler actually READ the policy?
+docker logs sw-nginx --since 24h | grep robots.txt | awk -F'"' '{print $(NF-3)}' | sort | uniq -c
+
+# is its request volume falling?
+docker logs sw-nginx --since 24h | grep -c meta-externalagent
+```
+
+Volume falling **after** a robots.txt fetch = compliance; the load goes away on
+its own. Volume flat while absorbing 403s = the crawler is ignoring its own
+published policy, and the next lever is a Pangolin-level `limit_req` on the
+offending network. Measured 2026-08-30→31, the first 18h after rollout: requests
+−76% overall (meta-externalagent −78%), bytes −97%, zero 403s to non-crawler
+user agents, Googlebot reaching /api/ normally (22× 200).
+
 ### Real client IPs
 
 `real_ip` (in `nginx.conf`) recovers the true client from Pangolin's
