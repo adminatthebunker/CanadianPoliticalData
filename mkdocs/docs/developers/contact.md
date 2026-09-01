@@ -14,9 +14,14 @@ two shapes:
    lat/lng, hours, fax, and one row per office. Useful for politicians
    with multiple constituency offices.
 
-Both are **free-tier**. The data originates from
-[Open North's Represent API](https://represent.opennorth.ca/) which
-mirrors the per-member pages every legislature publishes. PIPEDA's
+Both are **free-tier**. The data comes from the per-member pages each
+legislature publishes, ingested directly. ⚠ **Historically** it came via
+Open North's Represent API; that mirror was **retired 2026-08-27** and this
+page's lede said otherwise for longer than it should have. Rows first written
+by the mirror still carry an `opennorth:` provenance string, which records
+where a row was *first* seen and says nothing about whether it is current —
+most such rows are refreshed daily from their own legislature. See the caveats
+below for what `source` actually means. PIPEDA's
 business-contact-information exemption covers this category (public
 officials acting in a professional capacity); we are not the
 upstream of last resort.
@@ -92,9 +97,10 @@ preserved — a politician with two constituency offices keeps both.
 }
 ```
 
-- `kind` values are `constituency`, `legislature`, or `office` (a
-  fallback bucket Open North uses when the upstream legislature
-  doesn't specify).
+- `kind` values are `constituency`, `legislature`, or `office` — the last
+  being a fallback bucket for rows whose upstream did not say which. The
+  three-way split was inherited from the retired Open North mirror and kept
+  because it is a reasonable shape, not because the mirror is still involved.
 - Ordering: constituency → legislature → office, then most-recently-
   updated first within each kind.
 - `lng` is aliased from PostGIS column `lon` so it matches the
@@ -151,14 +157,16 @@ spam-marketing fall under [our takedown policy](https://docs.canadianpoliticalda
 
 - **`phone` format varies by jurisdiction.** Some upstreams render
   `1 403 297-7104`, some `(403) 297-7104`, some `403.297.7104`. We
-  pass through what Open North gives us. Normalize client-side if
+  pass through whatever the legislature published. Normalize client-side if
   you need a canonical format (E.164 or otherwise).
 - **`fax` is sparsely populated.** Mostly federal MPs and Quebec
   MNAs; most provincial MLAs returned a fax number to the upstream
   legislature historically but ingest coverage varies.
-- **`hours`, `lat`, `lng` are nullable.** Open North's coverage of
-  the structured fields is best in federal + ON + AB; smaller
-  legislatures often supply just `address` + `phone`.
+- **`hours`, `lat`, `lng` are nullable.** Coverage of the structured fields
+  is best in federal + ON + AB; smaller legislatures often publish just
+  `address` + `phone`. ⚠ Much of this detail was originally captured by the
+  Open North mirror and has **not been re-verified** since it was retired —
+  treat sparse structured fields as unknown, not as absent.
 - **`mailing_address` is always null in v1.** Use
   `legislature_office_address` as a fallback for mail — most
   legislatures consider that the canonical mailing endpoint.

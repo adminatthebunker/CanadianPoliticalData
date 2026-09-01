@@ -35,7 +35,7 @@ in one call (the "find me the 87 sitting AB MLAs" use case).
 | `jurisdiction` | `federal` \| 2-letter province code | Maps to `level=federal` OR `(level=provincial AND province_territory=…)`. Omit for cross-jurisdiction. |
 | `role` | string | Case-insensitive substring match on `elected_office` (e.g. `mla` matches "MLA"; `mp` matches "Member of Parliament"; `councillor` matches "Councillor"). Substring is intentional — different jurisdictions render the same role differently. |
 | `status` | `sitting` \| `former` \| `all` | Defaults to `sitting`. |
-| `constituency_id` | string | Open North constituency_id (`source_set/slug`), matched exactly. Use with `status=sitting` to get the current rep for a riding from a `/boundaries/{set}/{slug}` response in one call. |
+| `constituency_id` | string | Our constituency_id (`source_set/slug`), matched exactly. ⚠ **Not an Open North identifier** — that mirror was retired 2026-08-27 and the sets were renamed to drop the generation, so `alberta-electoral-districts-2017/calgary-bow` is now `alberta-electoral-districts/calgary-bow` with the generation in `boundaries_version`. Use with `status=sitting` to get the current rep for a riding from a `/boundaries/{set}/{slug}` response in one call. |
 | `q` | string ≤ 200 chars | Name substring (trigram-indexed). |
 | `page` | int ≥ 1 | Default `1`. |
 | `limit` | int 1–100 | Default `50`. |
@@ -53,7 +53,7 @@ in one call (the "find me the 87 sitting AB MLAs" use case).
       "status": "sitting",
       "level": "provincial",
       "province_territory": "AB",
-      "constituency_id": "alberta-electoral-districts-2017/calgary-bow",
+      "constituency_id": "alberta-electoral-districts/calgary-bow",
       "constituency_name": "Calgary-Bow",
       "elected_office": "MLA",
       "photo_url": "/assets/politicians/uuid.jpg",
@@ -90,7 +90,7 @@ curl -s -H 'Authorization: Bearer cpd_live_…' \
 
 # Current rep for a specific riding (chain from a boundary call)
 curl -s -H 'Authorization: Bearer cpd_live_…' \
-  'https://canadianpoliticaldata.org/api/public/v1/politicians?constituency_id=alberta-electoral-districts-2017/calgary-glenmore&status=sitting' \
+  'https://canadianpoliticaldata.org/api/public/v1/politicians?constituency_id=alberta-electoral-districts/calgary-glenmore&status=sitting' \
   | jq '.items[0] | {full_name, party, email}'
 
 # Search by name
@@ -119,7 +119,7 @@ infrastructure scan, and constituency boundary GeoJSON.
     "level": "provincial",
     "province_territory": "AB",
     "constituency_name": "Calgary-Bow",
-    "constituency_id": "alberta-electoral-districts-2017/calgary-bow",
+    "constituency_id": "alberta-electoral-districts/calgary-bow",
     "email": "Calgary.Bow@assembly.ab.ca",
     "phone": "1 403 297-7104",
     "fax": null,
@@ -140,7 +140,7 @@ infrastructure scan, and constituency boundary GeoJSON.
   },
   "websites": [/* websites with their latest infrastructure_scan */],
   "boundary": {
-    "constituency_id": "alberta-electoral-districts-2017/calgary-bow",
+    "constituency_id": "alberta-electoral-districts/calgary-bow",
     "name": "Calgary-Bow",
     "level": "provincial",
     "boundary_geojson": { "type": "MultiPolygon", "coordinates": [/* … */] },

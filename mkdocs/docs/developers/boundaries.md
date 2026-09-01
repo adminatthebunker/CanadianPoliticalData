@@ -42,7 +42,7 @@ when you need it.
 | Name | Type | Notes |
 |---|---|---|
 | `level` | `federal` \| `provincial` \| `municipal` | Filter by level. |
-| `province_territory` | 2-letter code | e.g. `ON`, `AB`. Federal ridings have this `null` — filter on `level=federal` instead. |
+| `province_territory` | 2-letter code | e.g. `ON`, `AB`. ⚠ **Populated for federal ridings too** since the 2026-08 move to Elections Canada's own file — all 343 carry one. It is a filter on *where*, not on *level*; combine the two. |
 | `bbox` | `minLng,minLat,maxLng,maxLat` | WGS84 bounding-box filter. Uses the GIST index on the simplified geometry for fast lookup. |
 | `page` | int ≥ 1 | Default `1`. |
 | `limit` | int 1–100 | Default `50`. |
@@ -53,21 +53,21 @@ when you need it.
 {
   "items": [
     {
-      "constituency_id": "federal-electoral-districts-2023-representation-order/35079",
+      "constituency_id": "federal-electoral-districts/35079",
       "name": "Ottawa Centre",
       "level": "federal",
-      "province_territory": null,
+      "province_territory": "ON",
       "source_set": "federal-electoral-districts",
-      "area_sqkm": 40.73,
+      "area_sqkm": 40.70,
       "centroid": { "lng": -75.7076, "lat": 45.3915 },
-      "effective_from": "2023-01-01",
+      "effective_from": "2025-03-23",
       "effective_to": null,
-      "boundaries_version": "current"
+      "boundaries_version": "2023-representation-order"
     }
   ],
   "page": 1,
   "limit": 50,
-  "total": 342,
+  "total": 343,
   "pages": 7
 }
 ```
@@ -104,16 +104,16 @@ At least one of `(lat, lng)` or `postcode` must be present, else 400.
 ```json
 {
   "federal": {
-    "constituency_id": "federal-electoral-districts-2023-representation-order/35079",
+    "constituency_id": "federal-electoral-districts/35079",
     "name": "Ottawa Centre",
     "level": "federal",
-    "province_territory": null,
+    "province_territory": "ON",
     "source_set": "federal-electoral-districts",
-    "area_sqkm": 40.73,
+    "area_sqkm": 40.70,
     "centroid": { "lng": -75.7076, "lat": 45.3915 },
-    "effective_from": "2023-01-01",
+    "effective_from": "2025-03-23",
     "effective_to": null,
-    "boundaries_version": "current",
+    "boundaries_version": "2023-representation-order",
     "boundary_geojson": { "type": "MultiPolygon", "coordinates": [/* … */] }
   },
   "provincial": { "name": "Ottawa Centre", "...": "..." },
@@ -185,16 +185,16 @@ slashes out of the URL path so you don't have to URL-encode.
 ```json
 {
   "boundary": {
-    "constituency_id": "federal-electoral-districts-2023-representation-order/35079",
+    "constituency_id": "federal-electoral-districts/35079",
     "name": "Ottawa Centre",
     "level": "federal",
-    "province_territory": null,
+    "province_territory": "ON",
     "source_set": "federal-electoral-districts",
-    "area_sqkm": 40.73,
+    "area_sqkm": 40.70,
     "centroid": { "lng": -75.7076, "lat": 45.3915 },
-    "effective_from": "2023-01-01",
+    "effective_from": "2025-03-23",
     "effective_to": null,
-    "boundaries_version": "current",
+    "boundaries_version": "2023-representation-order",
     "boundary_geojson": { "type": "MultiPolygon", "coordinates": [/* … */] }
   }
 }
@@ -209,7 +209,7 @@ Cache-Control: `public, max-age=3600`.
 
 ```bash
 curl -s -H 'Authorization: Bearer cpd_live_…' \
-  'https://canadianpoliticaldata.org/api/public/v1/boundaries/federal-electoral-districts-2023-representation-order/35079?precision=4' \
+  'https://canadianpoliticaldata.org/api/public/v1/boundaries/federal-electoral-districts/35079?precision=4' \
   | jq '.boundary | {name, area_sqkm}'
 ```
 
@@ -255,9 +255,14 @@ navigator.geolocation.getCurrentPosition(async (pos) => {
 
 ## Caveats
 
-- **Federal ridings have `province_territory = null`.** Federal ridings
-  can span provincial borders, so the column is left null by design.
-  Filter on `level=federal` instead.
+- ⚠ **Federal ridings now carry `province_territory`.** This page previously
+  said the column was `null` for federal ridings by design, on the reasoning
+  that a riding can span a provincial border. Neither half held: seats are
+  allocated province by province, so no federal riding crosses one, and since
+  the 2026-08 move onto Elections Canada's own file **all 343 federal rows are
+  populated**. If you wrote `province_territory === null` as a federal test, it
+  now matches nothing — filter on `level` for the level and
+  `province_territory` for the place.
 - **Simplified geometry is for rendering, not law.** The `boundary_simple`
   geometry returned in detail responses is simplified at ~555 m
   tolerance — visually identical to the full boundary at typical web

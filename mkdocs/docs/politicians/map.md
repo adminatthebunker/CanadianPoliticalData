@@ -26,16 +26,23 @@ link straight into their profile and recent speeches.
 ## Boundary versions
 
 Riding boundaries change after every redistribution. The map shows the
-**currently active** boundaries by default. Where we have data for
-historical boundaries, you can switch to a previous version using the
-date selector.
+**currently active** boundaries.
 
-This matters for journalism and research:
+⚠ **There is no date selector yet.** This page described one for some time;
+it was never built. The *data* is fully temporal — every boundary carries an
+in-force range, superseded generations are retained rather than deleted, and
+maps that take force later are loaded in advance and sit dormant until their
+date — but the map UI exposes only what is in force today. The picker is on
+the roadmap.
 
-- "Who used to represent this address?" — switch to the boundaries that
-  were in effect at the time.
-- "How has this riding's footprint changed?" — flip between successive
-  redistribution years.
+Until it ships, historical and future boundaries are reachable through the
+[developer API](../developers/boundaries.md), which returns `effective_from`,
+`effective_to` and `boundaries_version` on every row.
+
+This is what the picker will be for:
+
+- "Who used to represent this address?" — the boundaries in effect at the time.
+- "How has this riding's footprint changed?" — successive redistributions.
 
 ## Mobile
 
@@ -49,6 +56,12 @@ search-by-name flow if you already know who you're looking for.
 - **Provincial boundaries** — each province's Chief Electoral Officer
   (formats vary; some provinces publish clean GeoJSON, others only PDFs
   we have to digitize).
+- **Municipal wards** — each municipality's own open-data portal, one
+  publisher at a time. Coverage is real but **uneven**, and deliberately so:
+  where a city publishes only a PDF we would have to trace, we hold no wards
+  for it rather than a guess. Brossard is the worked example — we removed
+  nine ward polygons that were a partial copy of a superseded map and left
+  the city with none, because an honest gap beats a confident wrong answer.
 - **Representative-to-riding mapping** — synthesized from each
   legislature's official member directory plus the term-history records
   in the database.

@@ -105,8 +105,12 @@ https://ipinfo.io/<ip>`}</pre>
           We used to take boundaries and rosters from Open North's Represent
           API. That dependency was removed in August 2026 — the geometry now
           comes from the agencies themselves. Some politician records still
-          carry provenance from that earlier ingest and are marked accordingly
-          on the coverage page.
+          carry provenance from that earlier ingest, and where that means a
+          roster is frozen rather than refreshed, the{" "}
+          <a href="https://docs.canadianpoliticaldata.org/getting-started/coverage/" target="_blank" rel="noopener">
+            coverage page
+          </a>{" "}
+          says which provinces and why.
         </p>
         <p>IP geolocation uses MaxMind's GeoLite2 databases. All scans are publicly observable — we don't see anything you couldn't see yourself.</p>
       </>

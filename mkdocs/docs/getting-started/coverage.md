@@ -78,6 +78,29 @@ lookup answers for the date you ask about. Québec's provincial map changes on
 2026-10-05 and Ontario's municipal maps on 2026-10-26; both are already
 loaded and dormant, waiting for those dates.
 
+### How much, exactly
+
+*As of 2026-09-01. These are counts of districts in force today.*
+
+| layer | districts | from the agency that drew them |
+|---|---:|---|
+| Federal | 343 | **all of them** |
+| Provincial & territorial | 781 | 657 — the remaining 124 are Québec's outgoing 2017 map, replaced automatically on 2026-10-05 |
+| Municipal wards | 1,343 | 1,016 (~76%) |
+
+**Municipal is the incomplete layer, and the gap is not evenly spread.** New
+Brunswick and Manitoba are complete; Ontario and Nova Scotia are near it;
+Québec is a little under half, and Prince Edward Island and Newfoundland have
+no authoritative ward geometry at all. The remainder is roughly 312 districts
+across 37 municipalities, each of which is a separate publisher to approach —
+which is why this closes one city at a time rather than in one sweep.
+
+⛔ Where a municipality publishes only a PDF we would have to trace by hand, we
+hold **no** wards for it rather than an approximation. Brossard is the worked
+example: we removed nine ward polygons that turned out to be a partial copy of
+a superseded ten-district map, and left the city with none. A missing answer is
+visibly missing; a plausible wrong one is not.
+
 **Federal and provincial rosters — ingested on a daily schedule** from each
 legislature's own member directory.
 
@@ -93,6 +116,20 @@ record was correct at a known moment; what it lacks is a way to notice that
 it has stopped being correct. The point at which it goes wrong is that
 province's next municipal election, which is why replacements are built
 *ahead* of those dates rather than after them.
+
+Those dates, and where each province stands:
+
+| province | next municipal election | replacement |
+|---|---|---|
+| British Columbia | 2026-10-17 | ⛔ none yet |
+| Ontario | 2026-10-26 | ✅ built (AMO election results) |
+| Manitoba | 2026-10-28 | ⛔ none yet |
+| Prince Edward Island | 2026-11-02 | ⛔ none yet |
+| Québec | 2029 | ✅ built (MAMH election results) |
+
+⚠ Only Ontario's date is confirmed against a published schedule; the other
+three are inferred from each province's statutory four-year cycle and may be
+off. If you are relying on one of them, check with the province.
 
 A jurisdiction is **on the roadmap** when the upstream publisher's data is
 known to be machine-readable but we haven't built the ingester yet.

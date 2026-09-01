@@ -15,8 +15,10 @@ import { boundaryLicence } from "../../lib/boundary-licence.js";
 /**
  * Public constituency-boundaries endpoints
  * (/api/public/v1/boundaries/*). Free-tier (requireApiKey only) —
- * boundary data is mirrored from Open North's free public API, so
- * paywalling it would be poor citizenship.
+ * boundary data comes from the electoral agencies' own open publications,
+ * so paywalling it would be poor citizenship. (Until 2026-08-27 it was
+ * mirrored from Open North's public API; that mirror is retired and a DB
+ * trigger now refuses its signature — see migration 0105.)
  *
  * Three routes:
  *   GET /boundaries                    — paginated metadata list
@@ -79,7 +81,8 @@ const detailParams = z.object({
     .max(200)
     .regex(/^[a-z0-9-]+$/)
     .describe(
-      "Open North boundary set, e.g. federal-electoral-districts-2023-representation-order",
+      "Boundary set, e.g. federal-electoral-districts. Sets are " +
+      "generation-free: the generation lives in boundaries_version.",
     ),
   slug: z
     .string()
@@ -241,12 +244,14 @@ export default async function publicV1BoundariesRoutes(app: FastifyInstance) {
         tags: ["Constituency boundaries"],
         summary: "Paginated list of constituency boundaries (metadata only)",
         description:
-          "List of federal/provincial/municipal electoral boundaries " +
-          "mirrored from Open North (represent.opennorth.ca). Metadata only " +
-          "— no GeoJSON payload; clients fetch detail by source_set + slug " +
-          "when they need geometry. Filters: level, province_territory " +
-          "(two-letter code; ignored for federal since federal ridings span " +
-          "all of Canada), bbox (minLng,minLat,maxLng,maxLat WGS84). " +
+          "List of federal/provincial/municipal electoral boundaries, " +
+          "sourced from Elections Canada, the 13 provincial and territorial " +
+          "chief electoral officers, and municipalities' own open data. " +
+          "Metadata only — no GeoJSON payload; clients fetch detail by " +
+          "source_set + slug when they need geometry. Filters: level, " +
+          "province_territory (two-letter code; APPLIES to federal too — " +
+          "all 343 federal ridings carry one), bbox " +
+          "(minLng,minLat,maxLng,maxLat WGS84). " +
           "Pagination: ?page=&limit= (limit cap 100, default 50). Response: " +
           "`{ items: [{ constituency_id, name, level, province_territory, " +
           "source_set, area_sqkm, centroid: { lng, lat }, effective_from, " +
@@ -344,7 +349,8 @@ export default async function publicV1BoundariesRoutes(app: FastifyInstance) {
           "narrow to one level. Two input modes: pass either ?lat=&lng= " +
           "(WGS84; lat 40–85, lng -145 to -50) OR ?postcode= (6-char " +
           "Canadian postcode like K1A0A6, or 3-char FSA like K1A). When " +
-          "postcode is passed it's resolved via Open North in real time " +
+          "postcode is passed it's resolved against our own StatCan " +
+          "National Address Register table (migration 0062) " +
           "and the centroid is used; if both are passed, postcode wins. " +
           "Each match includes the simplified GeoJSON so a downstream " +
           "map widget can render the riding without a follow-up call. " +
@@ -404,10 +410,10 @@ export default async function publicV1BoundariesRoutes(app: FastifyInstance) {
         tags: ["Constituency boundaries"],
         summary: "Single boundary with simplified GeoJSON",
         description:
-          "Single constituency boundary by Open North source_set + slug. " +
+          "Single constituency boundary by source_set + slug. " +
           "The two path params reconstruct constituency_id = source_set + " +
           "'/' + slug — this keeps slashes out of the URL path. Examples: " +
-          "`/boundaries/federal-electoral-districts-2023-representation-order/35064` " +
+          "`/boundaries/federal-electoral-districts/35064` " +
           "(federal ridings use numeric slugs), " +
           "`/boundaries/alberta-electoral-districts/calgary-bow` " +
           "(provincial ridings use kebab-case slugs). " +

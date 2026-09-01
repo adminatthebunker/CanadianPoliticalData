@@ -140,13 +140,25 @@ export function Layout() {
                 the dependency. Electoral geometry now comes from the agencies
                 that draw it, and postcodes from the StatCan National Address
                 Register (rebuilt 2026-08-07). Some politician rows still carry
-                `opennorth:` provenance and are frozen at that mirror's final
-                state — that is disclosed per-row on the coverage page rather
-                than as a blanket footer credit, because a footer credit reads
-                as "this is where our data comes from", which is no longer
-                true. ⚠ Do not re-add a blanket credit; if the frozen rows are
-                ever refreshed from a live source the statement becomes wrong
-                in the other direction. */}
+                `opennorth:` provenance. A footer credit reads as "this is
+                where our data comes from", which is no longer true, so it was
+                dropped rather than qualified. ⚠ Do not re-add a blanket
+                credit; if the frozen rows are ever refreshed the statement
+                becomes wrong in the other direction.
+
+                ⛔ CORRECTED 2026-09-01. This comment used to justify the
+                removal by saying the frozen rows were "disclosed per-row on
+                the coverage page". They were not — /coverage selects no
+                boundary or roster-provenance field at all, so the credit was
+                dropped on the strength of a disclosure nobody had built. The
+                honest disclosure is per-PROVINCE prose on the public coverage
+                page (docs.canadianpoliticaldata.org/getting-started/coverage/),
+                which now names the frozen provinces and the election dates at
+                which each stops being accurate. A per-row surface on /coverage
+                is still worth building; it needs boundary/roster status in
+                jurisdiction_sources, and migration 0060 deliberately excludes
+                roster-only municipalities from that table. See
+                docs/gotchas.md. */}
             Electoral boundaries from <a href="https://www.elections.ca" target="_blank" rel="noopener noreferrer">Elections Canada</a>
             {" and the provincial and territorial chief electoral officers · Addresses from "}
             <a href="https://www.statcan.gc.ca/en/lode/databases/oda" target="_blank" rel="noopener noreferrer">StatCan</a>
