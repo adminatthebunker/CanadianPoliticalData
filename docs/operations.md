@@ -106,11 +106,24 @@ All catalog entries live in `services/scanner/src/jobs_catalog.py`. Out of the b
 - Federal Hansard: `ingest-federal-hansard`, `chunk-speeches`, `embed-speech-chunks`
 - NS Hansard: `ingest-ns-mlas`, `ingest-ns-hansard`, `resolve-ns-speakers`
 - Provincial bills: one entry per live pipeline (AB/BC/NB/NL/NS/ON/QC + their RSS variants)
-- Rosters: `ingest-mps`, `ingest-senators`, `ingest-mlas`, `ingest-councils`, `ingest-legislatures`
+- Rosters: `ingest-senators`
 - Enrichment: `harvest-personal-socials`
-- Maintenance: `refresh-views`, `seed-orgs`, `scan`
+- Maintenance: `refresh-views`, `seed-orgs`, `scan`, `check-boundary-coverage`, `reattach-municipal-roster`, `boundary-progress`
 
-Adding a new command requires updates in **two** spots (see CLAUDE.md § Admin panel).
+⛔ **`ingest-mps` / `ingest-mlas` / `ingest-councils` / `ingest-legislatures` were removed from
+the panel catalog 2026-08-27 and must not be re-added.** They are the **roster** half of the
+Open North mirror. Only the *boundary* commands were deleted outright; these are still
+registered Click commands reachable as `python -m src <cmd>`, guarded by an
+`OPENNORTH_ALLOW_INGEST=1` env check and by `cli/sovpro`, which `die`s. Treat them as
+hazardous, not as operator tools — one scheduled mirror run on 2026-08-23 re-created 1,155
+boundary rows and reverted twelve applied cutover migrations.
+
+Adding a new command requires updates in **three** spots — `jobs_catalog.py`, `admin.ts`, **and
+a `docker compose restart scanner-jobs`**. The worker binds the catalog with a module-level
+import (`jobs_worker.py:38`), so an entry added under a running daemon is invisible to it and
+the job fails as `unknown command in catalog` — which reads exactly like a two-file
+divergence. `reattach-municipal-roster` was lost this way for its first five scheduled runs.
+See CLAUDE.md § Admin panel and `docs/gotchas.md`.
 
 ### Worker restart + stuck jobs
 
@@ -624,6 +637,85 @@ OS-level cron entries (the operator's user crontab, `crontab -l`):
 - `0 0 * * *` — daily Postgres backup (`scripts/backup-database.sh`).
 - `7 9 * * *` — daily socials enrichment via headless Claude Code (`scripts/scheduled-tasks/run-socials-weekly.sh`). See § *Daily socials enrichment* above for the runbook.
 - `17 9 * * 1` — weekly websites enrichment via headless Claude Code (`scripts/scheduled-tasks/run-websites-weekly.sh`). See § *Weekly websites enrichment* above for the runbook.
+
+## Electoral boundaries & the Open North replacement
+
+Three commands, two of them daily and scheduled twelve minutes apart, deliberately.
+
+| when | command | writes? |
+|---|---|---|
+| `45 13 * * *` | `reattach-municipal-roster` | ✅ `politicians.constituency_id` |
+| `57 13 * * *` | `check-boundary-coverage` | ⛔ nothing — stdout only |
+| on demand | `boundary-progress` | ✅ `docs/research/boundaries/PROGRESS.md` |
+
+**The fix runs before the check** so the sentinel reports what the fix could not do, rather
+than re-reporting what it just repaired. A cutover renames a `source_set` and re-keys
+`constituency_id`; the roster joins on that id and nothing in a cutover touches it, so every
+cutover silently severs its council — 142 sitting officials across 18 councils when this was
+found on 2026-08-28.
+
+### ⛔ The sentinel's output does not survive
+
+`check-boundary-coverage` prints and persists nothing. Its only durable trace is
+`scanner_jobs.stdout_tail`, a **rolling 4 KB tail** (`jobs_worker.py`, `TAIL_BYTES=4096`), so
+on a full run the per-jurisdiction lines are truncated away and only the summary survives.
+To read a whole run, run it yourself:
+
+```bash
+docker compose run --rm scanner check-boundary-coverage          # full output
+docker compose run --rm scanner check-boundary-coverage --no-area  # skip area drift
+```
+
+It exits non-zero on a breach, so a scheduled failure means something real. ⚠ A member
+*shortfall* is a vacancy and is reported, not failed; only an *excess* is a breach.
+
+### Tracking progress
+
+```bash
+docker compose run --rm scanner boundary-progress            # write the tracker
+docker compose run --rm scanner boundary-progress --stdout   # preview only
+```
+
+★ **Run it in the same change that lands a cutover, and commit the result.** It derives every
+count from the DB, so nothing is typed and nothing can drift — the hand-maintained coverage
+matrices it replaced were wrong four days after the programme shipped. It is stamped with a
+*date*, not a timestamp, so two runs on the same day against an unchanged database are
+byte-identical and `git diff` shows only real movement. It writes into the working tree and
+does **not** commit.
+
+### Reading the numbers honestly
+
+- **Geometry** is keyed on `constituency_boundaries.authority`, NULL until a set is cut over.
+  ⛔ Query the **live window** (`effective_from <= CURRENT_DATE AND (effective_to IS NULL OR
+  effective_to >= CURRENT_DATE)`), never `effective_to IS NULL` — the latter counts dormant
+  future generations as in force. This is the bug that had six sentinel checks failing open.
+- **`authority IS NULL` is not always work to do.** A superseded generation stays live until
+  its successor takes force: Québec's 2017 provincial map is 124 mirror rows serving lookups
+  correctly right now, superseded 2026-10-05. `PROGRESS.md` gives it its own column.
+- **Roster freeze is a refresh-path question, not a freshness one.** `source_id LIKE
+  'opennorth:%'` counts provenance and over-reports by ~948 rows — a row with a native
+  legislature ID refreshes by exact FK from its own legislature daily, and the prefix is just
+  where it was first written. ⚠ Nothing on `politicians` records when we last *confirmed* a
+  person holds a seat; `updated_at` only moves when a field changes.
+
+### After a cutover — the checklist
+
+1. Apply the migration.
+2. `reattach-municipal-roster` — the cutover severed the council; this relinks it.
+3. `check-boundary-coverage` — expect `breaches=0 municipal_problems=0`.
+4. Run the PIP integrity test. ⛔ It is the **only** check that sees a containment defect:
+   Sherbrooke's 2025 file shipped a district whose polygon contains two of its own districts,
+   and the feature count, the `--compare` overlap (99.38%) and every name all agreed.
+5. `boundary-progress`, and commit `PROGRESS.md` with the migration.
+
+### ⚠ Dated flips that need a human
+
+`check-boundary-coverage` reports any generation going live within 60 days, with the district
+delta, who would detach, and whether `jurisdiction_sources.seats` will still agree.
+
+- **2026-10-05** — QC provincial 125 → 127. `jurisdiction_sources.seats` must change **in the
+  same change that ingests the election result**; 6 sitting MNAs detach otherwise.
+- **2026-10-26** — Ontario municipal. Chatham-Kent's 2026 map detaches **17** councillors.
 
 ## Backups
 

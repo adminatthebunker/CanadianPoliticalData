@@ -2,8 +2,15 @@
 
 > Shared methodology, reconciliation strategy, licence matrix, and progress tracking for the Canadian Political Data **electoral-boundary** effort. Per-jurisdiction boundary dossiers are siblings of this file in `docs/research/boundaries/`. The legislative-data counterpart is two directories up at [`../overview.md`](../overview.md); the municipal counterpart at [`../cities/overview.md`](../cities/overview.md). This doc is the boundary-specific layer and is the authority on the `constituency_id` re-key question.
 
-**Status:** 🚧 Research phase 2026-08-18 — **all 21 dossiers complete**. ★ Measured: **9.15% of Canadian addresses get no provincial answer** from the lookup today; **12.61% any error** over the six jurisdictions where authoritative geometry could be checked. Every one of the 1,949 boundary rows is still an Open North mirror, and that upstream is ⛔ **down since 2026-08-07** (expired + mis-issued TLS cert, origin 502). **135 sitting representatives are unreachable by any postcode lookup.** No authoritative geometry loaded yet — the build is deliberately out of scope for this phase.
-**Last updated:** 2026-08-18
+**Status:** ✅ Research phase closed 2026-08-18 (all 21 dossiers). **The build then happened** — migrations `0064`–`0121`, merged to `main` 2026-08-28. All 13 provinces/territories plus federal are on their agencies' own sources, and a DB trigger (`trg_block_mirror_boundary`, migration `0105`) now refuses the mirror's signature outright.
+
+⛔ **Do not read counts from this file.** They are the 2026-08-18 *pre-cutover* snapshot and every one of them is now wrong. The live numbers are generated into **[`PROGRESS.md`](./PROGRESS.md)** by the `boundary-progress` command; this file keeps the *reasoning* — licences, traps, per-jurisdiction findings, the `constituency_id` re-key strategy — which is what it is actually good for.
+
+> ★ Why the split exists. The coverage matrices below were hand-maintained, and they were wrong within four days of the programme shipping. Because `/docs/` excluded the directory itself, git never descended into it, so there was no diff in which to notice. Both halves of that are fixed: the ignore rule is now contents-not-directory, and nobody types a count.
+
+**Superseded headline figures**, kept because the *reasoning* around them is still cited below — ~~9.15% of addresses get no provincial answer; 12.61% any error; all 1,949 rows are an Open North mirror; 135 representatives unreachable~~. The impact study ([`impact.md`](./impact.md)) measured a database that no longer exists and has **not** been re-run against the authoritative geometry.
+
+**Last updated:** 2026-09-01 (reconciled against migrations `0064`–`0121`; research content unchanged from 2026-08-18)
 
 ---
 
@@ -587,6 +594,21 @@ two directions now: it doesn't fire on mirror-vs-origin comparisons, and where i
 
 ## Coverage matrix
 
+> # ⛔ SUPERSEDED — historical record only
+>
+> **Live coverage is generated into [`PROGRESS.md`](./PROGRESS.md).** Run
+> `boundary-progress` to refresh it.
+>
+> The two tables below are the **2026-08-18 pre-cutover snapshot** — what the Open North
+> mirror held, and the evidence that justified replacing it. Every count in them is now
+> wrong: migrations `0064`–`0121` closed each ⛔ verdict here. They are kept, not deleted,
+> because the *verdicts* are the reasoning that drove the build and several are still cited
+> elsewhere in this file (the BC 2015∩2023 intersection, the NWT misassignment, the QC
+> Chicoutimi near-miss, the `census-subdivisions` finding).
+>
+> ⚠ Read a row as **"what was wrong, and why we went and got the real map"** — never as
+> current state.
+
 **Consolidated by the coordinator 2026-08-18 from all per-jurisdiction dossiers.** Rows held
 are live counts from `constituency_boundaries`. "No answer" is the address-weighted
 measured rate from [`impact.md`](./impact.md) (2,500-address sample per jurisdiction against
@@ -612,6 +634,9 @@ the StatCan National Address Register). Verdicts are the dossier findings, not i
 
 ### Municipal
 
+⛔ Same status as above — 2026-08-18 pre-cutover. Live municipal counts, including the
+named remainder of sets still on mirror geometry, are in [`PROGRESS.md`](./PROGRESS.md).
+
 | Province | Sets | Rows | Verdict |
 |---|---:|---:|---|
 | [Ontario](./municipal-ontario.md) | 48 | 410 | ⛔ only **343 are wards**; 40 stray CSD + 1 CD + a 26-row set with no wards. **Peel duplicated wholesale.** ⚠ ON municipal elections **2026-10-26** |
@@ -628,7 +653,14 @@ inside the ward set. Every municipal lookup returns a set, not an answer, and
 
 ## Known blockers
 
-- ⛔ **★ Open North's Represent API is DOWN and has been since at least 2026-08-07.** `represent.opennorth.ca` serves a Let's Encrypt certificate issued to `CN=represent-tempeh.opennorth.ca` (hostname mismatch) that **expired 2026-08-07**; ignoring TLS entirely, the origin returns **HTTP 502** from `nginx/1.10.3 (Ubuntu)`. Impact: `resolvePostcode()` catches the `fetch` throw and raises `PostcodeUpstreamError('unavailable')`, so the API degrades gracefully rather than 500ing — **but the stale-while-revalidate net is nearly empty**: `public.postcode_cache` holds **8 postcodes** (6 fresh, 2 served stale). Every other postcode in Canada currently fails the lookup. All roster ingestion (`ingest-mps`, `ingest-mlas`, `ingest-councils`) and `scripts/generate_muni_sets.py` are also blocked. This raises the priority of the whole workstream from "improve accuracy" to "replace a failed dependency", and it means **no agent should plan a re-probe of Represent as a fallback source**.
+- ✅ **RESOLVED by retirement, 2026-08-27.** The mirror is gone, not waiting: roster and
+  boundary ingestion removed, schedules disabled (migration `0087`), and
+  `trg_block_mirror_boundary` (`0105`) refuses its signature at the DB. Postcode
+  resolution moved to the StatCan National Address Register we hold ourselves
+  (migration `0062`) — deliberately with **no** Open North fallback, because a
+  fallback exercised only during an outage is a fallback that fails during one.
+  The original blocker, kept for the reasoning:
+  ~~⛔ **★ Open North's Represent API is DOWN and has been since at least 2026-08-07.**~~ `represent.opennorth.ca` serves a Let's Encrypt certificate issued to `CN=represent-tempeh.opennorth.ca` (hostname mismatch) that **expired 2026-08-07**; ignoring TLS entirely, the origin returns **HTTP 502** from `nginx/1.10.3 (Ubuntu)`. Impact: `resolvePostcode()` catches the `fetch` throw and raises `PostcodeUpstreamError('unavailable')`, so the API degrades gracefully rather than 500ing — **but the stale-while-revalidate net is nearly empty**: `public.postcode_cache` holds **8 postcodes** (6 fresh, 2 served stale). Every other postcode in Canada currently fails the lookup. All roster ingestion (`ingest-mps`, `ingest-mlas`, `ingest-councils`) and `scripts/generate_muni_sets.py` are also blocked. This raises the priority of the whole workstream from "improve accuracy" to "replace a failed dependency", and it means **no agent should plan a re-probe of Represent as a fallback source**.
 - ⛔ **Click-through licence agreements.** Elections Ontario confirmed. Hard stop per standing instruction 3.
 - ⚠ **Class B "distributed with permission" rows** (NS provincial 55, NT territorial 19, 8 municipalities) have no licence flowing to us. Redistribution via `/api/public/v1/boundaries/*` is unlicensed today.
 - ~~⚠ **GeoNB clause II.5 flow-down** is unimplemented on the public API.~~ ✅ **Resolved 2026-08-18 — not a blocker.** The clause comes from a 2012 GeoNB agreement superseded in 2015; current GeoNB downloads carry the flow-down-free GeoNB Open Data Licence v1.0. See [`new-brunswick.md`](./new-brunswick.md) § Terms / Licensing. Two operator sign-off items remain (which attribution string; ratifying the supersession reading), neither of which blocks the NB load.
@@ -674,37 +706,49 @@ Build-phase prerequisites, in order:
 operator has one place to act from. Detail stays in each dossier's
 `## Research-handoff items`.
 
+★ **Status columns added 2026-09-01.** The register shipped without one, so after the build
+there was no way to ask "which of these are still open?" without re-reading every dossier —
+closure was recorded, when it was recorded at all, by editing a row's prose in place. Every
+`✅` below was **verified against the database or the migration**, not inferred from a commit
+message; the reasoning is kept because it is why the item existed.
+
+| status | meaning |
+|---|---|
+| ✅ | closed, verified |
+| ⚠ | still open |
+| ⛔ | still open **and** blocking |
+
 ### A. Blocks work until a human acts
 
-| # | Item | Jurisdiction | Why it blocks |
-|---|---|---|---|
-| A1 | ⛔ **Email Elections Nova Scotia for licence terms.** Their only machine-readable surface is an internal AGOL service with `licenseInfo: null`; the NS open-data portal has no provincial electoral product. Research cannot unlock this. | NS | No open route exists at all |
-| A2 | ⛔ **No open licence — decide internal-only vs. pursue permission.** SK publishes bare copyright with no terms page (404); MB publishes "All rights reserved" + disclaimer. If only one agency is contacted, make it MB — an affirmative reservation beats silence. | SK, MB | Redistribution not cleared |
-| A3 | ⛔ **Pin the 2025 Yukon dissolution date.** Every Yukon government URL returns Cloudflare 403. Bounded to 2024-11-21 < d < 2025-11-03, likely early October. **One browser page load fixes it.** ⚠ Do not substitute the assent date — that asserts the 21-district map governed for 11 months when Yukon had 19 members. | YT | Blocks the YT build |
-| A4 | **Accept (or decline) the Elections Ontario "Open Use Data Product Licence Agreement."** Genuinely open — commercial use and redistribution explicit, no attribution clause. No agent may click "I Agree". ⚠ Clause 2 says acceptance is by "any use whatsoever", so the button may be navigation rather than contract formation — operator's call. | ON | Route A geometry for the pilot cutover |
-| A5 | **Accept or reject the NB supersession reading** (that the 2012 flow-down does not bind data taken from GeoNB today). A legal characterisation no agent should finalise. Fallback is cheap and identical in action. | NB | Low stakes, but unresolved |
+| # | Status | Item | Jurisdiction | Why it blocks |
+|---|---|---|---|---|
+| A1 | ⚠ **open** — build proceeded internal-only; NS still served publicly unlicensed (see B2) | ⛔ **Email Elections Nova Scotia for licence terms.** Their only machine-readable surface is an internal AGOL service with `licenseInfo: null`; the NS open-data portal has no provincial electoral product. Research cannot unlock this. | NS | No open route exists at all |
+| A2 | ⚠ **open** — SK/MB loaded and served internal-only; no agency contacted | ⛔ **No open licence — decide internal-only vs. pursue permission.** SK publishes bare copyright with no terms page (404); MB publishes "All rights reserved" + disclaimer. If only one agency is contacted, make it MB — an affirmative reservation beats silence. | SK, MB | Redistribution not cleared |
+| A3 | ✅ **closed** — pinned to **2025-10-02**, inside the predicted early-October window; 2025 generation live from 10-03 with 21 districts (`elections-yukon`) | ⛔ **Pin the 2025 Yukon dissolution date.** Every Yukon government URL returns Cloudflare 403. Bounded to 2024-11-21 < d < 2025-11-03, likely early October. **One browser page load fixes it.** ⚠ Do not substitute the assent date — that asserts the 21-district map governed for 11 months when Yukon had 19 members. | YT | Blocks the YT build |
+| A4 | ✅ **closed** — ON geometry loaded, 124/124 authoritative (`elections-ontario`) | **Accept (or decline) the Elections Ontario "Open Use Data Product Licence Agreement."** Genuinely open — commercial use and redistribution explicit, no attribution clause. No agent may click "I Agree". ⚠ Clause 2 says acceptance is by "any use whatsoever", so the button may be navigation rather than contract formation — operator's call. | ON | Route A geometry for the pilot cutover |
+| A5 | ✅ **closed** — NB loaded, 49 provincial + 312 municipal, all authoritative | **Accept or reject the NB supersession reading** (that the 2012 flow-down does not bind data taken from GeoNB today). A legal characterisation no agent should finalise. Fallback is cheap and identical in action. | NB | Low stakes, but unresolved |
 
 ### B. Live defects in production, independent of the build
 
-| # | Item | Evidence |
-|---|---|---|
-| B1 | ⛔ **NWT returns wrong MLAs today.** 5 of 19 districts misassigned; held `Great Slave` covers 30.6% of the real district, 69.3% of it sits inside held `frame-lake`. Fix is an in-place geometry update — no re-key, no FK moves. | Measured, [`northwest-territories.md`](./northwest-territories.md) |
-| B2 | ⛔ **We are serving 55 NS boundaries publicly with no licence.** Survived the 2026-06-02 public-dump teardown because the boundaries endpoints stayed live. Options: leave pending, or suppress NS from the public endpoints (a service change). | [`nova-scotia.md`](./nova-scotia.md) |
-| B3 | ⛔ **Municipal lookup returns a set, not an answer.** Verified: Mississauga Civic Centre → 4 overlapping polygons (ward twice under incompatible IDs, city CSD, Peel census *division* at 1,256 km²). `lookupBoundariesAtPoint` picks non-deterministically. | Verified live by the coordinator |
-| B4 | ⚠ **Five NB MLA rows carry HTML-entity-encoded names** duplicating five clean rows — 55 active for 49 seats. Invisible today only because 27 NB districts return nothing. **Must be cleaned before the boundary cutover**, or fixing boundaries surfaces five double-MLA districts and reads as a regression. | Verified by the coordinator |
-| B5 | ⚠ **`jurisdiction_sources.seats` is wrong for NS** (55, should be 56 since 2026-04-09) and `last_verified_at` is false comfort — `refresh-coverage-stats` bumps the timestamp without validating seat counts. | Verified by the coordinator |
-| B6 | ⚠ **Doly Begum has two active `politicians` rows**; belongs to the duplicate-politician audit, not here. | Verified by the coordinator |
+| # | Status | Item | Evidence |
+|---|---|---|---|
+| B1 | ✅ **closed** — geometry corrected in place (migration `0075`); NT now 19/19 authoritative (`elections-nwt`) | ⛔ **NWT returns wrong MLAs today.** 5 of 19 districts misassigned; held `Great Slave` covers 30.6% of the real district, 69.3% of it sits inside held `frame-lake`. Fix is an in-place geometry update — no re-key, no FK moves. | Measured, [`northwest-territories.md`](./northwest-territories.md) |
+| B2 | ⛔ **still open** — NS provincial + municipal geometry is still served through `/api/public/v1/boundaries/*` with no licence flowing to us. The cutover changed the *source*, not the *terms* | ⛔ **We are serving 55 NS boundaries publicly with no licence.** Survived the 2026-06-02 public-dump teardown because the boundaries endpoints stayed live. Options: leave pending, or suppress NS from the public endpoints (a service change). | [`nova-scotia.md`](./nova-scotia.md) |
+| B3 | ✅ **closed** — PIP integrity `tested=1316 ok=1316 ambiguous=0 lost=0`; sentinel `municipal_problems=0` | ⛔ **Municipal lookup returns a set, not an answer.** Verified: Mississauga Civic Centre → 4 overlapping polygons (ward twice under incompatible IDs, city CSD, Peel census *division* at 1,256 km²). `lookupBoundariesAtPoint` picks non-deterministically. | Verified live by the coordinator |
+| B4 | ✅ **closed** — NB now 49 active for 49 seats, **0** entity-encoded names | ⚠ **Five NB MLA rows carry HTML-entity-encoded names** duplicating five clean rows — 55 active for 49 seats. Invisible today only because 27 NB districts return nothing. **Must be cleaned before the boundary cutover**, or fixing boundaries surfaces five double-MLA districts and reads as a regression. | Verified by the coordinator |
+| B5 | ✅ **closed** — `jurisdiction_sources.seats` for NS is **56**. ⚠ the `last_verified_at` criticism still stands; see `Lander.tsx:143` | ⚠ **`jurisdiction_sources.seats` is wrong for NS** (55, should be 56 since 2026-04-09) and `last_verified_at` is false comfort — `refresh-coverage-stats` bumps the timestamp without validating seat counts. | Verified by the coordinator |
+| B6 | ✅ **closed** — one active Doly Begum row | ⚠ **Doly Begum has two active `politicians` rows**; belongs to the duplicate-politician audit, not here. | Verified by the coordinator |
 
 ### C. Cross-cutting decisions — settle once, before the first loader
 
-| # | Decision | Raised by |
-|---|---|---|
-| C1 | **A French-name column on `constituency_boundaries`.** MB publishes `ED_French`, federal ships `ED_NAMEF`, NB has 20 distinct French names, QC needs it. Nowhere to put it today; we currently discard it. | MB, federal, NB, QC |
-| C2 | **`boundary_kind` must be three-valued** — `district` / `borough` / `municipality`. Quebec's arrondissement mayors are real elected officials in our data. Speccing from Ontario alone yields two values and an immediate re-open. | municipal-QC |
-| C3 | **A GIST index on `constituency_boundaries.boundary`.** Only `boundary_simple` and `centroid` are indexed, yet every PIP uses full `boundary` — a seq scan over ~1,900 MultiPolygons per lookup. Worth doing regardless of this project. | impact |
-| C4 | **Should the lookup return "we don't know" rather than nothing?** Falls out of the measurement: 33–71% of FSAs cross a federal riding, and rural FSA fallback is only 68.46% accurate. Silently picking one is the failure mode we are trying to remove. | geocoding, impact |
-| C5 | **Dash normalisation** (em-dash vs hyphen in district names) is cross-cutting, not per-jurisdiction. | QC |
-| C6 | **Person-ID columns are a separate migration** from boundary work — `ourcommons_person_id` (federal), `yt_mla_slug`, SK `Constitu_1`. Different problem, no shared failure modes; coupling them makes the boundary cutover wait on roster scraping. | federal, YT, SK, X2 |
+| # | Status | Decision | Raised by |
+|---|---|---|---|
+| C1 | ✅ **done** — `constituency_boundaries.name_fr` (migration `0061`) | **A French-name column on `constituency_boundaries`.** MB publishes `ED_French`, federal ships `ED_NAMEF`, NB has 20 distinct French names, QC needs it. Nowhere to put it today; we currently discard it. | MB, federal, NB, QC |
+| C2 | ✅ **done** — three-valued, and all three are in use (`district` / `borough` / `municipality`) | **`boundary_kind` must be three-valued** — `district` / `borough` / `municipality`. Quebec's arrondissement mayors are real elected officials in our data. Speccing from Ontario alone yields two values and an immediate re-open. | municipal-QC |
+| C3 | ✅ **done** — `idx_boundaries_geo_full` GIST on full `boundary` (migration `0061`) | **A GIST index on `constituency_boundaries.boundary`.** Only `boundary_simple` and `centroid` are indexed, yet every PIP uses full `boundary` — a seq scan over ~1,900 MultiPolygons per lookup. Worth doing regardless of this project. | impact |
+| C4 | ⚠ **partly** — postcode answers carry `approximate` and a `fsa_derived` source, so the lookup can say it is guessing. The *boundary* lookup still returns a district or nothing | **Should the lookup return "we don't know" rather than nothing?** Falls out of the measurement: 33–71% of FSAs cross a federal riding, and rural FSA fallback is only 68.46% accurate. Silently picking one is the failure mode we are trying to remove. | geocoding, impact |
+| C5 | ⚠ **open** — handled ad hoc per loader; no cross-cutting normalisation | **Dash normalisation** (em-dash vs hyphen in district names) is cross-cutting, not per-jurisdiction. | QC |
+| C6 | ✅ **decided as written** — kept separate; the boundary cutover did not wait on roster scraping. ⚠ NB/NL/PE/YT still have no ID column, which is exactly the 109 rows `roster_frozen` now reports | **Person-ID columns are a separate migration** from boundary work — `ourcommons_person_id` (federal), `yt_mla_slug`, SK `Constitu_1`. Different problem, no shared failure modes; coupling them makes the boundary cutover wait on roster scraping. | federal, YT, SK, X2 |
 
 ### D. Redistributions already in flight — the build must absorb these
 
@@ -757,14 +801,27 @@ technique already recovered two generations written off as unobtainable.
 - [x] Licence matrix consolidated from all 19 fragments (2026-08-18) — ✅ 14 sources cleared, ⛔ 4 provinces with no licence route
 - [x] Handoff register consolidated — 99 items triaged into A/B/C/D
 - [x] Parent index updated ([`../README.md`](../README.md))
-- [x] `_matrix/` fragments — 19 of 20; only `impact` outstanding (2026-08-18)
+- [x] `_matrix/` fragments — **21 of 21** (`impact` written 2026-09-01; the original "19 of 20" undercounted the dossier set, which is 21)
 - [x] Source-URL re-verification sweep — 159/182 reachable, 7 genuine 404s (2026-08-18)
 - [x] `CLAUDE.md` repo-map bullet updated to mention `cities/` and `boundaries/` (2026-08-18)
 - [x] `docs/plans/sovereignty-runtime-deps.md` row 7 appended (2026-08-18) — original PCCF nomination kept struck-through with why it was wrong, per that file's audit-trail rule
-- [ ] Build plan written — **deliberately out of scope for this research phase**
+- [x] Build plan written — **and executed.** Migrations `0064`–`0121`, merged to `main` 2026-08-28. Research-phase scoping note superseded: ~~deliberately out of scope for this research phase~~
+- [x] Handoff register given status columns; every ✅ verified against the DB or the migration (2026-09-01)
+- [x] Counts moved out of prose into generated [`PROGRESS.md`](./PROGRESS.md) via `boundary-progress` (2026-09-01)
+- [x] Corpus put under version control — `/docs/` ignore rule rewritten contents-not-directory (2026-09-01)
+- [x] `_matrix/impact.md` written (2026-09-01) — completes the set at **21/21**, one fragment per dossier
+- [ ] ⚠ **Re-run [`impact.md`](./impact.md) against the authoritative geometry.** Its 9.15% / 12.61% headlines measured the mirror and are quoted in several places as though current
+- [ ] ⛔ **B2 — NS geometry is still served publicly with no licence.** The cutover changed the source, not the terms
+- [ ] Municipal geometry remainder — see [`PROGRESS.md`](./PROGRESS.md) § *The named remainder*; do not hand-copy the count here
 
 ## Editing convention
 
-Same as the provincial and municipal dossiers ([`../README.md`](../README.md) "Editing convention"): **one fact in one file.** Cross-cutting findings — methodology, licence classes, the reconciliation strategy, traps that span jurisdictions — live here. Per-jurisdiction findings live in the dossier. When you complete or change something, update your dossier's `## Status` checkbox list *and* your row in the Licence and Coverage matrices above.
+Same as the provincial and municipal dossiers ([`../README.md`](../README.md) "Editing convention"): **one fact in one file.** Cross-cutting findings — methodology, licence classes, the reconciliation strategy, traps that span jurisdictions — live here. Per-jurisdiction findings live in the dossier. When you complete or change something, update your dossier's `## Status` checkbox list *and* your row in the Licence matrix above.
+
+⛔ **Do not update the Coverage matrices** — they are a frozen pre-cutover record, and the live
+counts are generated. Run `boundary-progress` in the same change that lands a cutover and commit
+[`PROGRESS.md`](./PROGRESS.md) alongside it. The reason this rule exists: the coverage matrices
+were hand-maintained under the old convention and were wrong four days after the programme
+shipped, in a directory git could not see.
 
 Superseded findings are **struck through, not deleted**. `UNTESTED — probe during build` beats a plausible invention. If you could not crack a jurisdiction, say so in your status snapshot — no silent omissions.

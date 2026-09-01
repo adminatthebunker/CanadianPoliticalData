@@ -178,6 +178,19 @@ Multi-match rates (share of sampled addresses matching >1 of our polygons): NT 5
 
 ## Status
 
+> ⛔ **This study measured a database that no longer exists.** Reconciled 2026-09-01.
+>
+> The 9.15% no-answer and 12.61% any-error headlines were measured 2026-08-18 against the
+> Open North mirror, and they are quoted elsewhere — including in `overview.md` and the
+> parent `README.md` — as though they were current. Every jurisdiction has since been moved
+> to authoritative geometry (migrations `0064`–`0121`), which is precisely the change the
+> study existed to justify.
+>
+> ⚠ **Re-running this is genuinely worth doing**, and it is the honest way to state what the
+> programme bought: the same 32,500-address NAR sample, same seed, against the new geometry.
+> Until then, treat every figure in this file as a **pre-cutover baseline**, never as a
+> current error rate.
+
 - [x] Address-weighted national frame built from NAR `202606` — 16,157,303 addresses
 - [x] Sample drawn — 32,500 addresses, 2,500 per jurisdiction, seed 2026
 - [x] Phase 1 provincial no-answer measured for all 13 jurisdictions
