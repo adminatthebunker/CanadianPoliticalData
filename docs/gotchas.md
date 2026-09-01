@@ -236,6 +236,51 @@ no subprocess output to find. Check `scanner_jobs.error`, which carries the real
 
 ## Electoral boundaries & municipal rosters
 
+### Do not hand-maintain a boundary or roster count in prose
+**Why:** It was tried and it failed inside four days. The coverage matrices in
+`docs/research/boundaries/overview.md` were the programme's record; the build ran for ten
+days without touching them, and because `/docs/` excluded the *directory* — so git never
+descended into it — there was no diff in which anyone could notice. The header was still
+asserting "every one of the 1,949 boundary rows is still an Open North mirror" after
+migration `0105` had installed a trigger refusing exactly those rows.
+**How to apply:** Run `boundary-progress` and commit `docs/research/boundaries/PROGRESS.md`
+**in the same change that lands a cutover**. Prose keeps the reasoning — licences, traps,
+vintage evidence — and links to the generated file for any number. If you catch yourself
+typing a district count into a `.md`, that is the smell.
+
+### Do not use `source_id LIKE 'opennorth:%'` as a staleness measure
+**Why:** It measures **provenance**, not freshness, and over-reports by ~948 rows. A
+politician carrying a native legislature ID (convention #1) is matched by exact FK from its
+own legislature's pipeline every day; the `opennorth:` prefix records only where the row was
+*first* written. All 332 federal MPs it counted as "frozen" are refreshed daily. The
+headline said 1,057 federal/provincial frozen; the honest figure is **109**.
+**How to apply:** Test `HAS_NATIVE_ID` (`boundary_coverage.py`) alongside the prefix. ⚠ The
+result is a **refresh-path** classification, not a freshness one — nothing on `politicians`
+records when we last *confirmed* a person still holds a seat, and `updated_at` only moves
+when a field changes, so a stable roster looks stale and a mass sweep looks fresh. Municipal
+is the exception: no council official has a native ID, so there the prefix does mean frozen.
+
+### Do not treat `authority IS NULL` on a live boundary row as work to do
+**Why:** A superseded generation stays live until the day its successor takes force.
+Québec's 2017 provincial map is 124 mirror rows answering lookups **right now, correctly**,
+with an authoritative 127-district successor already loaded and dated 2026-10-05 (migration
+`0117`). Counting it as backlog invents 124 rows of work; counting it as done hides that
+today's Québec provincial answers are mirror geometry.
+**How to apply:** Classify three ways, as `boundary_progress.py` does — authoritative,
+mirror-with-a-dated-successor, and mirror-with-nothing-queued. Only the third is a backlog.
+
+### Do not count boundary rows with `effective_to IS NULL`
+**Why:** That is not the live set. It counts **dormant future** generations as though they
+were in force — seven Ontario 2026 ward maps and Québec's 2026 provincial map are loaded and
+waiting right now — and it drops generations that are end-dated but have not expired. It is
+the same defect that had six sentinel checks failing open, and it produced a wrong figure
+twice while the tracker was being written.
+**How to apply:** `effective_from <= CURRENT_DATE AND (effective_to IS NULL OR effective_to
+>= CURRENT_DATE)`. Use `LIVE_WINDOW` from `boundary_progress.py`. ⚠ Also exclude
+`boundary_kind = 'municipality'` when counting seats — those rows are city outlines, and
+counting them alongside districts made 34 sets look "partially replaced" when each had
+exactly one authoritative row, the outline, and none of its districts.
+
 **Do not ship a municipal boundary cutover without re-attaching the roster.**
 A cutover renames the `source_set` and re-keys `constituency_id`. The roster is
 a different table joined on that id and nothing in the cutover touches it, so
