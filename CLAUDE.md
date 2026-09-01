@@ -123,7 +123,7 @@ Application code **always qualifies** `private.X` in SQL. Never alias, never lea
 
 Private `/admin` surface that lets the operator queue scanner jobs, set cron schedules, and watch a stats dashboard. Read-only public site is unaffected. Admin access is the user-session flow with a DB role flag (`users.is_admin = true`); see User accounts below for the auth fabric.
 
-Auth detail (per-request `is_admin` re-read), the queue→daemon→subprocess execution pipeline, daily-ingest schedule seeding, the two-place `COMMAND_CATALOG` / `jobs_catalog.py` whitelist, and the file map live in the **`admin-panel` skill** at `.claude/skills/admin-panel/SKILL.md` — that skill auto-loads when you ask about scanner jobs, schedules, or the admin panel. Guardrails: `docs/gotchas.md` § Admin panel & job queue and § Auth & sessions.
+Auth detail (per-request `is_admin` re-read), the queue→daemon→subprocess execution pipeline, daily-ingest schedule seeding, the `COMMAND_CATALOG` / `jobs_catalog.py` whitelist (⛔ two files **plus a `docker compose restart scanner-jobs`** — the daemon binds the catalog at import), and the file map live in the **`admin-panel` skill** at `.claude/skills/admin-panel/SKILL.md` — that skill auto-loads when you ask about scanner jobs, schedules, or the admin panel. Guardrails: `docs/gotchas.md` § Admin panel & job queue and § Auth & sessions.
 
 ## User accounts
 

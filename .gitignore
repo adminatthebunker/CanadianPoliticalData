@@ -87,7 +87,18 @@ mkdocs/site/*
 # Internal-facing docs/ (agent + operator notes, runbooks, plans). Public
 # docs live under mkdocs/docs/ — do NOT match those. Leading slash anchors
 # this rule to the repo root.
-/docs/
+#
+# ⛔ Exclude the CONTENTS, not the directory. `/docs/` excluded the directory
+# itself, and git never descends into an excluded directory, so a negation
+# beneath it can never fire — the same trap already documented for
+# data/boundaries/** below. The cost was concrete: the entire 43-file
+# electoral-boundary research corpus, plus the generated progress tracker,
+# lived for weeks with no history, no diff and no authorship, and its coverage
+# matrices went stale within four days of the programme shipping with nothing
+# to show it. Runbooks and plans stay ignored; the research corpus does not.
+/docs/**
+!/docs/**/
+!/docs/research/**/*.md
 
 # Offsite backup replication helper — host/path-specific infra (homelab SSH
 # alias, rsync dest). Kept local-only, out of version control. backup-database.sh

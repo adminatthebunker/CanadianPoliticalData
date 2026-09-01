@@ -200,12 +200,13 @@ async def check_boundary_coverage(
         SELECT level,
                CASE WHEN level = 'federal' THEN 'CA'
                     ELSE province_territory END AS ju,
-               count(*) AS n,
+               count(*) FILTER (WHERE NOT """ + HAS_NATIVE_ID + """) AS n,
                (now()::date - max(updated_at)::date) AS stale_days
           FROM politicians
          WHERE is_active AND level IN ('federal', 'provincial')
            AND source_id LIKE 'opennorth:%'
          GROUP BY 1, 2
+        HAVING count(*) FILTER (WHERE NOT """ + HAS_NATIVE_ID + """) > 0
         """
     ):
         frozen_by[(f["level"], f["ju"])] = (f["n"], f["stale_days"])
@@ -285,6 +286,34 @@ async def check_boundary_coverage(
 # be ward-elected are checked.
 
 # Offices that are city-wide by definition -> must sit on a `municipality` row.
+# ── Replacement-path classification ──────────────────────────────────────────
+#
+# ★ `source_id LIKE 'opennorth:%'` is a claim about PROVENANCE, not about
+#   staleness, and using it as the freeze metric over-counts by ~948 rows.
+#   A re-key moves the prefix (`on_municipal_roster.py:869`), but the mirror
+#   was never the only way a row could get refreshed: a politician carrying a
+#   native legislature ID under CLAUDE.md convention #1 is matched by exact FK
+#   from its own legislature's pipeline every day, and the stale prefix is
+#   nothing but the provenance of the row's FIRST write. Measured 2026-09-01:
+#   all 332 "frozen" federal MPs, and every provincial row in QC/ON/BC/AB/SK/
+#   MB/NS/NT, refresh on their own schedule.
+#
+# ⛔ Absence of a native ID is a proxy for "no replacement path", not a
+#   measurement of staleness. Nothing on `politicians` records WHEN we last
+#   confirmed a person still holds a seat — `updated_at` only moves when a
+#   field actually changes, so a stable roster looks stale and a mass sweep
+#   looks fresh. `politician_changes.detected_at` is the better proxy where one
+#   is needed (see FrozenMunicipalRoster.describe). Do not read these buckets
+#   as freshness.
+HAS_NATIVE_ID = """(
+       openparliament_slug IS NOT NULL OR nslegislature_slug IS NOT NULL
+    OR ola_slug IS NOT NULL OR ola_member_id IS NOT NULL
+    OR lims_member_id IS NOT NULL OR qc_assnat_id IS NOT NULL
+    OR ab_assembly_mid IS NOT NULL OR mb_assembly_slug IS NOT NULL
+    OR sk_assembly_slug IS NOT NULL OR nt_mla_slug IS NOT NULL
+)"""
+
+
 CITY_WIDE_OFFICES = (
     "Mayor", "Maire", "Lord Mayor", "Maire de la Ville de Montréal",
     "Deputy Mayor", "Councillor at Large", "Commissioner",
@@ -909,9 +938,18 @@ async def check_municipal_roster_freeze(db: Database) -> list[FrozenMunicipalRos
     ⚠ Advisory by construction. A frozen roster is not a corruption — the rows
     are the last thing the mirror said and they are still internally
     consistent. It is a CURRENCY claim the dataset should not be making, and
-    the fix is a replacement ingester per province, not a repair. Québec is the
-    only province that has one (MAMH's election result, source prefix
-    `mamh-qc:`); everywhere else is 100% frozen.
+    the fix is a replacement ingester per province, not a repair. TWO provinces
+    now have one: Québec (MAMH's election result, `mamh-qc:`) and Ontario
+    (AMO's per-cycle API, `amo-on:`, shipped 2026-08-28). Everywhere else is
+    100% frozen.
+
+    ★ Unlike the federal/provincial count in check_boundary_coverage(), the
+    prefix here really does mean frozen. That count excludes rows carrying a
+    native legislature ID (HAS_NATIVE_ID), because those refresh by exact FK
+    from their own legislature every day and the prefix is only the provenance
+    of their first write. NO municipal official has such an ID — convention #1
+    covers legislatures, not councils — so the municipal bucket has no
+    equivalent escape hatch and `frozen` is the honest number.
     """
     return [
         FrozenMunicipalRoster(

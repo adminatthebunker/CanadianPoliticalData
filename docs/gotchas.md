@@ -48,6 +48,30 @@ Read this before any non-trivial change to a listed area. The structure mirrors 
 **Why:** The queue runs commands as the scanner image — unrestricted command execution is RCE-equivalent.
 **How to apply:** Every admin-submitted command goes through the whitelist in `services/scanner/src/jobs_catalog.py`. `build_cli_args` validates args against a schema before any subprocess spawn. The frontend's `COMMAND_CATALOG` (in `services/api/src/routes/admin.ts`) must stay in sync with the worker's catalog — if they diverge, the worker refuses with `unknown command`.
 
+### Do not add a catalog entry without restarting `sw-scanner-jobs`
+**Why:** The two-place rule is really a **three-step** rule, and the missing step fails in
+a way that accuses the two files that are correct. `jobs_worker.py:38` binds the catalog
+with a module-level `from .jobs_catalog import build_cli_args, get_command`, so the dict
+is fixed at process start. The `./services/scanner/src:/app/src` bind mount keeps the
+*file* current but cannot rebind a *running* process's import. The job then fails as
+`unknown command in catalog: <name>` — which reads exactly like a `jobs_catalog.py` /
+`admin.ts` divergence, so the natural response is to re-check two files that already
+agree.
+
+`reattach-municipal-roster` was lost this way: the entry was committed 2026-08-28 10:02,
+the daemon had started 2026-08-27 00:05, and the job failed **5 runs out of 5** — it had
+never once succeeded — silently removing the only automated defence against a boundary
+cutover severing its council. ★ Same shape as the 2026-08-23 mirror regression: a
+scanner-family container executing code older than the guard meant to stop it. There the
+stale layer was the image; here the mount was already right and the stale layer was the
+process lifetime.
+
+**How to apply:** After editing `jobs_catalog.py`, run `docker compose restart
+scanner-jobs`, then queue the new command once with `--dry-run` and confirm it reaches
+`succeeded`. A `failed` row with a **NULL `exit_code`** and empty `stdout_tail`/
+`stderr_tail` is the signature — the worker refused before spawning anything, so there is
+no subprocess output to find. Check `scanner_jobs.error`, which carries the real reason.
+
 ## Database, migrations, schema
 
 ### Do not edit applied migrations

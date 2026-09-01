@@ -253,6 +253,17 @@ COMMANDS: dict[str, dict[str, Any]] = {
              "help": "Report without writing."},
         ],
     },
+    "boundary-progress": {
+        "description": "Regenerate docs/research/boundaries/PROGRESS.md, the generated tracker for the boundary + Open North replacement programme. Counts are derived from the DB so they cannot drift: geometry from constituency_boundaries.authority (NULL until a set is cut over), roster from whether a row has any refresh path at all. ★ Run it in the same change that lands a cutover — the hand-maintained coverage matrices it replaces were wrong within four days of the programme shipping, and because /docs/ was gitignored there was no diff to notice it in. Stamped with a DATE not a timestamp, so two runs on the same day against an unchanged database produce a byte-identical file and `git diff` shows only real movement. Writes to the repo working tree; it does not commit.",
+        "cli": "boundary-progress",
+        "category": "maintenance",
+        "args": [
+            {"name": "out", "type": "str", "required": False,
+             "help": "Where to write. Default docs/research/boundaries/PROGRESS.md."},
+            {"name": "stdout", "type": "bool", "required": False,
+             "help": "Print instead of writing. Use to preview a diff."},
+        ],
+    },
     "check-boundary-coverage": {
         "description": "Sentinel: does every jurisdiction's electoral geography still add up? Compares current district count against the agency seat count, roster size against seats, unattached sitting members, orphaned constituency_ids, and total-area drift against a recorded baseline. Exits non-zero (job shows FAILED) on any breach. NOTE a member SHORTFALL is a vacancy and is reported, not failed (Ontario legitimately sits 2 short); only an EXCESS is a breach, because that means duplicate roster rows — the defect that had BC serving two MLAs for five districts. Added after the 2026-08-19 boundary programme, in which four jurisdictions had a perfect district count over wrong or incomplete geometry.",
         "cli": "check-boundary-coverage",

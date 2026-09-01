@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+from pathlib import Path
 from typing import Optional
 
 import click
@@ -4371,6 +4372,46 @@ def cmd_check_boundary_coverage(ctx: click.Context, no_area: bool) -> None:
                 f"{[m.kind for m in muni]}. A district count that matches its "
                 f"seat count proves nothing on its own — read the lines above."
             )
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
+@cli.command("boundary-progress")
+@click.option("--out", default="docs/research/boundaries/PROGRESS.md",
+              show_default=True,
+              help="Where to write the generated tracker.")
+@click.option("--stdout", is_flag=True,
+              help="Print instead of writing. Use to preview a diff.")
+@click.pass_context
+def cmd_boundary_progress(ctx: click.Context, out: str, stdout: bool) -> None:
+    """Regenerate the boundary + Open North replacement progress tracker.
+
+    ★ Run this in the same change that lands a cutover. The programme's
+    coverage matrices were hand-maintained and every count in them was wrong
+    four days after it shipped; the fix is that nobody types the counts.
+
+    ⚠ Stamped with a DATE, not a timestamp, deliberately. Two runs on the same
+    day against an unchanged database produce a byte-identical file, so `git
+    diff` shows only real movement. A generated file that churns on every run
+    is a generated file whose diff nobody reads.
+    """
+    from datetime import date
+    from .legislative.boundary_progress import render_progress
+
+    async def _wrap(db: Database) -> None:
+        md = await render_progress(db, date.today().isoformat())
+        if stdout:
+            click.echo(md)
+            return
+        path = Path(out)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        before = path.read_text(encoding="utf-8") if path.exists() else None
+        path.write_text(md, encoding="utf-8")
+        state = ("unchanged" if before == md
+                 else ("created" if before is None else "UPDATED"))
+        console.print(
+            f"[green]boundary-progress[/green]: {state} {path} "
+            f"({len(md.splitlines())} lines)"
+        )
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 
 

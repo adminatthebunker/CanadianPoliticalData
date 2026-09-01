@@ -246,6 +246,13 @@ services:
 
   # ── Scanner (run-on-demand) ───────────────────────────────────────
   scanner:
+    # The image runs as uid 1001 (scanner) but the repo bind mounts are owned
+    # by the host user (uid/gid 1000) with group write. Joining that group lets
+    # `boundary-progress` write docs/research/boundaries/PROGRESS.md without
+    # changing `user:` — which would silently re-own everything else the
+    # scanner writes (assets/, data/, media-cache/) on the next run.
+    group_add:
+      - "${GID:-1000}"
     build:
       context: ./services/scanner
       dockerfile: Dockerfile
@@ -290,6 +297,11 @@ services:
       # so the refreshed _muni_sets_generated.py persists to the host repo.
       - ./scripts:/app/scripts:ro
       - ./services/scanner/src:/app/src
+      # ./docs is mounted so `boundary-progress` can write the generated
+      # tracker at docs/research/boundaries/PROGRESS.md from a queued admin
+      # job. Without it the command works interactively and fails in the
+      # panel — the one place an operator would actually reach for it.
+      - ./docs:/app/docs
       # Locally-mirrored binary assets (politician portraits, etc).
       # Written by backfill-politician-photos; served RO by nginx.
       - assets:/assets
@@ -317,6 +329,13 @@ services:
   # Separate from scanner-cron because that is a fixed-schedule bash
   # loop — the DB-driven admin queue is its own concern.
   scanner-jobs:
+    # The image runs as uid 1001 (scanner) but the repo bind mounts are owned
+    # by the host user (uid/gid 1000) with group write. Joining that group lets
+    # `boundary-progress` write docs/research/boundaries/PROGRESS.md without
+    # changing `user:` — which would silently re-own everything else the
+    # scanner writes (assets/, data/, media-cache/) on the next run.
+    group_add:
+      - "${GID:-1000}"
     build:
       context: ./services/scanner
       dockerfile: Dockerfile
@@ -368,6 +387,11 @@ services:
       # reading scripts/seeds/bc-committee-meetings.json) can find them.
       - ./scripts:/app/scripts:ro
       - ./services/scanner/src:/app/src
+      # ./docs is mounted so `boundary-progress` can write the generated
+      # tracker at docs/research/boundaries/PROGRESS.md from a queued admin
+      # job. Without it the command works interactively and fails in the
+      # panel — the one place an operator would actually reach for it.
+      - ./docs:/app/docs
       - assets:/assets
     entrypoint: ["python", "-m", "src", "jobs-worker"]
     restart: unless-stopped
