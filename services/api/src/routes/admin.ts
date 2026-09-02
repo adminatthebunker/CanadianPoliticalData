@@ -151,6 +151,20 @@ const COMMAND_CATALOG = [
       { name: "cycle", type: "int", required: false, help: "AMO election cycle: 2018, 2022 or 2026. Default 2026." },
     ],
   },
+  { key: "compare-bc-municipal-roster", category: "maintenance",
+    description: "READ-ONLY diff of CivicInfo BC's localelections.ca roster against what we hold, for all 12 BC councils at once. ★ BC is ONE province-wide endpoint, not twelve scrapes, and it has no ward column — correctly, because at-large is BC's statutory default under the Local Government Act and every BC member attaches to a single municipality polygon. Writes nothing. ⛔ Refuses three ways: a CANDIDATE list wearing a results URL (the AMO trap — nominations for 2026 close 2026-09-11 and results fill in progressively on election night), a superseded cycle, and a stale CSD-code table. ⚠ verify_mapping checks AREA, not name: our boundary table calls both Langley (City) and Langley (Township) 'Langley', so a transposition of those two codes passes every name check and only their 30x area difference separates them.",
+    args: [
+      { name: "year", type: "int", required: false, help: "Election cycle. Default: the most recent completed one." },
+    ],
+  },
+  { key: "apply-bc-municipal-roster", category: "maintenance",
+    description: "Write the BC municipal roster from CivicInfo BC. ⛔ THE COMPARE VERDICT IS THE AUTHORISATION — only councils reported `gap` or `diverge` are written; `extra` (we hold someone the authority does not) is REFUSED because that is either a retirement or a publisher omission and nothing here can tell them apart. ⛔ Also refuses a blanket write of an election more than 90 days old: measured on the 2022 cycle, 111 of 113 members still matched but BOTH remainders were cases where OUR data was MORE CURRENT than the authority, so a wholesale apply would have re-installed a councillor who left for federal politics and reverted a real replacement. Past that window it requires --council. Re-keys a sitting member rather than replacing them (socials/offices/websites stay attached) and refuses to insert when a same-named BC municipal row exists outside the re-key's scope, rather than creating a duplicate person. Dry run by default. Run reattach-municipal-roster afterwards.",
+    args: [
+      { name: "year", type: "int", required: false, help: "Election cycle." },
+      { name: "council", type: "str", required: false, help: "Limit to one council; REQUIRED for an election older than 90 days." },
+      { name: "apply", type: "bool", required: false, help: "Actually write. Default is a dry run." },
+    ],
+  },
   { key: "reattach-municipal-roster", category: "maintenance",
     description: "Re-link municipal rosters to geometry that a boundary cutover re-keyed underneath them. A cutover renames the source_set and re-keys constituency_id; the roster joins on that id and nothing in the cutover touches it, so every cutover silently severs its council. Found 2026-08-28: 142 sitting officials across 18 councils held a NULL constituency_id while their ward polygon sat right there (Calgary 14, Winnipeg 14, Welland 12, Fredericton 12, Edmonton 12, Regina 10). Matches a WHOLE COUNCIL at a time and picks the set GEOGRAPHICALLY — Ward 1..14 is covered identically by hamilton-wards and london-wards, so names only narrow the field and ST_Contains against the council municipality polygon decides. Refuses rather than guessing on a tie; see migration 0089, where a Gatineau councillor was attached to a Quebec City district 400 km away. Idempotent. Run after any municipal cutover.",
     args: [

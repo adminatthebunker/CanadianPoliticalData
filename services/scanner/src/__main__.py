@@ -4257,6 +4257,85 @@ def cmd_compare_on_municipal_roster(ctx: click.Context, cycle: int, councils) ->
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 
 
+@cli.command("compare-bc-municipal-roster")
+@click.option("--year", type=int, default=None,
+              help="Election cycle. Default: the most recent one that has happened.")
+@click.pass_context
+def cmd_compare_bc_municipal_roster(ctx: click.Context, year) -> None:
+    """READ-ONLY: diff CivicInfo BC's roster against what we hold.
+
+    ★ BC is one province-wide endpoint, not twelve scrapes, and it has no ward
+    column — correctly, because at-large is BC's statutory default and every
+    member attaches to one municipality polygon.
+
+    ⛔ Refuses a candidate list wearing a results URL (the AMO trap), a
+    superseded cycle, and a stale CSD-code table. Writes nothing.
+    """
+    from .legislative.bc_municipal_roster import compare_bc_municipal_roster
+
+    async def _wrap(db: Database) -> None:
+        st = await compare_bc_municipal_roster(db, year=year)
+        for p in st.problems:
+            console.print(f"[red]REFUSED[/red] {p}")
+        if st.problems:
+            raise SystemExit("compare-bc-municipal-roster: refused, see above")
+        for d in st.diffs:
+            colour = {"agree": "green", "gap": "yellow",
+                      "extra": "red", "diverge": "yellow"}[d.verdict]
+            console.print(
+                f"[{colour}]{d.verdict}[/{colour}] {d.label}: "
+                f"authority={d.authority} held={d.held} matched={d.matched}"
+            )
+            if d.only_authority:
+                console.print(f"    only in authority: {d.only_authority}")
+            if d.only_held:
+                console.print(f"    only held by us:   {d.only_held}")
+        if st.ragged_rows:
+            console.print(f"[yellow]note[/yellow] {st.ragged_rows} ragged row(s) rejected")
+        console.print(
+            f"compare-bc-municipal-roster: year={st.year} councils={st.councils} "
+            f"authority={st.authority_rows} held={st.held_rows} matched={st.matched}"
+        )
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
+@cli.command("apply-bc-municipal-roster")
+@click.option("--year", type=int, default=None, help="Election cycle.")
+@click.option("--council", default=None, help="Limit to one council (substring of its label).")
+@click.option("--apply", "do_apply", is_flag=True, default=False,
+              help="Actually write. Default is a dry run.")
+@click.pass_context
+def cmd_apply_bc_municipal_roster(ctx: click.Context, year, council, do_apply) -> None:
+    """Write the BC municipal roster from CivicInfo BC.
+
+    ⛔ THE COMPARE VERDICT IS THE AUTHORISATION. Only councils reported `gap` or
+    `diverge` are written. `extra` — we hold someone the authority does not — is
+    REFUSED, because that is either a retirement or a publisher omission and
+    nothing here can tell them apart.
+
+    Re-keys a sitting member rather than replacing them, so socials, offices and
+    websites stay attached. Run `reattach-municipal-roster` afterwards.
+    """
+    from .legislative.bc_municipal_roster import apply_bc_municipal_roster
+
+    async def _wrap(db: Database) -> None:
+        st = await apply_bc_municipal_roster(
+            db, year=year, council=council, dry_run=not do_apply)
+        for p in st.problems:
+            console.print(f"[red]REFUSED[/red] {p}")
+        if st.problems:
+            raise SystemExit("apply-bc-municipal-roster: refused, see above")
+        for sk in st.skipped_councils:
+            console.print(f"[yellow]skipped[/yellow] {sk}")
+        console.print(
+            f"[green]apply-bc-municipal-roster[/green]: year={st.year} "
+            f"councils={st.councils_written} installed={st.installed} "
+            f"rekeyed={st.rekeyed} updated={st.updated} retired={st.retired}"
+            + ("" if do_apply else "  [yellow](dry run)[/yellow]")
+        )
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
 @cli.command("reattach-municipal-roster")
 @click.option("--council", type=str, default=None,
               help="Limit to one council slug (the middle field of source_id).")
