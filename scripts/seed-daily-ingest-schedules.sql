@@ -121,15 +121,21 @@ INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) V
  '50 15 * * *', true, 'daily-ingest-rollout');
 
 -- ─── QC (16:00 UTC) ─────────────────────────────────────────────────
--- Roster refresh runs at :50 of the prior hour (15:50 UTC) so
--- detect_retirements() lands before the daily bills/Hansard chain and
--- before v_websites_missing / v_socials_missing are next read by the
--- weekly agent enrichers. opennorth.ingest_quebec_mnas wraps
--- _ingest_set() which gates retirement detection on len(reps) < limit.
+-- ⛔ REMOVED 2026-09-02 — 'QC MNA roster refresh' / `ingest-quebec-mnas`.
+-- That command fetches from the Open North mirror, retired 2026-08-27. It now
+-- raises RuntimeError and the schedule failed 8 times.
+--
+-- ★ THE REAL DEFECT WAS THIS FILE, not the schedule. Migration 0087 disabled the
+-- weekly Open North roster schedules on 2026-08-20 and asserted zero remained
+-- enabled. This seeder was re-run on 2026-08-28 and RE-CREATED them as new daily
+-- rows — so a migration's deliberate decision was silently undone by a script
+-- whose whole purpose is to be idempotent. Same shape as the 2026-08-23 mirror
+-- regression: an independent mechanism reversing an applied decision.
+--
+-- ⛔ Before adding any roster command here, confirm it does not call an
+-- opennorth.ingest_* function. Grep for the phrase 'from Open North' in the
+-- docstrings of services/scanner/src/__main__.py — it lists all fourteen.
 INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) VALUES
-('QC MNA roster refresh',
- 'ingest-quebec-mnas', '{}'::jsonb,
- '50 15 * * *', true, 'daily-ingest-rollout'),
 ('QC bills CSV daily ingest',
  'ingest-qc-bills', '{}'::jsonb,
  '0 16 * * *', true, 'daily-ingest-rollout'),
@@ -174,12 +180,10 @@ INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) V
 -- ─── MB (17:00 UTC) ─────────────────────────────────────────────────
 -- MB has the longest chain — bills (HTML index), then PDF download,
 -- then PDF parse, then Hansard, then 3 resolvers (sponsor + 2 speaker).
--- Roster refresh runs at :50 of the prior hour (16:50 UTC) so
--- detect_retirements() lands before the chain.
+-- ⛔ REMOVED 2026-09-02 — 'MB MLA roster refresh' / `ingest-manitoba-mlas`.
+-- Open North mirror command, retired 2026-08-27; failed 11 times. See the note
+-- on the QC block above for why this file, not the schedule, was the defect.
 INSERT INTO scanner_schedules (name, command, args, cron, enabled, created_by) VALUES
-('MB MLA roster refresh',
- 'ingest-manitoba-mlas', '{}'::jsonb,
- '50 16 * * *', true, 'daily-ingest-rollout'),
 ('MB bills daily ingest',
  'ingest-mb-bills', '{}'::jsonb,
  '0 17 * * *', true, 'daily-ingest-rollout'),

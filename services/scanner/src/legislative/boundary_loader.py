@@ -3361,9 +3361,22 @@ SPECS: dict[str, BoundarySpec] = {
         name_builder=_ns_label,
         authority_id_field="poll_dist",
         boundary_kind="district",
-        row_filter=lambda p: (p.get("mu_code") or "").strip().upper() not in ("HX", "CB"),
-        expect_districts=210,
-        expect_sets=47,
+        # ★ CB re-included 2026-09-02; HX deliberately still excluded.
+        #
+        # Cape Breton's districts are numbered, so `_ns_label` yields "District N"
+        # and the slug matches the `cape-breton-districts/district-N` ids we
+        # already hold — an in-place generation swap, no re-key.
+        #
+        # ⛔ Halifax is NOT the same case and must not be folded in here. Its
+        # districts have real NAMES (`Bedford — Wentworth`), and our held ids use
+        # them (`halifax-districts/bedford-wentworth`). This province-wide file
+        # carries only the code `HX01`, so loading Halifax from it would rename
+        # all 16 districts to "District N", re-key every id, and detach all 16
+        # sitting councillors — losing information we already have. Halifax has
+        # its own spec below, reading the city file that carries `DISTNAME`.
+        row_filter=lambda p: (p.get("mu_code") or "").strip().upper() != "HX",
+        expect_districts=222,
+        expect_sets=48,
         # Independently known: Truro numbers 3 wards, Wolfville is at large, New
         # Glasgow 3, Kings County 9. A set at 0 means _slugify_mun produced a slug
         # nobody expected.
@@ -3378,10 +3391,50 @@ SPECS: dict[str, BoundarySpec] = {
             # would have read as a plausible 11.
             "antigonish-districts": 10,
             "antigonish-town-districts": 1,
+            # Added with CB 2026-09-02. Independently known from the council
+            # itself, so a silent under-read of the province-wide file fails
+            # here rather than loading a short set.
+            "cape-breton-districts": 12,
         },
         authority_id_unique_across_sets=True,
         licence="ns-ogl",
-        notes="data.novascotia.ca gcep-xeci; Halifax + Cape Breton excluded by row_filter"
+        notes="data.novascotia.ca gcep-xeci; 48 municipalities incl. Cape Breton (re-included 2026-09-02). Halifax has its own spec — see halifax-districts"
+    ),
+    # Halifax Regional Municipality — the city's own polling-district file, NOT
+    # the province-wide one above.
+    #
+    # ★ WHY A SEPARATE SPEC. Halifax is in `ns-municipal-polling-districts.geojson`
+    # too, but there it carries only the code `HX01`, which `_ns_label` renders as
+    # "District 1". Our held ids are NAMES — `halifax-districts/bedford-wentworth`
+    # — and each has a sitting councillor on it. Loading from the province-wide
+    # file would rename all 16, re-key every id, detach all 16 members and DISCARD
+    # the district names, which the city file has and the province file does not.
+    # Verified 2026-09-02: `slugify(DISTNAME)` reproduces all 16 held ids exactly,
+    # so this is an in-place generation swap with no re-key.
+    #
+    # ⚠ `COUNCILLOR` is present in this file and is deliberately unread. It is a
+    # 2024-vintage roster field; our roster is separately maintained and current,
+    # and a boundary loader is not a roster ingester.
+    "halifax-districts": BoundarySpec(
+        jurisdiction="halifax-districts",
+        source_path="municipal-atlantic/current/halifax-polling-districts-2024.geojson",
+        src_epsg=4326,
+        level="municipal",
+        province_territory="NS",
+        source_set="halifax-districts",
+        id_prefix="halifax-districts",
+        authority="halifax-regional-municipality",
+        boundaries_version="2024",
+        # Ruling A10.4 — the election the map first governed. NS municipalities
+        # voted 2024-10-19; the file's own SDATE is a publication date and is not
+        # evidence of when the map took force.
+        effective_from=date(2024, 10, 19),
+        name_field="DISTNAME",
+        authority_id_field="DIST_ID",
+        boundary_kind="district",
+        expect_districts=16,
+        licence="ns-ogl",
+        notes="HRM open data, NSUARB-sourced; DISTNAME carries the district names the province-wide file lacks"
     ),
     "new-brunswick-municipal": BoundarySpec(
         jurisdiction="new-brunswick-municipal",

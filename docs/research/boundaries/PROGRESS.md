@@ -12,8 +12,8 @@ Keyed on `constituency_boundaries.authority`, which is NULL until a set is cut o
 |---|---:|---:|---:|---:|---:|
 | federal | 343 | 343 | 100.0% | 0 | 0 |
 | provincial | 781 | 657 | 84.1% | 124 | 0 |
-| municipal | 1343 | 1016 | 75.7% | 15 | 312 |
-| **total** | **2467** | **2016** | **81.7%** | **139** | **312** |
+| municipal | 1343 | 1044 | 77.7% | 15 | 284 |
+| **total** | **2467** | **2044** | **82.9%** | **139** | **284** |
 
 **successor dated** — mirror geometry still in force, with an authoritative replacement already loaded and dated. It resolves on a known day with no work: all of it is Québec's 2017 provincial map, live until 2026-10-04, superseded 2026-10-05 by the 127-district successor (migration `0117`). ⚠ Until that date, Québec provincial lookups return mirror polygons.
 
@@ -25,27 +25,25 @@ Keyed on `constituency_boundaries.authority`, which is NULL until a set is cut o
 |---|---:|---:|---:|---:|
 | QC | 338 | 151 | 44.7% | 187 |
 | ON | 347 | 292 | 84.1% | 40 |
-| NS | 238 | 210 | 88.2% | 28 |
 | AB | 47 | 26 | 55.3% | 21 |
 | PE | 21 | 0 | 0.0% | 21 |
 | SK | 20 | 10 | 50.0% | 10 |
 | NL | 5 | 0 | 0.0% | 5 |
 | MB | 15 | 15 | 100.0% | 0 |
 | NB | 312 | 312 | 100.0% | 0 |
+| NS | 238 | 238 | 100.0% | 0 |
 
 ### The named remainder
 
-312 district rows across 37 sets. Each is a map somebody has to go and get.
+284 district rows across 35 sets. Each is a map somebody has to go and get.
 
 | province | set | live | remaining |
 |---|---|---:|---:|
 | QC | `gatineau-districts` | 19 | 19 |
 | QC | `montreal-boroughs-and-districts` | 76 | 18 |
 | QC | `saguenay-districts` | 18 | 18 |
-| NS | `halifax-districts` | 16 | 16 |
 | QC | `levis-districts` | 15 | 15 |
 | QC | `trois-rivieres-districts` | 14 | 14 |
-| NS | `cape-breton-districts` | 12 | 12 |
 | QC | `saint-jean-sur-richelieu-districts` | 12 | 12 |
 | QC | `saint-jerome-districts` | 12 | 12 |
 | PE | `charlottetown-wards` | 10 | 10 |
@@ -135,4 +133,4 @@ Keyed on `constituency_boundaries.authority`, which is NULL until a set is cut o
 
 ---
 
-_Generated 2026-09-01 by `boundary-progress`. Do not hand-edit — regenerate._
+_Generated 2026-09-02 by `boundary-progress`. Do not hand-edit — regenerate._

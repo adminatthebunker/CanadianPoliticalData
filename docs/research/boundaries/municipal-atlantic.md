@@ -402,6 +402,60 @@ the `&` dropped, while our stored name spells it `and`. Same district, no re-key
   any authoritative source, and 3 is unusually low. Cheap to confirm if anyone has a PE contact;
   otherwise it stays `needs confirmation`.
 
+## Build outcome — Halifax + Cape Breton, 2026-09-02
+
+Both cut over. `halifax-districts` 16 and `cape-breton-districts` 12 now carry
+authoritative geometry; migrations `0123` (cutover) and `0124` (one re-key).
+
+### ⛔ The correction this dossier needs
+
+The 2026-08-18 status snapshot above says *"Halifax 16 ✅ and Cape Breton 12 ✅ both
+match exactly what we hold"*, and the reconciliation table says `✅ count matches`.
+**That was a COUNT match and it was read as agreement.** `load-boundaries --compare`
+against the authoritative file measured the geometry:
+
+| set | matched | mean overlap | min | below 95% |
+|---|---:|---:|---:|---:|
+| `halifax-districts` | 15/16 | 99.88% | 99.65% | 0 |
+| `cape-breton-districts` | 12/12 | — | **34.55%** | **8** |
+
+Cape Breton's district-9 overlapped its authoritative counterpart by **34.55%**,
+district-4 by 69.20%, district-11 by 70.68%. Cause: **N.S. Reg. 150/2023** — CBRM was
+redistricted and the mirror held the pre-2023 map. Residents in those districts were
+being returned the wrong councillor, and every count-based check in this dossier said
+the set was fine. ★ This is ruling A7 exactly — *vintage must be measured, not counted*
+— and it is the second time the same lesson has been paid for.
+
+### Why the two needed different sources
+
+⛔ Cape Breton's districts are **numbered**; Halifax's are **named**. The province-wide
+`ns-municipal-polling-districts.geojson` carries only codes (`HX01`, `CB07`), so
+`_ns_label` renders both as "District N". For Cape Breton that matches our held ids.
+For Halifax it would have renamed all 16 districts, re-keyed every id, detached all 16
+councillors and **discarded the district names** — which the city's own file has and the
+province's does not. Halifax therefore has its own spec reading
+`halifax-polling-districts-2024.geojson` (`DISTNAME`), verified to reproduce all 16 held
+ids through the loader's own `slugify`.
+
+That is why the `row_filter` excluded `HX` and `CB` in the first place. It still
+excludes `HX`, now for a documented reason rather than an unexplained one.
+
+### ⚠ Two traps for the next cutover
+
+1. **`census-subdivisions/1209034` and `/1217030` are filed INSIDE these two source_sets**
+   but are `boundary_kind='municipality'` — the hybrid-council polygons carrying the
+   mayor and at-large members (ruling A12). The new generation does not replace them.
+   `0123`'s predicates are scoped to `boundary_kind='district'` for that reason, and it
+   asserts both survived.
+2. ⛔ **`reattach-municipal-roster` cannot fix a re-key orphan.** It selects councils
+   holding a member with `constituency_id IS NULL`. A re-key leaves the member pointing
+   at an id that no longer resolves — orphaned, not detached — so the daily job never
+   sees them. Only `check-boundary-coverage` caught it, as a `municipal/orphaned` BREACH.
+   One councillor (Hammonds Plains) was affected, because the publisher writes
+   "Middle & Upper Sackville" and the mirror expanded `&` to `and` while our slugify
+   drops it — the same one-character identity divergence as the `œ` case in `0098`.
+
+
 ## Status
 
 > ⚠ **Reconciled 2026-09-01.** The checkboxes below are the **research phase's** record

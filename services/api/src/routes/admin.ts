@@ -158,6 +158,13 @@ const COMMAND_CATALOG = [
       { name: "dry_run", type: "bool", required: false, help: "Report without writing." },
     ],
   },
+  { key: "probe-edmonton-media", category: "maintenance",
+    description: "Map Edmonton council meetings to their ISI CDN recordings — metadata only, no media bytes. 2-3 small requests per meeting: the eScribe player page for the filename, then a HEAD on video.isilive.ca for etag/size, which together are the media identity key. Results land in meetings.raw->'media'; ~25% of meetings are ISI-empty and keep YouTube as their media source. Idempotent — already-probed meetings are skipped unless --force. ★ Added to the catalog 2026-09-02: a weekly schedule for this command has existed since at least 2026-08-31 but the command was in NEITHER catalog half, so every run failed as 'unknown command in catalog' before spawning anything. Third instance of that failure mode.",
+    args: [
+      { name: "limit", type: "int", required: false, help: "Cap meetings probed this run." },
+      { name: "force", type: "bool", required: false, help: "Re-probe meetings that already have a media record." },
+    ],
+  },
   { key: "boundary-progress", category: "maintenance",
     description: "Regenerate docs/research/boundaries/PROGRESS.md, the generated tracker for the boundary + Open North replacement programme. Counts are derived from the DB so they cannot drift: geometry from constituency_boundaries.authority (NULL until a set is cut over), roster from whether a row has any refresh path at all. \u2605 Run it in the same change that lands a cutover \u2014 the hand-maintained coverage matrices it replaces were wrong within four days of the programme shipping, and because /docs/ was gitignored there was no diff to notice it in. Stamped with a DATE not a timestamp, so two runs on the same day against an unchanged database produce a byte-identical file and `git diff` shows only real movement. Writes to the repo working tree; it does not commit.",
     args: [
