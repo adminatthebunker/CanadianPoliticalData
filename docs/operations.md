@@ -717,7 +717,7 @@ day. Replacement ingesters, in build order:
 |---|---|---|---|
 | BC | **2026-10-17** | `compare-bc-municipal-roster` / `apply-bc-municipal-roster` | ✅ built 2026-09-02 |
 | ON | **2026-10-26** | `compare-on-municipal-wards` / `apply-on-municipal-roster` | ✅ partial write shipped; full mode pending |
-| MB | ~2026-10-28 | — | researched (`data.winnipeg.ca` `r4tk-7dip`), not built |
+| MB | **2026-10-28** | `compare-mb-municipal-roster` / `apply-mb-municipal-roster` | ✅ built 2026-09-02 |
 | PE | ~2026-11-02 | — | researched (3 city scrapes), not built |
 
 **BC.** One endpoint covers all 161 local governments in two GETs.
@@ -740,6 +740,29 @@ docker compose run --rm scanner apply-bc-municipal-roster --apply      # after t
 - **`extra`** — we hold someone the authority does not. Retirement and publisher omission
   are indistinguishable from here.
 - **A same-named BC municipal row** outside the re-key's scope, rather than duplicating a person.
+
+**MB.** One council — Winnipeg, 16 seats. Seat-anchored on the ward NUMBER.
+
+```bash
+docker compose run --rm scanner compare-mb-municipal-roster    # read-only
+docker compose run --rm scanner apply-mb-municipal-roster --apply
+```
+
+⛔ **Its trap is the INVERSE of Ontario's and BC's.** Those publish a candidate
+list that becomes a result, so the danger is reading too *early*. Winnipeg
+publishes a settled council that a human at the city updates *after* each
+election — so `current_council` keeps naming the **outgoing** council until they
+refresh it. Running the morning after 2026-10-28 would rewrite the 2022 council
+over the 2026 one and every check would pass, because the data is internally
+consistent and merely old. It refuses on the file's own `year`.
+
+⛔ **Omit `--year`.** The default asks for `current_council=true` and never names
+a cycle, which is the trustworthy path. An explicit superseded `--year` is
+refused — before that guard existed, `--year 2018` dry-ran to *five sitting
+councillors retired and their predecessors reinstated*.
+
+⚠ **Never join on `web_name`.** It agrees on 15 of 16 rows then truncates ward 7
+to `charleswood-tuxedo`, which matches no polygon.
 
 ⚠ **Fetch posture is fixed and deliberate.** `localelections.ca` only, apex host (`www.` +
 a generic user-agent gets 403), `Crawl-delay: 5` honoured between every request, descriptive

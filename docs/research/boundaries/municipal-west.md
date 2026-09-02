@@ -343,6 +343,25 @@ ever changes.
 Difficulty **2**. Source prefix must be `civicinfo-bc:`, never `opennorth:`, so
 `detect_retirements` cannot sweep it — same reasoning as `mamh-qc:` and `amo-on:`.
 
+### ✅ MB BUILT 2026-09-02 — `compare-mb-municipal-roster` / `apply-mb-municipal-roster`
+
+`services/scanner/src/legislative/mb_municipal_roster.py`. **16 of 16 seats agree** today,
+so MB is verified correct rather than merely assumed correct.
+
+★ **Joined on the ward NUMBER, not the name.** Our `winnipeg-wards` polygons carry
+`authority_district_id` as a dense 1..15 and Socrata carries the same value as `ward_id`.
+That sidesteps the `web_name` trap below entirely, and the compare confirms ward 7
+resolving correctly.
+
+⚠ Two things the build found that this research did not:
+- **The trap here is the INVERSE of Ontario's.** Winnipeg publishes a settled council
+  updated *by hand* after each election, so `current_council` names the OUTGOING council
+  until the city refreshes it. The danger is reading too LATE, not too early.
+- **A superseded `--year` is lethal.** Before the guard, `--year 2018` dry-ran to
+  installed=4 / retired=5 — five sitting councillors retired and their predecessors
+  reinstated, on a clean run. The retained-prior-cycles property that makes this source
+  good is the same one that makes an unguarded `--year` dangerous.
+
 ### MB — a better source than this dossier's
 
 ⛔ **Prefer `data.winnipeg.ca/resource/r4tk-7dip.json` ("Council Data") over the ward
