@@ -12,8 +12,8 @@ Keyed on `constituency_boundaries.authority`, which is NULL until a set is cut o
 |---|---:|---:|---:|---:|---:|
 | federal | 343 | 343 | 100.0% | 0 | 0 |
 | provincial | 781 | 657 | 84.1% | 124 | 0 |
-| municipal | 1343 | 1100 | 81.9% | 15 | 228 |
-| **total** | **2467** | **2100** | **85.1%** | **139** | **228** |
+| municipal | 1343 | 1119 | 83.3% | 15 | 209 |
+| **total** | **2467** | **2119** | **85.9%** | **139** | **209** |
 
 **successor dated** — mirror geometry still in force, with an authoritative replacement already loaded and dated. It resolves on a known day with no work: all of it is Québec's 2017 provincial map, live until 2026-10-04, superseded 2026-10-05 by the 127-district successor (migration `0117`). ⚠ Until that date, Québec provincial lookups return mirror polygons.
 
@@ -23,7 +23,7 @@ Keyed on `constituency_boundaries.authority`, which is NULL until a set is cut o
 
 | province | live | authoritative | % | remaining |
 |---|---:|---:|---:|---:|
-| QC | 338 | 207 | 61.2% | 131 |
+| QC | 338 | 226 | 66.9% | 112 |
 | ON | 347 | 292 | 84.1% | 40 |
 | AB | 47 | 26 | 55.3% | 21 |
 | PE | 21 | 0 | 0.0% | 21 |
@@ -35,11 +35,10 @@ Keyed on `constituency_boundaries.authority`, which is NULL until a set is cut o
 
 ### The named remainder
 
-228 district rows across 32 sets. Each is a map somebody has to go and get.
+209 district rows across 31 sets. Each is a map somebody has to go and get.
 
 | province | set | live | remaining |
 |---|---|---:|---:|
-| QC | `gatineau-districts` | 19 | 19 |
 | QC | `montreal-boroughs-and-districts` | 76 | 18 |
 | QC | `saint-jerome-districts` | 12 | 12 |
 | PE | `charlottetown-wards` | 10 | 10 |
