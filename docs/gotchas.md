@@ -293,12 +293,24 @@ the mirror expanded `&` to `and`, our `slugify` drops it — and the councillor
 sat on a dead id. `reattach-municipal-roster` ran green; only
 `check-boundary-coverage` saw it, as a `municipal/orphaned` **BREACH**. Same
 one-character identity class as the `œ` divergence re-keyed in `0098`.
-*How to apply:* when a cutover changes ANY `constituency_id`, re-key the roster
-**inside the cutover migration**, matched on the exact old id and asserted both
-directions (see `0124`); then run `reattach-municipal-roster` for the genuinely
-detached and `check-boundary-coverage` to prove zero orphans corpus-wide.
-⛔ Do not extend the reattach job to auto-fix orphans — a re-key is a decision
-about identity, and the value of the breach is that it stops and asks.
+*How to apply:* handle it **inside the cutover migration**, before the
+end-dating, and pick the right one of two established patterns:
+
+- **The district genuinely changed** (renamed because its ground moved,
+  dissolved, split) → set `constituency_id = NULL` for members on ids the new
+  generation does not reproduce, then let `reattach-municipal-roster` place them
+  **geographically**. This is `0121`, which documents the trap in full and warns
+  against skipping it on the assumption reattach will cope. Use this whenever
+  the correct destination is a question about ground rather than spelling.
+- **Only the id's rendering changed** and the mapping is certain → re-key
+  directly, matched on the exact old id and asserted both directions. This is
+  `0098` (the `œ` ligature) and `0124` (`&` vs `and`). Use it only when the
+  polygon is the same polygon and you can say so.
+
+Then run `check-boundary-coverage` to prove zero orphans corpus-wide.
+⛔ Do not extend the reattach job to auto-fix orphans — choosing between those
+two patterns is a judgement about identity, and the breach stopping to ask is
+the feature, not the defect.
 
 **Do not read a matching district COUNT as matching geometry.**
 Ruling A7 — vintage must be measured, not counted — and this is the second time
