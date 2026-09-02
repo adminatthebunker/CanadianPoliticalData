@@ -456,6 +456,58 @@ excludes `HX`, now for a documented reason rather than an unexplained one.
    drops it — the same one-character identity divergence as the `œ` case in `0098`.
 
 
+## PE roster sources — probed 2026-09-02
+
+⚠ Rule #5 waived by the operator for this pass. Findings only; no ingester built.
+⛔ **This changes the roster verdict, not the geometry one.** PE geometry remains
+Difficulty 5 and unsolved — see below.
+
+### The dossier's "hand-curation is the honest answer" is no longer right
+
+All three PEI cities publish **ward-keyed** rosters at stable URLs, and the three defects
+found below show hand-curation has already drifted.
+
+| city | URL | shape | difficulty |
+|---|---|---|---|
+| **Stratford** | `townofstratford.ca/government-services/contact-town-of-stratford/mayor-council/` | `<Office> <Name>, Ward N, <Ward Name>` — number **and** name on every row | **1–2** |
+| **Summerside** | `summerside.ca/city_governance/senior_leadership_mayor_council` | `<Office> <Name>  Ward N: <Ward Name>  <phone> <email>`; all 8 wards match our slugs exactly | **2** |
+| **Charlottetown** | `/mayor___council/city_council/meet_my_councillor` + `/ward_maps` | server-rendered, all 10 councillors with ward NUMBERS only; the second page supplies number→name | **3** |
+
+★ **FPEIM (`fpeim.ca/municipal-directory/`) is a cross-check, not a source.** It covers every
+PEI municipality with mayor, deputy mayor, CAO, full councillor list, contacts and meeting
+schedules, and its WordPress `wp-json` gives a freshness signal. ⛔ But councillors are a flat
+comma-separated list with **no ward attribution**, and our rows key on
+`charlottetown-wards/*` etc. It cannot maintain that key. ⚠ Its `modified_gmt` said
+2026-09-02 while the page body reads "last revised: April 2025" — irreconcilable, so treat
+the on-page date as the honest one.
+
+⛔ **Dead ends:** `electionspei.ca` is behind a **Radware** bot-manager CAPTCHA (not
+Cloudflare) — hard-blocked, do not retry with a different UA. `data.princeedwardisland.ca`
+CKAN returns **404** — there is no PEI CKAN, confirming this dossier. Stratford's open-data
+catalogue page exists but is **empty prose**, an aspiration rather than a catalogue.
+
+### ⚠ Three roster defects found, NOT yet actioned
+
+None of these were written — each rests on a single web read, and de-activating or re-keying
+a sitting official on that basis is not reversible enough to do unverified.
+
+1. ⛔ **Charlottetown Wards 4 and 5 may be mis-keyed.** Composing the two city pages gives
+   Ward 4 *Spring Park* = Mitchell Tweel and Ward 5 *Ellen's Creek* = Kevin Ramsay; we hold
+   Tweel on `st-avards` and Ramsay on `spring-park`. `st-avards` is not a current ward name.
+   ★ **Do a POLYGON CHECK FIRST.** This is consistent with our `charlottetown-wards` set
+   being a prior generation in which 4 and 5 were drawn differently — supporting evidence is
+   that the city files the Ward 4 and 5 booklets under *Election Information* while wards
+   1,2,3,6–10 sit under *MAPS*. If the boundaries moved, re-keying the roster alone is wrong.
+2. **Stratford** lists 5 councillors; we hold 6. Jody Jackson (`stratford-wards/tea-hill`)
+   appears nowhere on the town site. Consistent with a resignation, no `ended_at` recorded.
+3. **Summerside's mayor departed 2026-09-01** per a city news release; we and FPEIM both
+   still carry Dan Kutcher as active. Summerside's 8 ward attachments are otherwise correct.
+
+⛔ **PE geometry is unchanged and still blocked.** Elections PEI is CAPTCHA-walled, there is
+no PEI CKAN, Stratford's catalogue is empty, and Charlottetown publishes ward booklets as
+PDFs. The roster is solvable by these routes; the geometry is not.
+
+
 ## Status
 
 > ⚠ **Reconciled 2026-09-01.** The checkboxes below are the **research phase's** record

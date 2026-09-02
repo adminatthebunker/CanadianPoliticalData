@@ -252,6 +252,102 @@ Under recommendation (d): `authority = 'city-of-winnipeg'` / `'city-of-saskatoon
 - **⚠ Three licences are unread, not absent.** Winnipeg's Socrata declares **"Open Government Licence – Prince Edward Island"** on a Manitoba dataset, which is a misconfiguration and cannot be relied on; Saskatoon reports `none`; Regina's terms page is behind the 403. This is materially different from SK/MB provincial, where no licence exists at all — here the work is reading three pages. ★ **The transferable lesson is worth promoting: a machine-readable licence field can be flatly wrong, so licence-matrix rows should cite a terms page someone actually read, never a portal's metadata tag.**
 - **⚠ Rename or reclassify `vancouver-wards` and `langley-wards`.** Each holds one city polygon and zero wards. Under A10.2, `boundary_kind = 'municipality'` records this structurally so no future agent reads BC's correct at-large picture as a 12-row gap. Same fix as Alberta's `grande-prairie-wards`.
 
+## Roster sources — BC and MB, probed 2026-09-02
+
+⚠ Rule #5 was waived by the operator for this pass. Findings only; no ingester built.
+
+### ★ BC is ONE province-wide endpoint, not twelve scrapes
+
+**`https://localelections.ca/report/index.php`** — CivicInfo BC's report builder.
+CivicInfo BC is the not-for-profit that runs BC's local-election database, board-governed
+by BC local governments, with data entered by the municipal Chief Election Officers
+themselves. It is the closest thing BC has to a local-election authority; there is no
+provincial administrator.
+
+```
+/report/index.php?mayors=on&councillors=on
+  &incumbent=on&servedDiff=on&servedPrior=on&prevExp=on&new=on&unknown=on
+  &rtype=results[&year=2022]
+```
+
+Other office toggles: `directors` (RD electoral areas), `parkboards`, `trustees`,
+`islandstrustcouncillors`, `commissioners`. Two GETs cover the entire province.
+Server-rendered HTML table. `rtype=results` adds `Elected` and `Number of Votes`;
+the endpoint **pre-filters to winners**, so `Elected` is not a column you filter on.
+
+Carries: name, office (`Elected Type`), slate (`Elector Organization`), incumbency
+(`Experience`), votes, acclamation. ⛔ **No ward column — correctly**, which independently
+confirms the statutory at-large finding: all 104 BC members attach to
+`boundary_kind='municipality'`.
+
+★ It also natively disambiguates **Langley (City)** from **Langley (Township)** via
+`Jurisdiction Type` — the name-collision this dossier previously called unsolvable.
+
+**Validated against the completed 2022 cycle** (1,025 rows): 97 authoritative against our
+104 held rows, **93 exact matches**. The four non-matches decomposed into two name-form
+artefacts (Rob/Robert), two cases where **our data is MORE current** than 2022 (post-election
+turnover in Langley Twp and Richmond), one typo of ours (Lovegrove, fixed in `0127`) and one
+real gap — **Saanich held 1 of 9 members**, filled by `0127`.
+
+⚠ **Parsing hazards.** Per-municipality name casing is inconsistent (Kelowna submits ALL
+CAPS, New Westminster all-caps surnames only). Row width is ragged — reject rows whose cell
+count ≠ header count rather than positional-indexing. Emails are Cloudflare-obfuscated.
+Archived cycles drop the contact columns.
+
+⚠ **The AMO trap applies in full.** The 2026 list is a CANDIDATE list until the count;
+nominations close 2026-09-11 16:00. Compare per-municipality, never ingest wholesale.
+
+⛔ **Fetch posture — operator decision, 2026-09-02.** `localelections.ca/robots.txt` is
+`User-agent: *` / `Crawl-delay: 5`, Disallow only `/config/ /wp-admin/ /wordpress/ /blog/`
+— nothing on `/report/`. Its **parent domain `civicinfo.bc.ca` is far more restrictive**:
+`Content-Signal: ai-train=no, use=reference` and `User-agent: ClaudeBot → Disallow: /`.
+Same organisation. The decision was: **fetch `localelections.ca` only**, honour its
+crawl-delay, use a descriptive CPD user-agent with a contact URL, cache by etag
+(convention #6), and **never fetch civicinfo.bc.ca**. ⚠ Use the apex host — `www.` plus a
+generic tool user-agent returns 403.
+
+⛔ **Dead ends, so nobody repeats them:** `civicinfo.bc.ca/directories`, `/data`,
+`/election-results` — all Cloudflare 403. `catalogue.data.gov.bc.ca` CKAN has **no**
+elected-official dataset, only boundary layers; DataBC is not a roster source. Wayback-found
+`/ajax/electionreports/*.php` paths are either retired (IIS 404) or 403. **UBCM was reached
+(200) but NOT exhaustively probed** — it is the unexplored fallback if the licence position
+ever changes.
+
+Difficulty **2**. Source prefix must be `civicinfo-bc:`, never `opennorth:`, so
+`detect_retirements` cannot sweep it — same reasoning as `mamh-qc:` and `amo-on:`.
+
+### MB — a better source than this dossier's
+
+⛔ **Prefer `data.winnipeg.ca/resource/r4tk-7dip.json` ("Council Data") over the ward
+GeoJSON.** Socrata, difficulty **1**, licence **declared** "Canada Open Government Licence".
+⚠ Note that is a *different* dataset from `t4cg-yaxs` (the ward geometry), which still
+carries the misconfigured `Open Government Licence - Prince Edward Island` value this
+dossier flagged — re-confirmed 2026-09-02, still wrong.
+
+Three reasons it beats the geometry file:
+1. It carries the **mayor** (`ward_id=0`) — the gap a ward file structurally cannot fill.
+2. `current_council` is an explicit boolean; no inference from a filename or election date.
+3. It **retains prior cycles** (2014/2018/2022, 16 rows each), so retirement detection is a
+   diff *inside one file* rather than a sweep-and-deactivate against a mirror.
+
+⚠ Correction to this dossier: the geometry file's `councillor` field IS populated on all 15
+features, but `asst` / `asst_phone` / `clerk` / `clerk_phone` are **NULL on every feature** —
+the "carries office contacts" claim overstates it.
+
+⛔ **`web_name` is not a safe join key.** It looks perfect — kebab-case, matches our
+`winnipeg-wards/<slug>` form, agrees on 15 of 16 rows — and diverges on exactly one: ward 7
+is `Charleswood - Tuxedo - Westwood` but `web_name` is the truncated `charleswood-tuxedo`,
+which matches **no polygon**. Join on `ward_id` (dense 1–15) or `slugify(name_english)`.
+⚠ Ward names are cycle-scoped, so scope every join to `current_council=true`.
+
+✅ **No 2026 MB redraw** — `t4cg-yaxs` is still the only current ward set, so the 2018
+geometry and slugs survive the election and the join key holds. ⚠ Scope catalogue searches
+with `search_context=data.winnipeg.ca`; unscoped queries return Calgary's and Edmonton's wards.
+
+**MB is currently CORRECT** — all 16 members match the authority by name with correct ward
+attachment. Its exposure is purely forward-looking: **2026-10-28**.
+
+
 ## Status
 
 > ⚠ **Reconciled 2026-09-01.** The checkboxes below are the **research phase's** record
