@@ -4257,6 +4257,78 @@ def cmd_compare_on_municipal_roster(ctx: click.Context, cycle: int, councils) ->
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 
 
+@cli.command("compare-mb-municipal-roster")
+@click.option("--year", type=int, default=None,
+              help="Election cycle. Default: whoever the city marks current_council.")
+@click.pass_context
+def cmd_compare_mb_municipal_roster(ctx: click.Context, year) -> None:
+    """READ-ONLY: seat-anchored diff of Winnipeg council against what we hold.
+
+    ★ Anchored on the WARD NUMBER — our polygons carry it as
+    authority_district_id and Socrata carries it as ward_id — so this never
+    matches a person to a district by name. ⛔ `web_name` looks like a safe key
+    and truncates ward 7, matching no polygon.
+
+    ⛔ Refuses when the city has not yet refreshed the dataset after an
+    election: `current_council` keeps pointing at the OUTGOING council until a
+    human at the city updates it.
+    """
+    from .legislative.mb_municipal_roster import compare_mb_municipal_roster
+
+    async def _wrap(db: Database) -> None:
+        st = await compare_mb_municipal_roster(db, year=year)
+        for p in st.problems:
+            console.print(f"[red]REFUSED[/red] {p}")
+        if st.problems:
+            raise SystemExit("compare-mb-municipal-roster: refused, see above")
+        for s_ in st.seats:
+            colour = {"agree": "green", "stale": "yellow",
+                      "gap": "yellow", "orphan": "red"}[s_.verdict]
+            label = "mayor" if s_.ward_id == 0 else f"ward {s_.ward_id:>2}"
+            console.print(
+                f"[{colour}]{s_.verdict:<6}[/{colour}] {label} {s_.ward_name}: "
+                f"city={s_.authority!r} held={s_.held!r}"
+            )
+        console.print(
+            f"compare-mb-municipal-roster: year={st.year} seats={len(st.seats)} "
+            f"agree={st.count('agree')} stale={st.count('stale')} "
+            f"gap={st.count('gap')} orphan={st.count('orphan')}"
+        )
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
+@cli.command("apply-mb-municipal-roster")
+@click.option("--year", type=int, default=None, help="Election cycle.")
+@click.option("--apply", "do_apply", is_flag=True, default=False,
+              help="Actually write. Default is a dry run.")
+@click.pass_context
+def cmd_apply_mb_municipal_roster(ctx: click.Context, year, do_apply) -> None:
+    """Write the Winnipeg roster from data.winnipeg.ca.
+
+    ⛔ The per-seat verdict is the authorisation: only `stale` and `gap` are
+    written. `orphan` is refused — a retirement and a publisher omission are
+    indistinguishable from here. Retires only the person whose seat changed
+    hands, never a cohort. Run `reattach-municipal-roster` afterwards.
+    """
+    from .legislative.mb_municipal_roster import apply_mb_municipal_roster
+
+    async def _wrap(db: Database) -> None:
+        st = await apply_mb_municipal_roster(db, year=year, dry_run=not do_apply)
+        for p in st.problems:
+            console.print(f"[red]REFUSED[/red] {p}")
+        if st.problems:
+            raise SystemExit("apply-mb-municipal-roster: refused, see above")
+        for sk in st.skipped:
+            console.print(f"[yellow]skipped[/yellow] {sk}")
+        console.print(
+            f"[green]apply-mb-municipal-roster[/green]: year={st.year} "
+            f"installed={st.installed} rekeyed={st.rekeyed} "
+            f"updated={st.updated} retired={st.retired}"
+            + ("" if do_apply else "  [yellow](dry run)[/yellow]")
+        )
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
 @cli.command("compare-bc-municipal-roster")
 @click.option("--year", type=int, default=None,
               help="Election cycle. Default: the most recent one that has happened.")

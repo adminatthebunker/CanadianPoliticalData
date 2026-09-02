@@ -242,6 +242,25 @@ COMMANDS: dict[str, dict[str, Any]] = {
              "help": "AMO election cycle: 2018, 2022 or 2026. Default 2026."},
         ],
     },
+    "compare-mb-municipal-roster": {
+        "description": "READ-ONLY seat-anchored diff of Winnipeg city council against what we hold, from data.winnipeg.ca's Council Data (r4tk-7dip, Socrata, declared Canada Open Government Licence). MB's whole municipal exposure is this one council of 16. ★ Anchored on the WARD NUMBER — our polygons carry it as authority_district_id (dense 1..15) and Socrata carries it as ward_id — so it never matches a person to a district by name. ⛔ Do NOT switch this to web_name: it is kebab-case, matches our slug form and agrees on 15 of 16 rows, then truncates ward 7 'Charleswood - Tuxedo - Westwood' to 'charleswood-tuxedo', which matches NO polygon. ⛔ Prefer this dataset over the ward geometry t4cg-yaxs, which has no mayor, no currency flag, and declares the wrong province's licence. Refuses when the city has not yet refreshed after an election, and refuses a superseded cycle. Writes nothing.",
+        "cli": "compare-mb-municipal-roster",
+        "category": "maintenance",
+        "args": [
+            {"name": "year", "type": "int", "required": False,
+             "help": "Election cycle. Default: whoever the city marks current_council."},
+        ],
+    },
+    "apply-mb-municipal-roster": {
+        "description": "Write the Winnipeg roster from data.winnipeg.ca. ⛔ The PER-SEAT verdict is the authorisation: only `stale` (city names someone else for this ward) and `gap` (we hold nobody) are written. `orphan` — we hold someone the city does not list — is REFUSED, because a retirement and a publisher omission are indistinguishable from here. ⛔ Refuses a superseded cycle: caught in testing, --year 2018 would otherwise have retired 5 sitting councillors and reinstated their predecessors on a clean run. ⛔ Refuses when current_council still points at the OUTGOING council — the city updates this dataset by hand after each election, so the danger here is reading it too LATE, the inverse of the AMO trap. Retires only the person whose seat changed hands, never a cohort (three-step: politician_changes row, close the term, then deactivate). Re-keys rather than replaces. Dry run by default. Run reattach-municipal-roster afterwards.",
+        "cli": "apply-mb-municipal-roster",
+        "category": "maintenance",
+        "args": [
+            {"name": "year", "type": "int", "required": False, "help": "Election cycle."},
+            {"name": "apply", "type": "bool", "required": False,
+             "help": "Actually write. Default is a dry run."},
+        ],
+    },
     "compare-bc-municipal-roster": {
         "description": "READ-ONLY diff of CivicInfo BC's localelections.ca roster against what we hold, for all 12 BC councils at once. ★ BC is ONE province-wide endpoint, not twelve scrapes, and it has no ward column — correctly, because at-large is BC's statutory default under the Local Government Act and every BC member attaches to a single municipality polygon. Writes nothing. ⛔ Refuses three ways: a CANDIDATE list wearing a results URL (the AMO trap — nominations for 2026 close 2026-09-11 and results fill in progressively on election night), a superseded cycle, and a stale CSD-code table. ⚠ verify_mapping checks AREA, not name: our boundary table calls both Langley (City) and Langley (Township) 'Langley', so a transposition of those two codes passes every name check and only their 30x area difference separates them.",
         "cli": "compare-bc-municipal-roster",
