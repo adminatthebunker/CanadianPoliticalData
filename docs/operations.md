@@ -708,6 +708,46 @@ does **not** commit.
    and the feature count, the `--compare` overlap (99.38%) and every name all agreed.
 5. `boundary-progress`, and commit `PROGRESS.md` with the migration.
 
+### Municipal rosters — the election cliff
+
+Four provinces vote inside ten weeks and each frozen roster becomes wrong on its polling
+day. Replacement ingesters, in build order:
+
+| province | election | command | status |
+|---|---|---|---|
+| BC | **2026-10-17** | `compare-bc-municipal-roster` / `apply-bc-municipal-roster` | ✅ built 2026-09-02 |
+| ON | **2026-10-26** | `compare-on-municipal-wards` / `apply-on-municipal-roster` | ✅ partial write shipped; full mode pending |
+| MB | ~2026-10-28 | — | researched (`data.winnipeg.ca` `r4tk-7dip`), not built |
+| PE | ~2026-11-02 | — | researched (3 city scrapes), not built |
+
+**BC.** One endpoint covers all 161 local governments in two GETs.
+
+```bash
+docker compose run --rm scanner compare-bc-municipal-roster            # read-only
+docker compose run --rm scanner apply-bc-municipal-roster --council Saanich   # dry run
+docker compose run --rm scanner apply-bc-municipal-roster --apply      # after the election
+```
+
+⛔ **It will refuse you more often than it runs, and every refusal is load-bearing:**
+
+- **A candidate list wearing a results URL.** `rtype=results` serves candidates with empty
+  `Elected` until the count, and fills in progressively on election night. Tested: the 2026
+  cycle returns 242 rows, none elected, and is refused.
+- **An election older than 90 days**, unless you name a council. Measured on 2022: 111 of
+  113 matched, and *both* remainders were cases where **our data was more current than the
+  authority**. A blanket write would have re-installed a councillor who left for federal
+  politics and reverted a real replacement.
+- **`extra`** — we hold someone the authority does not. Retirement and publisher omission
+  are indistinguishable from here.
+- **A same-named BC municipal row** outside the re-key's scope, rather than duplicating a person.
+
+⚠ **Fetch posture is fixed and deliberate.** `localelections.ca` only, apex host (`www.` +
+a generic user-agent gets 403), `Crawl-delay: 5` honoured between every request, descriptive
+CPD user-agent. ⛔ **Never `civicinfo.bc.ca`** — same organisation, but its robots.txt
+declares `ai-train=no` and `User-agent: ClaudeBot → Disallow: /`.
+
+★ After any roster write, run `reattach-municipal-roster`.
+
 ### ⚠ Dated flips that need a human
 
 `check-boundary-coverage` reports any generation going live within 60 days, with the district

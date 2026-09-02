@@ -256,6 +256,33 @@ Under recommendation (d): `authority = 'city-of-winnipeg'` / `'city-of-saskatoon
 
 ⚠ Rule #5 was waived by the operator for this pass. Findings only; no ingester built.
 
+### ✅ BUILT 2026-09-02 — `compare-bc-municipal-roster` / `apply-bc-municipal-roster`
+
+`services/scanner/src/legislative/bc_municipal_roster.py`. Verified against the completed
+2022 cycle: **12 councils, 113 authority rows, 111 matched.**
+
+⛔ **The two remainders are the important result, and they are not defects.** The authority
+lists *Chak Au* for Richmond (he has since moved to federal politics — there is a federal MP
+row for him) and *Misty Van Popta* for Langley Township (we hold her replacement, Blair
+Whitmarsh). In both cases **our data is more current than the 2022 result**. A wholesale
+apply would have re-installed one and reverted the other, on a green verdict, because a
+`gap` looks identical whether the hole is ours or the publisher's. Hence the **90-day
+freshness window**: past that, a blanket write is refused and `--council` is required.
+
+⚠ Four other things the build found that this research did not:
+- **Vancouver's polygon is served by two elected bodies.** The Park Board's 7 commissioners
+  file under `Jurisdiction Type = "Park Board"`, not `"City"`, so they need their own key —
+  without it they read as 7 retirements. The parkboards report is province-wide (Cultus Lake
+  has one too).
+- **`verify_mapping` must check AREA, not name.** Our own boundary table calls both Langleys
+  "Langley", so transposing their CSD codes passes every name check and 7-vs-9 members is
+  plausible either way round. They differ 30x in area.
+- **Four of five apparent 2022 mismatches were name-form artefacts** (Richard T. Lee, Robert/
+  Rob Rindt, Christopher Mark Coleman, Angela Kate Haer). A loose matcher handles them for
+  reporting only; it requires the surname token to match exactly.
+- **Use the apex host.** `www.localelections.ca` with a generic tool user-agent returns 403;
+  `localelections.ca` with a descriptive one returns 200.
+
 ### ★ BC is ONE province-wide endpoint, not twelve scrapes
 
 **`https://localelections.ca/report/index.php`** — CivicInfo BC's report builder.
