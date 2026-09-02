@@ -281,6 +281,40 @@ twice while the tracker was being written.
 counting them alongside districts made 34 sets look "partially replaced" when each had
 exactly one authoritative row, the outline, and none of its districts.
 
+**Do not assume `reattach-municipal-roster` cleans up after a re-key.**
+It does not, and the two failures look identical from a distance. That job
+selects councils holding a member whose `constituency_id IS NULL` — a
+**detached** member. A re-key nulls nothing: it leaves the member pointing at an
+id that no longer resolves to a live row. That member is **orphaned**, not
+detached, so the job never selects their council and reports `matched=0` while
+looking perfectly healthy. *Why:* found 2026-09-02 on the Halifax cutover. One
+district id changed because the publisher writes "Middle & Upper Sackville" —
+the mirror expanded `&` to `and`, our `slugify` drops it — and the councillor
+sat on a dead id. `reattach-municipal-roster` ran green; only
+`check-boundary-coverage` saw it, as a `municipal/orphaned` **BREACH**. Same
+one-character identity class as the `œ` divergence re-keyed in `0098`.
+*How to apply:* when a cutover changes ANY `constituency_id`, re-key the roster
+**inside the cutover migration**, matched on the exact old id and asserted both
+directions (see `0124`); then run `reattach-municipal-roster` for the genuinely
+detached and `check-boundary-coverage` to prove zero orphans corpus-wide.
+⛔ Do not extend the reattach job to auto-fix orphans — a re-key is a decision
+about identity, and the value of the breach is that it stops and asks.
+
+**Do not read a matching district COUNT as matching geometry.**
+Ruling A7 — vintage must be measured, not counted — and this is the second time
+the same lesson has been paid for. *Why:* `municipal-atlantic.md` recorded Cape
+Breton as `✅ count matches` (12 held, 12 authoritative) and that was cited as
+evidence the set was healthy. When the authoritative file was finally loaded,
+`--compare` measured district-9 at **34.55%** overlap with the polygon we were
+serving, district-4 at 69.20%, district-11 at 70.68%, 8 of 12 below 95%. CBRM
+had been redistricted by N.S. Reg. 150/2023 and the mirror held the pre-2023
+map; residents were being returned the wrong councillor while every count-based
+check said fine. *How to apply:* run `load-boundaries --compare` before any
+cutover and **read** `mean_overlap` / `min` / `below_95%`, not just the matched
+count. ⚠ The inverse trap too — a near-perfect overlap proves nothing when both
+files descend from the same publisher, which is what made Terrebonne look fine
+while 12 of its 14 name-preserved districts had moved.
+
 **Do not ship a municipal boundary cutover without re-attaching the roster.**
 A cutover renames the `source_set` and re-keys `constituency_id`. The roster is
 a different table joined on that id and nothing in the cutover touches it, so
