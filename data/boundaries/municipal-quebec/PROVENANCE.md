@@ -433,3 +433,184 @@ spec silently relabels metres as degrees.
   WordPress** and its REST API (`/wp-json/wp/v2/search`, `/media`) answers a bare curl.
   That is how R929, the opposition certificate and the open-data policy were located,
   and it is reusable for the other Québec municipalities in this arc.
+
+## Gatineau, Saguenay, Lévis, Trois-Rivières, Saint-Jean-sur-Richelieu — added 2026-09-02
+
+| File | Source URL | Retrieved (UTC) | Bytes | sha256 | Licence |
+|---|---|---|---|---|---|
+| `current/gatineau-districts-2025-11.zip` | https://www.gatineau.ca/upload/donneesouvertes/DISTRICT_ELECTORAUX.zip | 2026-09-02T17:39Z | 92659 | `2a8b6135d085aadf425fc2ad3d9053ef65d7eb0748171b18efaa68741dd4f2a1` | CC-BY 4.0 — licence_id `cc-by` on Données Québec package `vgat_-1582475471`, which lists this exact URL as its SHP resource |
+| `current/saguenay-districts-2025.geojson` | https://www.donneesquebec.ca/recherche/dataset/92fd1b10-66dc-4017-968a-b9b6f232a2e9/resource/753bd337-4c4d-48cc-875f-94b301d79020/download/sag_districtselectoraux.geojson | 2026-09-02T17:24Z | 287726 | `35975f108db952e4c24520c60a5c13735a23b3ac36fbfd5ba6d373f9ce533ae4` | CC-BY 4.0 — licence_id `cc-by`, package `sag_district-electoral` |
+| `current/levis-districts-2025-11.geojson` | https://cartes.ville.levis.qc.ca/arcgis/rest/services/SiteWeb/SiteVille/MapServer/5/query?where=1%3D1&outFields=*&outSR=4326&f=geojson | 2026-09-02T17:37Z | 496904 | `a87a1934e08aaa61734f36cf37b6cb1d11fe30fdee2cf89034fbf61052f516e1` | ⚠ **ASSERTED, NOT READ** — CC-BY 4.0 carried over from the city's own Données Québec package `districts-electoraux-levis`; the MapServer publishes no licence text of its own |
+| `current/trois-rivieres-districts-2025-11.geojson` | https://geo.v3r.net/arcgis/rest/services/DonneesOuvertes/DistrictsElectoraux_LAYER_DO/FeatureServer/60/query?where=1%3D1&outFields=*&outSR=4326&f=geojson | 2026-09-02T17:37Z | 135091 | `60b3477c8ebb7f88455067e5cdad4303cc6fe3f5dc6f38423a456882d49257d1` | CC-BY 4.0 — the `DonneesOuvertes` folder is the upstream of Données Québec package `districts-electoraux-v3r` (`cc-by`) |
+| `current/saint-jean-sur-richelieu-districts-2025.geojson` | https://www.donneesquebec.ca/recherche/dataset/6218a375-a8fe-45ce-959b-22c90a291b0b/resource/f937a7e0-6672-4b44-910b-2c83f27c7c92/download/sjsr-disctricts-electoraux.geojson | 2026-09-02T17:24Z | 295488 | `7cdca10e480d20e5515bb91fc678295511c5c79648b6da47a0c3ed63461a9c47` | CC-BY 4.0 — licence_id `cc-by`, package `sjsr-districts-electoraux` |
+
+### ⛔ The count and the name list are blind for all five
+
+MAMH's own election results (`resultats-des-elections-municipales-generales`,
+resources `Elec2021_Mun.csv` and `Elec2025_Mun.csv`, CC-BY) record **identical district
+counts and identical district names in 2021 and in 2025** for every one of the five:
+Gatineau 19, Saguenay 15, Lévis 15, Trois-Rivières 14, Saint-Jean-sur-Richelieu 12.
+Not one district was added, dropped or renamed anywhere in this tranche. So neither the
+count nor the name list can distinguish a refreshed map from a superseded one — the
+Terrebonne case, five times over.
+
+★ **What did distinguish them was the councillor field.** Every one of these files names
+its sitting councillor, and MAMH's 2025 results give the elected councillor per district.
+Comparing the two, district by district, dates the file directly:
+
+| set | file's councillors | verdict |
+|---|---|---|
+| Saguenay | 15 of 15 = 2025-elected | refreshed after the poll |
+| Saint-Jean-sur-Richelieu | 12 of 12 = 2025-elected | refreshed after the poll |
+| Trois-Rivières (live layer) | 14 of 14 = 2025-elected | refreshed after the poll |
+| Gatineau (Données Québec GeoJSON) | 2021-25 council | ⛔ superseded |
+| Lévis (Données Québec) | 2021-25 council | ⛔ superseded |
+
+ⓘ This is the cheapest currency test we have for a Québec municipal file and it needs
+no by-law. Reusable: fetch `Elec2025_Mun.csv`, filter on the 5-digit municipal code,
+keep `Statut du candidat` starting `Élu`, join on the district or the poste number.
+
+### ⛔ Gatineau — one Données Québec package, two vintages, and the format decides which
+
+Package `vgat_-1582475471` offers CSV, GeoJSON, KML, SHP and XLSX. **Four of the five
+resource URLs are `www.gatineau.ca/upload/donneesouvertes/…`, served live by the city.
+The GeoJSON is the one exception — a Données-Québec-side copy — and it is the old map.**
+
+| | last-modified | `DAT_REC` | `CONS` |
+|---|---|---|---|
+| DQ GeoJSON `district_electoraux.json` | 2025-04-24 | `20210101` | 2021-25 council |
+| city `DISTRICT_ELECTORAUX.zip` (staged) | **2025-11-25** | `20240101` | 2025-29 council |
+
+⚠ **And they are not the same map.** District-for-district IoU between the two:
+100.0000% for seventeen of nineteen, `de Hull-Wright` **96.4566%** and
+`du Parc-de-la-Montagne-Saint-Raymond` **96.9578%** — a real adjustment along their
+shared limit, carried out under the division reviewed for 2025. Note what that does to
+the usual checks: **19 districts before and after, all 19 names identical, and nothing
+below 95%.** A `--compare` summary alone reads as "the map did not move".
+
+ⓘ **Reusable test, after Terrebonne's `_archive_<date>` sibling:** when a package offers
+one layer in several formats, HEAD every URL. Divergent `last-modified` headers inside a
+single package mean it is not a package — it is a live directory and a stale mirror
+sharing one title. Cost here: the wrong file was already downloaded and inspected before
+the headers were checked.
+
+### ⛔ Lévis — Données Québec is four years stale and it is a different map
+
+Package `districts-electoraux-levis` still serves the file uploaded **2022-07-21**
+(package `metadata_modified` 2023-06-26). Its `CONSEILLER` field is the 2021-25 council.
+Measured against the city's live layer, same fifteen names on both sides:
+
+| district | IoU | | district | IoU |
+|---|---:|---|---|---:|
+| Charny | **44.4154%** | | Notre-Dame | 94.2007% |
+| Bienville | 56.7050% | | Saint-Étienne | 96.0763% |
+| Saint-Rédempteur | 56.7127% | | Breakeyville | 97.2147% |
+| Taniata | 58.9272% | | Saint-Nicolas | 99.1078% |
+| Villieu | 77.5753% | | Saint-Jean | 99.2484% |
+| Lauzon | 88.9717% | | Pintendre | 99.8914% |
+| Christ-Roi | 92.9151% | | Saint-David | 99.9155% |
+| Saint-Romuald | 93.9031% | | | |
+
+Nine of fifteen below 95%. Lévis redivided for 2025 and kept every name.
+
+★ **The current layer is not published as open data at all.** It lives on
+`cartes.ville.levis.qc.ca`, the city's on-prem ArcGIS Server behind the public
+"Districts et secteurs" map at `levis.ca`. That host is named nowhere on the site's
+HTML — it appears only inside the Nuxt JS chunks, which had to be enumerated from
+`/fr/carte-interactive` and grepped for `MapServer`. ⚠ **Licence therefore rests on an
+assertion**, not on anything the artifact carries; the city's ArcGIS Online org
+(`villedelevis`, `niuNnVx0H92jOc5F`) holds only an `ElectoralDistricts` service last
+modified 2020-11-10 and a `carte_electoral_2017` layer, neither current.
+
+ⓘ Lévis is **one tier**, despite being staged under a two-tier expectation. The same
+MapServer publishes `Arrondissements` as layer 4, but the boroughs elect nobody — Lévis
+wound up its borough councils in 2009 and MAMH's 2025 results record fifteen
+`Conseiller` posts and a mayor, with no borough post of any kind.
+
+### ★ Trois-Rivières — the only file in the tranche that states its own vintage
+
+`geo.v3r.net`'s `DonneesOuvertes/DistrictsElectoraux_LAYER_DO` layer 60 carries, per
+district: `V_ANNEE = 2024` (the division's reference year), `V_DATE_RECENSEMENT =
+2025-10-18` (the elector census for the 2025-11-02 poll), `V_CONSEILLERS` = the
+2025-elected council, `V_ACTIF = 1`. No inference needed.
+
+ⓘ The Données Québec copy is the **same map** — 99.9171% to 99.9799% IoU
+district-for-district, coordinate precision and nothing else — so either file loads the
+same polygons. The live layer was staged because the DQ extract drops exactly the four
+fields that carry the evidence: it publishes `OBJECTID / ID / NOM / V_ACTIF /
+MUNICIPALITE` and no `V_ANNEE`, no `V_DATE_RECENSEMENT`, no councillor.
+
+⚠ **And it inverts the one flag it kept.** The live layer stores `V_ACTIF` as a smallint
+and every district is `1`; the DQ GeoJSON, CSV *and* shapefile all render it as the
+string `"Non"` for all fourteen. Taken at face value that says the published set is
+inactive — the exact opposite of the truth. The published field dictionary
+(`districtselectorauxv3r.pdf`) describes `V_ACTIF` only as "Statut du district
+électoral" and lists four fields the extract does not contain.
+
+### ⓘ Per-file notes
+
+- **Gatineau** — zipped shapefile, `.prj` is bare `GCS_WGS_1984` (degrees), `.cpg` says
+  UTF-8. 19 features, 19 distinct districts. Fields `MUNID`, `CODEID`, `DISTRICT`,
+  `NUM`, `CONS`, `PART`, `ARR`, `DT01`, `DT02`, `NBR_ELECT`, `DAT_REC`, `EMAIL`, `AIRE`,
+  `PERIM`, `ENTITEID`. ⚠ `CODEID` and `NUM` disagree — Mitigomijokan is CODEID 19 /
+  NUM 5, because the district was inserted into the ballot order rather than appended;
+  `CODEID` is the one that does not move. ⛔ Names carry their leading article
+  (`d'Aylmer`, `de l'Orée-du-Parc`) where our 19 ids and MAMH's results do not
+  (`aylmer`, `oree-du-parc`); the draft spec strips it in a `name_builder`, without
+  which the load would mint nineteen new ids and detach the whole council.
+- **Saguenay** — GeoJSON, no `crs` member (RFC 7946 WGS84; first coordinate
+  −71.382, 48.421 agrees). 15 features, 15 distinct. ⚠ **Lowercase** field names —
+  `id`, `municipalite`, `nom`, `conseiller` — where every other publisher in this
+  tranche uppercases them. Districts are numbered, not named. Field dictionary published
+  alongside as `sag_districtselectoraux_meta.pdf`.
+- **Lévis** — GeoJSON via `outSR=4326`; **native SR is EPSG:32187** (NAD83 / MTM zone
+  **7**, metres) — not the zone 8 that Longueuil, Terrebonne and Trois-Rivières sit in.
+  15 features, 15 distinct. Fields `OBJECTID`, `NUMERO`, `NOM`, `UTILISATEURCREATION`,
+  `NOMCONSEIL`.
+- **Trois-Rivières** — GeoJSON via `outSR=4326`; native SR **EPSG:32188**. 14 features,
+  14 distinct. ⛔ Names KEEP their article (`de Châteaudun`, `du Carmel`) and so do our
+  14 ids — the opposite of Gatineau, in the same tranche. The convention is per-city
+  because the mirror that minted the ids was per-city.
+- **Saint-Jean-sur-Richelieu** — GeoJSON, no `crs` member (first coordinate −73.231,
+  45.313). 12 features, 12 distinct. Fields `ID`, `MUNICIPALITE`, `NOM`, `CONSEILLER`,
+  `INFORMATION` (a per-district `sjsr.ca` profile URL). ⛔ `ID` runs 81875–81886 — a
+  city-wide feature sequence, not a by-law district number (district *n* is `ID − 81874`)
+  — so it is deliberately NOT recorded as `authority_district_id`, the same call made at
+  Longueuil for its OBJECTID. ⚠ The resource filename carries the publisher's own typo,
+  `sjsr-disctricts-electoraux.geojson`; kept as-is. ⓘ No second publication of this
+  layer exists anywhere — no ArcGIS Online org, no reachable map server — so unlike
+  Lévis and Gatineau there was no independent copy to cross-check against, and the
+  councillor field is the only thing dating the file.
+
+ⓘ **All five files name the sitting councillor**, three of them refreshed to the
+2025-elected council. Gatineau additionally carries the party (`PART`) and a
+`gatineau.ca` email per district; Saint-Jean-sur-Richelieu carries a profile URL.
+
+### `--compare` against what we hold (2026-09-02, no writes)
+
+| set | authoritative | held | matched | mean | min | below 95% | we hold, authority does not |
+|---|---:|---:|---:|---:|---:|---:|---|
+| `gatineau-districts` | 19 | 20 | 19 | 98.9087% | 96.0596% | 0 | `2481017` |
+| `saguenay-districts` | 15 | 19 | 15 | 96.7180% | 91.2581% | 3 | `2494068`, `chicoutimi`, `jonquiere`, `la-baie` |
+| `levis-districts` | 15 | 16 | 15 | 83.9369% | 44.1075% | 8 | `2425213` |
+| `trois-rivieres-districts` | 14 | 15 | 14 | 92.7316% | 49.3602% | 4 | `2437067` |
+| `saint-jean-sur-richelieu-districts` | 12 | 13 | 12 | 95.5116% | 68.5824% | 2 | `2456083` |
+
+Zero districts in "authority has, we do not" anywhere — every slug in all five files
+lands on a row we already hold, including Gatineau's nineteen once the article is
+stripped. The single unmatched row in four of the five sets is the stray
+`census-subdivisions/<7-digit>` municipality polygon the dossier already documents.
+
+⛔ **Read the Gatineau row against the Gatineau section above.** Mean 98.91%, min 96.06%,
+**nothing below 95%** — and the map still moved, at Hull-Wright and
+Parc-de-la-Montagne—Saint-Raymond. A clean summary is not a clean bill of health when
+the two sides share a publisher.
+
+⚠ **Saguenay's three orphans are structural, not a shortfall.** The authoritative file
+publishes districts only; the `saguenay-boroughs/*` rows filed inside
+`saguenay-districts` have no counterpart in it and no counterpart in MAMH's 2025 results
+either, which record fifteen `Conseiller` posts and a mayor and no borough post — the
+présidents d'arrondissement are designated from among the sitting councillors. So this
+is a source that OMITS a tier, not one that MIXES tiers as Sherbrooke's does, and no
+`kind_builder` applies. Whether to retire or keep those three rows is the cutover
+migration's decision.

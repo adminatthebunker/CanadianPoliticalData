@@ -12,8 +12,8 @@ Keyed on `constituency_boundaries.authority`, which is NULL until a set is cut o
 |---|---:|---:|---:|---:|---:|
 | federal | 343 | 343 | 100.0% | 0 | 0 |
 | provincial | 781 | 657 | 84.1% | 124 | 0 |
-| municipal | 1343 | 1044 | 77.7% | 15 | 284 |
-| **total** | **2467** | **2044** | **82.9%** | **139** | **284** |
+| municipal | 1343 | 1100 | 81.9% | 15 | 228 |
+| **total** | **2467** | **2100** | **85.1%** | **139** | **228** |
 
 **successor dated** — mirror geometry still in force, with an authoritative replacement already loaded and dated. It resolves on a known day with no work: all of it is Québec's 2017 provincial map, live until 2026-10-04, superseded 2026-10-05 by the 127-district successor (migration `0117`). ⚠ Until that date, Québec provincial lookups return mirror polygons.
 
@@ -23,7 +23,7 @@ Keyed on `constituency_boundaries.authority`, which is NULL until a set is cut o
 
 | province | live | authoritative | % | remaining |
 |---|---:|---:|---:|---:|
-| QC | 338 | 151 | 44.7% | 187 |
+| QC | 338 | 207 | 61.2% | 131 |
 | ON | 347 | 292 | 84.1% | 40 |
 | AB | 47 | 26 | 55.3% | 21 |
 | PE | 21 | 0 | 0.0% | 21 |
@@ -35,16 +35,12 @@ Keyed on `constituency_boundaries.authority`, which is NULL until a set is cut o
 
 ### The named remainder
 
-284 district rows across 35 sets. Each is a map somebody has to go and get.
+228 district rows across 32 sets. Each is a map somebody has to go and get.
 
 | province | set | live | remaining |
 |---|---|---:|---:|
 | QC | `gatineau-districts` | 19 | 19 |
 | QC | `montreal-boroughs-and-districts` | 76 | 18 |
-| QC | `saguenay-districts` | 18 | 18 |
-| QC | `levis-districts` | 15 | 15 |
-| QC | `trois-rivieres-districts` | 14 | 14 |
-| QC | `saint-jean-sur-richelieu-districts` | 12 | 12 |
 | QC | `saint-jerome-districts` | 12 | 12 |
 | PE | `charlottetown-wards` | 10 | 10 |
 | SK | `saskatoon-wards` | 10 | 10 |
@@ -74,6 +70,7 @@ Keyed on `constituency_boundaries.authority`, which is NULL until a set is cut o
 | ON | `wilmot-wards` | 4 | 4 |
 | ON | `woolwich-wards` | 3 | 3 |
 | PE | `stratford-wards` | 3 | 3 |
+| QC | `saguenay-districts` | 18 | 3 |
 
 ## Roster — is the person ours?
 
