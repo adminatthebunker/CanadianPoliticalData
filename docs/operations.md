@@ -718,7 +718,7 @@ day. Replacement ingesters, in build order:
 | BC | **2026-10-17** | `compare-bc-municipal-roster` / `apply-bc-municipal-roster` | ✅ built 2026-09-02 |
 | ON | **2026-10-26** | `compare-on-municipal-wards` / `apply-on-municipal-roster` | ✅ partial write shipped; full mode pending |
 | MB | **2026-10-28** | `compare-mb-municipal-roster` / `apply-mb-municipal-roster` | ✅ built 2026-09-02 |
-| PE | ~2026-11-02 | — | researched (3 city scrapes), not built |
+| PE | **2026-11-02** ✅*confirmed* | `compare-pe-municipal-roster` / `apply-pe-municipal-roster` | ✅ built 2026-09-02 |
 
 **BC.** One endpoint covers all 161 local governments in two GETs.
 
@@ -768,6 +768,34 @@ to `charleswood-tuxedo`, which matches no polygon.
 a generic user-agent gets 403), `Crawl-delay: 5` honoured between every request, descriptive
 CPD user-agent. ⛔ **Never `civicinfo.bc.ca`** — same organisation, but its robots.txt
 declares `ai-train=no` and `User-agent: ClaudeBot → Disallow: /`.
+
+**PE.** Three councils, 24 seats. Charlottetown 10 wards, Summerside 8, Stratford 3
+with **two councillors per ward**.
+
+```bash
+docker compose run --rm scanner compare-pe-municipal-roster              # read-only
+docker compose run --rm scanner apply-pe-municipal-roster --apply
+```
+
+⛔ **Charlottetown is anchored on the ward NUMBER, and must stay that way.** Two of
+our ward names are a generation stale — `st-avards` is ward 4 while the city now
+calls ward 4 *Spring Park*, which is our ward **5**'s slug. So a name join
+**cross-wires** those two seats. A research pass reported exactly that as "two
+councillors on the wrong ward"; the roster was right and the names were stale.
+
+⛔ **`orphan` and `vacancy` are refused, and should stay refused.** On its first
+run this parser read 8 of Charlottetown's 10 councillors and reported the other
+two as orphans — they publish pronouns between their name and their ward. An
+auto-retire path would have deactivated two sitting councillors over a missing
+`(she/her)`. Confirmed departures go in a migration with the publisher's words
+(see `0128`).
+
+⚠ **`townofstratford.ca` robots.txt names ClaudeBot with `Disallow: /`** on the
+host itself. Fetching it is a standing operator decision (2026-09-02), not a
+default — revisit it rather than inherit it.
+
+★ **PE's 2026-11-02 date is now sourced**, not inferred: Summerside's own council
+page states it while explaining the mayoral vacancy.
 
 ★ After any roster write, run `reattach-municipal-roster`.
 

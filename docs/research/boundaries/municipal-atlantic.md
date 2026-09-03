@@ -486,6 +486,32 @@ Cloudflare) — hard-blocked, do not retry with a different UA. `data.princeedwa
 CKAN returns **404** — there is no PEI CKAN, confirming this dossier. Stratford's open-data
 catalogue page exists but is **empty prose**, an aspiration rather than a catalogue.
 
+### ✅ PE BUILT 2026-09-02 — and one of the three "defects" was not one
+
+`services/scanner/src/legislative/pe_municipal_roster.py`. **24 seats, 22 agree.**
+
+⛔ **Finding 1 above is WITHDRAWN.** Charlottetown's wards 4 and 5 are *not* mis-keyed.
+Checked against the city's own councillor page: ward 4 is Mitchell G. Tweel and ward 5 is
+Kevin Ramsay — exactly what we hold. What is stale is our ward **names**: `st-avards` is a
+name the city no longer uses, and `spring-park` has moved from ward 5 to ward 4 under us.
+The original report compared our *slug* to the city's *name* across generations.
+★ This is why the polygon check had to come first — it saved two wrong re-keys.
+
+⚠ **But it leaves a live hazard.** Any future name-based match puts the city's "Spring
+Park" (ward 4) on our `spring-park` polygon (ward 5). The ingester anchors on the ward
+number parsed from our polygon's own `name` field for exactly this reason.
+
+✅ **Finding 3 confirmed and actioned** (migration `0128`): Summerside's page states "Dan
+Kutcher resigned as Mayor... effective September 1, 2026" and that the office stays vacant
+until polling day. He is end-dated and the seat left empty.
+★ That page also **confirms PE's 2026-11-02 election date**, which was a statutory-cycle
+inference everywhere else in this corpus.
+
+⚠ **Finding 2 still open.** Jody Jackson is absent from Stratford's page (0 mentions) and
+Ward 3 shows one member where Wards 1 and 2 show two — consistent with a resignation, but
+the town publishes no statement. Absence is the evidence, and absence is what the
+ingester's `orphan`/`vacancy` refusal exists to distrust.
+
 ### ⚠ Three roster defects found, NOT yet actioned
 
 None of these were written — each rests on a single web read, and de-activating or re-keying
