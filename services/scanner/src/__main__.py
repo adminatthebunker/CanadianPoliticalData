@@ -4257,6 +4257,82 @@ def cmd_compare_on_municipal_roster(ctx: click.Context, cycle: int, councils) ->
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 
 
+@cli.command("compare-pe-municipal-roster")
+@click.option("--council", default=None, help="charlottetown | summerside | stratford")
+@click.pass_context
+def cmd_compare_pe_municipal_roster(ctx: click.Context, council) -> None:
+    """READ-ONLY: ward-anchored diff of the three PEI councils.
+
+    ⛔ Charlottetown is anchored on the ward NUMBER, not the name. Two of our
+    ward slugs are a generation stale — `st-avards` is ward 4 and `spring-park`
+    is ward 5, while the city now calls ward 4 "Spring Park" — so a name join
+    CROSS-WIRES those two seats.
+
+    ⚠ Stratford elects two councillors per ward, so comparison is over the SET
+    of holders per ward.
+    """
+    from .legislative.pe_municipal_roster import compare_pe_municipal_roster
+
+    async def _wrap(db: Database) -> None:
+        st = await compare_pe_municipal_roster(db, council=council)
+        for p in st.problems:
+            console.print(f"[red]REFUSED[/red] {p}")
+        for u in st.unmapped:
+            console.print(f"[yellow]unmapped[/yellow] {u}")
+        if st.problems:
+            raise SystemExit("compare-pe-municipal-roster: refused, see above")
+        cur = None
+        for d in st.diffs:
+            if d.council != cur:
+                cur = d.council
+                console.print(f"[bold]{cur}[/bold]")
+            colour = {"agree": "green", "stale": "yellow", "gap": "yellow",
+                      "vacancy": "yellow", "orphan": "red"}[d.verdict]
+            console.print(
+                f"  [{colour}]{d.verdict:<8}[/{colour}] {d.ward_label:<26} "
+                f"city={d.authority} held={d.held}"
+            )
+        console.print(
+            f"compare-pe-municipal-roster: seats={len(st.diffs)} "
+            f"agree={st.count('agree')} stale={st.count('stale')} "
+            f"gap={st.count('gap')} vacancy={st.count('vacancy')} "
+            f"orphan={st.count('orphan')}"
+        )
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
+@cli.command("apply-pe-municipal-roster")
+@click.option("--council", default=None, help="charlottetown | summerside | stratford")
+@click.option("--apply", "do_apply", is_flag=True, default=False,
+              help="Actually write. Default is a dry run.")
+@click.pass_context
+def cmd_apply_pe_municipal_roster(ctx: click.Context, council, do_apply) -> None:
+    """Write the PEI rosters. ⛔ The per-ward verdict is the authorisation.
+
+    Only `stale` and `gap` are written. ⛔ `orphan` and `vacancy` are refused —
+    removing a sitting official on the absence of a name from a page is the
+    least reversible thing here, and this parser dropped two of Charlottetown's
+    ten councillors on its first run over a `(she/her)`. Verified departures go
+    in a migration with the publisher's words recorded.
+    """
+    from .legislative.pe_municipal_roster import apply_pe_municipal_roster
+
+    async def _wrap(db: Database) -> None:
+        st = await apply_pe_municipal_roster(db, council=council, dry_run=not do_apply)
+        for p in st.problems:
+            console.print(f"[red]REFUSED[/red] {p}")
+        if st.problems:
+            raise SystemExit("apply-pe-municipal-roster: refused, see above")
+        for sk in st.skipped:
+            console.print(f"[yellow]skipped[/yellow] {sk}")
+        console.print(
+            f"[green]apply-pe-municipal-roster[/green]: installed={st.installed} "
+            f"rekeyed={st.rekeyed} updated={st.updated}"
+            + ("" if do_apply else "  [yellow](dry run)[/yellow]")
+        )
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
 @cli.command("compare-mb-municipal-roster")
 @click.option("--year", type=int, default=None,
               help="Election cycle. Default: whoever the city marks current_council.")

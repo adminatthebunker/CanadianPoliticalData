@@ -242,6 +242,24 @@ COMMANDS: dict[str, dict[str, Any]] = {
              "help": "AMO election cycle: 2018, 2022 or 2026. Default 2026."},
         ],
     },
+    "compare-pe-municipal-roster": {
+        "description": "READ-ONLY ward-anchored diff of the three PEI councils — Charlottetown 10 wards, Summerside 8, Stratford 3 (TWO councillors per ward) — against what we hold. 24 seats total. ⛔ Charlottetown is anchored on the ward NUMBER parsed from our own polygon's name ('Ward 4'), NOT the slug: two of our Charlottetown ward names are a generation stale — `st-avards` IS ward 4 while the city now calls ward 4 'Spring Park', which is OUR ward 5's slug — so a name join CROSS-WIRES those two seats. A prior research pass reported exactly that as two councillors on the wrong ward; checked against the city's own page, the roster was right and the NAMES are what is stale. Summerside and Stratford have no ward numbers on our polygons and map by slugified name, refusing unless the mapping is complete and 1:1. Comparison is over the SET of holders per ward, which is what makes Stratford's two-seat wards work. Writes nothing.",
+        "cli": "compare-pe-municipal-roster",
+        "category": "maintenance",
+        "args": [{"name": "council", "type": "str", "required": False,
+                  "help": "charlottetown | summerside | stratford"}],
+    },
+    "apply-pe-municipal-roster": {
+        "description": "Write the PEI rosters. ⛔ The per-ward verdict is the authorisation: only `stale` and `gap` are written. ⛔ `orphan` and `vacancy` are REFUSED — removing a sitting official on the absence of a name from a page is the least reversible thing here, and this parser silently dropped two of Charlottetown's ten councillors on its first run because they publish pronouns between their name and their ward. An auto-retire path would have deactivated two sitting councillors over a missing '(she/her)'. Verified departures go in a migration with the publisher's own words recorded — see 0128 for the Summerside mayoralty. Re-keys rather than replaces; refuses to insert when a same-named PE municipal row exists outside the re-key's scope. Dry run by default.",
+        "cli": "apply-pe-municipal-roster",
+        "category": "maintenance",
+        "args": [
+            {"name": "council", "type": "str", "required": False,
+             "help": "charlottetown | summerside | stratford"},
+            {"name": "apply", "type": "bool", "required": False,
+             "help": "Actually write. Default is a dry run."},
+        ],
+    },
     "compare-mb-municipal-roster": {
         "description": "READ-ONLY seat-anchored diff of Winnipeg city council against what we hold, from data.winnipeg.ca's Council Data (r4tk-7dip, Socrata, declared Canada Open Government Licence). MB's whole municipal exposure is this one council of 16. ★ Anchored on the WARD NUMBER — our polygons carry it as authority_district_id (dense 1..15) and Socrata carries it as ward_id — so it never matches a person to a district by name. ⛔ Do NOT switch this to web_name: it is kebab-case, matches our slug form and agrees on 15 of 16 rows, then truncates ward 7 'Charleswood - Tuxedo - Westwood' to 'charleswood-tuxedo', which matches NO polygon. ⛔ Prefer this dataset over the ward geometry t4cg-yaxs, which has no mayor, no currency flag, and declares the wrong province's licence. Refuses when the city has not yet refreshed after an election, and refuses a superseded cycle. Writes nothing.",
         "cli": "compare-mb-municipal-roster",
