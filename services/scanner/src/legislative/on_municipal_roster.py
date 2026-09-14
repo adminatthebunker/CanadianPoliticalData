@@ -618,7 +618,8 @@ class WardVerdict:
             # which parses [...] as a style tag and silently swallows the
             # contents — the unmatched names printed as empty space.
             extra = f"  <ours: {j(self.unmatched_held)} | amo: {j(self.unmatched_amo)}>"
-        return (f"ward {self.ward:>3} {self.ward_name[:22]:22s} "
+        label = "city-wide" if self.ward == 0 else f"ward {self.ward:>3}"
+        return (f"{label:>9} {self.ward_name[:22]:22s} "
                 f"seats={len(self.amo_now)} {self.status}{extra}")
 
 
@@ -668,6 +669,96 @@ async def ward_index(db: Database, source_set: str) -> dict[int, tuple[str, str]
         if m:
             out[int(m.group(1))] = (r["constituency_id"], r["name"])
     return out
+
+
+def classify_seats(
+    seats_now: list[Seat], a_prev: list[str], held: list[str],
+    prev: Optional[int],
+) -> tuple[str, list[str], list[Seat]]:
+    """Match who we hold against who the publisher elected, for ONE seat group.
+
+    ★ Extracted 2026-09-14 so the ward pass and the city-wide pass share it
+    rather than carrying two copies of the same subtle rules. The matching is
+    two-stage on purpose — exact/loose first, THEN the spelling-variant pass —
+    so a typo cannot consume a slot a real match wanted. And the classification
+    order matters: `STALE` requires positive proof against the previous cycle's
+    own result, which is what makes it an authorisation to retire somebody.
+
+    Returns (status, unmatched_held, unmatched_amo).
+    """
+    a_now = [x.name for x in seats_now]
+    rem_amo: list[Seat] = list(seats_now)
+    rem_held: list[str] = []
+    spelling: list[tuple[str, str]] = []
+    for x in held:
+        hit = next((y for y in rem_amo if loose_same_person(x, y.name)), None)
+        if hit is None:
+            rem_held.append(x)
+        else:
+            rem_amo.remove(hit)
+    still: list[str] = []
+    for x in rem_held:
+        hit = next((y for y in rem_amo if near_same_person(x, y.name)), None)
+        if hit is None:
+            still.append(x)
+        else:
+            rem_amo.remove(hit)
+            spelling.append((x, hit.name))
+    rem_held = still
+
+    if not held:
+        status = "gap — we hold nobody"
+    elif not a_now:
+        status = "extra — AMO elected nobody here"
+    elif not rem_held and not rem_amo:
+        status = ("agree" if not spelling else
+                  "spelling differs — verify, probably the same person")
+    elif rem_held and a_prev and all(
+            any(loose_same_person(x, y) for y in a_prev) for x in rem_held):
+        status = (f"STALE — we hold the {prev} winner"
+                  + (f" in {len(rem_held)} of {len(a_now)} seats"
+                     if len(a_now) > 1 else ""))
+    elif not rem_held:
+        status = f"incomplete — {len(rem_amo)} seat(s) we do not hold"
+    else:
+        status = "unknown-holder — by-election or pre-cycle residue"
+    return status, rem_held, rem_amo
+
+
+async def municipality_anchor(db: Database, council: str) -> Optional[str]:
+    """The council's own municipality polygon — where a city-wide seat attaches.
+
+    ⚠ Derived from an already-attached member of this council, NOT from the ward
+    set's own rows, because the two do not reliably coincide: Kingston, Windsor
+    and Greater Sudbury file a municipality row inside their ward set, while
+    Toronto and Brampton do not — Brampton's mayor sits on a polygon filed under
+    `peel-wards`. Same query `municipal_reattach.py` uses for its geographic
+    anchor, and refusing when it is absent is the same call that module makes.
+    """
+    return await db.fetchval(
+        """
+        SELECT b.constituency_id
+          FROM politicians p
+          JOIN constituency_boundaries b
+            ON b.constituency_id = p.constituency_id
+         WHERE p.is_active AND p.level = 'municipal'
+           AND split_part(p.source_id, ':', 2) = $1
+           AND b.boundary_kind = 'municipality'
+           AND b.effective_from <= CURRENT_DATE
+           AND (b.effective_to IS NULL OR b.effective_to >= CURRENT_DATE)
+         LIMIT 1
+        """,
+        council,
+    )
+
+
+# ⛔ The sentinel for a city-wide seat. Wards are 1-based everywhere in this
+# module and in every publisher's data, so 0 cannot collide with a real ward —
+# which lets a mayor flow through the SAME WardVerdict, the same `installable`
+# and `writable` authorisations, the same per-person de-duplication and the same
+# `_install_seat` / `_retire_holder` path as a ward councillor, instead of a
+# parallel code path that would have to re-earn all of those guarantees.
+CITY_WIDE = 0
 
 
 async def compare_wards(
@@ -770,49 +861,57 @@ async def compare_wards(
                 if not a_now and not h:
                     continue
 
-                # Match seat-wise, not ward-wise. Exact/loose first, then the
-                # spelling-variant pass, so a typo does not consume a slot a
-                # real match wanted.
-                rem_amo: list[Seat] = list(seats_now)
-                rem_held: list[str] = []
-                spelling: list[tuple[str, str]] = []
-                for x in h:
-                    hit = next((y for y in rem_amo if loose_same_person(x, y.name)), None)
-                    if hit is None:
-                        rem_held.append(x)
-                    else:
-                        rem_amo.remove(hit)
-                still: list[str] = []
-                for x in rem_held:
-                    hit = next((y for y in rem_amo if near_same_person(x, y.name)), None)
-                    if hit is None:
-                        still.append(x)
-                    else:
-                        rem_amo.remove(hit)
-                        spelling.append((x, hit.name))
-                rem_held = still
-
-                if not h:
-                    status = "gap — we hold nobody"
-                elif not a_now:
-                    status = "extra — AMO elected nobody here"
-                elif not rem_held and not rem_amo:
-                    status = ("agree" if not spelling else
-                              "spelling differs — verify, probably the same person")
-                elif rem_held and a_prev and all(
-                        any(loose_same_person(x, y) for y in a_prev) for x in rem_held):
-                    status = (f"STALE — we hold the {prev} winner"
-                              + (f" in {len(rem_held)} of {len(a_now)} seats"
-                                 if len(a_now) > 1 else ""))
-                elif not rem_held:
-                    status = f"incomplete — {len(rem_amo)} seat(s) we do not hold"
-                else:
-                    status = "unknown-holder — by-election or pre-cycle residue"
+                status, rem_held, rem_amo = classify_seats(
+                    seats_now, a_prev, h, prev)
                 verdicts.append(WardVerdict(
                     ward, cid, wname, a_now, a_prev, h, status,
                     unmatched_held=rem_held,
                     unmatched_amo=[y.name for y in rem_amo],
                     install=rem_amo, council=council, source_set=source_set))
+
+            # ── City-wide seats ──────────────────────────────────────────────
+            # ⛔ THIS PASS EXISTS BECAUSE 76 SEATS WERE INVISIBLE.
+            #
+            # `parse_position` has always classified mayors, deputy mayors,
+            # regional chairs, wardens and at-large councillors correctly, and
+            # `extract_seats` has always carried the flag onto the Seat. But
+            # `Seat.at_large` was READ NOWHERE, and the only geographic consumer
+            # was `by_ward`, which iterates `s.wards` — empty for a city-wide
+            # seat, so the loop ran zero times and the seat was silently
+            # dropped. Every mayor and at-large councillor in Ontario was
+            # therefore absent from both the comparison AND the writer: 76 of
+            # 603 held rows, unreachable by construction rather than by policy.
+            #
+            # They attach to the municipality polygon, exactly as Québec's
+            # mayors do (qc_municipal_roster.py:395-413) and as all 76 already
+            # do in our data — so the fix is a second grouping, not a second
+            # model. Emitted as ward=CITY_WIDE so they inherit the same
+            # authorisations and the same writer.
+            city_now = [x for x in now if not x.wards]
+            city_prev = [x for x in before if not x.wards]
+            if city_now or city_prev:
+                anchor = await municipality_anchor(db, council)
+                if anchor is None:
+                    # Same refusal as municipal_reattach: without the polygon
+                    # there is nowhere to put them, and guessing is worse.
+                    st.problems.append(
+                        f"{council}: {len(city_now)} city-wide seat(s) but no "
+                        f"municipality polygon to attach them to — skipped")
+                else:
+                    h_city = held_by_cid.get(anchor, [])
+                    if city_now or h_city:
+                        status, rem_held, rem_amo = classify_seats(
+                            city_now, [x.name for x in city_prev], h_city, prev)
+                        verdicts.append(WardVerdict(
+                            CITY_WIDE, anchor, "city-wide",
+                            [x.name for x in city_now],
+                            [x.name for x in city_prev],
+                            h_city, status,
+                            unmatched_held=rem_held,
+                            unmatched_amo=[y.name for y in rem_amo],
+                            install=rem_amo, council=council,
+                            source_set=source_set))
+
             results[council] = verdicts
             st.councils += 1
             st.seats += len(verdicts)
@@ -1028,8 +1127,23 @@ def superseded_by(cycle: int, today: Optional[date] = None) -> Optional[int]:
 async def apply_on_municipal_roster(
     db: Database, cycle: int = 2022, councils: Optional[list[str]] = None,
     apply: bool = False, allow_superseded: bool = False,
+    full: bool = False,
 ) -> ApplyStats:
-    """Write only the seats the ward comparison classified as writable."""
+    """Write only the seats the comparison classified as writable.
+
+    ★ TWO MODES, AND THE DIFFERENCE IS WHETHER AN ELECTION HAS HAPPENED.
+
+    PARTIAL (default) — the pre-election shape. Retires only the specific person
+    occupying a seat it is replacing. Correct when writing 19 evidenced seats out
+    of 185 held rows, because the other 166 people are sitting right now.
+
+    FULL (`full=True`) — the post-election shape, and the Québec precedent
+    (`qc_municipal_roster.py:355-367`). A general election refills EVERY seat on
+    the same day, so anything left in `opennorth:<council>:%` afterwards
+    genuinely is not on the council any more, and the cohort can be deactivated
+    wholesale. ⛔ That is only true AFTER the election — running full mode before
+    polling day would retire the entire sitting council.
+    """
     st = ApplyStats(cycle=cycle)
     sup = superseded_by(cycle)
     if sup and not allow_superseded:
@@ -1040,6 +1154,26 @@ async def apply_on_municipal_roster(
             f"deliberate historical correction, per council."
         )
         return st
+    # ⛔ FULL MODE IS ONLY LEGAL ONCE THE ELECTION HAS HAPPENED, and this is
+    # checked BEFORE the comparison on purpose. Placed after it, the run hits
+    # `if not results: return st` first — because a cycle whose election has not
+    # happened has no `elected` members to extract — and reports a bare
+    # "councils=0" instead of the actual reason, after 42 pointless AMO fetches.
+    # A mode error should fail fast and say what it is.
+    if full:
+        held_date = ELECTION_DATES.get(cycle)
+        if held_date is None:
+            st.problems.append(f"full mode: no election date known for {cycle}")
+            return st
+        if held_date > date.today():
+            st.problems.append(
+                f"full mode refused — the {cycle} Ontario municipal election is "
+                f"{held_date}, which has not happened yet ({date.today()}). A "
+                f"cohort deactivation before polling day retires the entire "
+                f"sitting council. Use partial mode until then."
+            )
+            return st
+
     cmp_st, results = await compare_wards(db, cycle=cycle, councils=councils)
     st.problems.extend(cmp_st.problems)
     if not results:
@@ -1075,7 +1209,8 @@ async def apply_on_municipal_roster(
         for v in writable:
             st.writable += 1
             st.actions.append(
-                f"  ward {v.ward} ({v.ward_name}) — {v.status}")
+                f"  {'city-wide' if v.ward == CITY_WIDE else f'ward {v.ward}'}"
+                f" ({v.ward_name}) — {v.status}")
             for nm in (v.unmatched_held if v.writable else []):
                 if nm in done_retire:
                     continue
@@ -1086,4 +1221,35 @@ async def apply_on_municipal_roster(
                     continue
                 done_install.add(seat.name)
                 await _install_seat(db, council, seat, v.ward_name, st, apply)
+
+        # ── Cohort deactivation, full mode only ──────────────────────────────
+        # ★ THE QUÉBEC PRECEDENT, AND WHY IT IS ONLY LEGAL NOW.
+        # A general election refilled every seat on this council on the same
+        # day, so a row still carrying `opennorth:<council>:%` after the installs
+        # above did not win anything — it is the previous cycle's residue. That
+        # reasoning is FALSE before polling day, which is why partial mode
+        # retires only individually-evidenced people and why the guard above
+        # refuses full mode until the election date has passed.
+        if full:
+            # ⛔ Refuse the sweep on any council the comparison could not read
+            # in full. `qc_municipal_roster.py:168-174` makes the same call:
+            # deactivating a council because its data did not load would wipe
+            # it. A council with problems keeps its cohort and gets reported.
+            if any(council in pr for pr in st.problems):
+                st.actions.append(
+                    f"  cohort sweep SKIPPED — this council had comparison "
+                    f"problems; a council that failed to load must not be wiped")
+                continue
+            rows = await db.fetch(
+                """
+                SELECT id, name FROM politicians
+                 WHERE is_active AND level = 'municipal'
+                   AND province_territory = 'ON'
+                   AND source_id LIKE $1
+                """,
+                f"opennorth:{council}:%",
+            )
+            for r in rows:
+                st.actions.append(f"  cohort retire — {r['name']}")
+                await _retire_holder(db, council, r["name"], st, apply)
     return st
