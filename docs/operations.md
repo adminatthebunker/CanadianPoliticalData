@@ -708,6 +708,64 @@ does **not** commit.
    and the feature count, the `--compare` overlap (99.38%) and every name all agreed.
 5. `boundary-progress`, and commit `PROGRESS.md` with the migration.
 
+### ⚠ Election-day runbook — five dates, autumn 2026
+
+Every one of these is a day where doing nothing leaves the dataset wrong. In date
+order.
+
+**2026-10-05 — Québec provincial, 125 → 127 seats.**
+The 2017 map end-dates 10-04 and the 2026 map takes force 10-05; both are already
+loaded, nothing to fetch. Apply the migration that is already written and waiting:
+
+```bash
+docker exec -i sw-db psql -U sw -d sovereignwatch -v ON_ERROR_STOP=1 \
+  < db/migrations/0129_qc_provincial_seats_125_to_127.sql
+```
+
+⛔ It **refuses before the flip** — it counts live districts and raises on 125 — so
+it cannot be applied early by accident. ⚠ Six sitting MNAs hold a 2017 district
+that has no 2026 counterpart; their districts are *dissolved*, not renamed, so
+there is no correct re-key. Ingest the QC provincial roster for the new cycle in
+the same change, and expect the sentinel to report those six until you do.
+
+**2026-10-17 BC · 2026-10-26 ON · 2026-10-28 MB · 2026-11-02 PE — municipal.**
+All four have a replacement ingester. The shape is the same everywhere:
+
+```bash
+docker compose run --rm scanner compare-<prov>-municipal-roster   # read first
+docker compose run --rm scanner apply-<prov>-municipal-roster --apply
+docker compose run --rm scanner reattach-municipal-roster
+docker compose run --rm scanner check-boundary-coverage
+```
+
+⛔ **Do not run the apply on election night.** Every one of these sources publishes
+candidates before it publishes winners, and each ingester refuses on that basis —
+but the refusal is the safety net, not the plan. Wait for the count to complete.
+BC's report carried 242 rows in early September and **2,190 once nominations
+closed on 09-11**, all of them still `Elected=NO`; a run that ignored the guard
+would have installed two thousand candidates.
+
+⚠ **Ontario needs `--full`, and only after polling day:**
+
+```bash
+docker compose run --rm scanner apply-on-municipal-roster --cycle 2026 --full --apply
+```
+
+That adds the cohort sweep — deactivating each council's residual `opennorth:`
+rows, which is only sound once an election has refilled every seat. It refuses
+before 2026-10-26. ★ Ontario is also the only one with **city-wide seats**
+(76 mayors / at-large / chairs / wardens); they were invisible to the writer
+until 2026-09-14 and now flow through as `ward=CITY_WIDE`.
+
+⚠ **MB's trap runs the other way** — Winnipeg updates its council dataset *by
+hand after* the election, so `current_council` names the outgoing council until
+they refresh. Its guard refuses on the file's own `year`; if it fires on 10-29,
+that is the city being slow, not a bug. Wait.
+
+**2026-11-01 — DST ends.** Schedules sit at 08:00–11:00 UTC, chosen as 02:00–05:00
+local. After this date that window is 03:00–06:00 local. Harmless unless something
+downstream assumes local small-hours; noted so it is not rediscovered.
+
 ### Municipal rosters — the election cliff
 
 Four provinces vote inside ten weeks and each frozen roster becomes wrong on its polling
