@@ -14,9 +14,12 @@ replacing Socrata (ola.org has no API):
 Scope for this pass: Parliament 44, Session 1 only. Backfill of
 earlier Parliaments is deferred — see docs/research/ontario.md.
 
-No WAF has been observed on ola.org across probe traffic, so pacing is
-~1.5 sec/req (vs. NS's 4–6 sec). Still polite — ola.org is a small
-Drupal site. We keep WAF-fingerprint detection in place defensively.
+Pacing is ~1.5 sec/req (vs. NS's 4-6 sec). Still polite - ola.org is a
+small Drupal site, and we keep WAF-fingerprint detection in place.
+
+⛔ Identify honestly - see the note on ``_HEADERS``. This module spoofed a
+browser until 2026-09-14 and ola.org started 403ing precisely that, while
+its sibling ON pipelines using an declared bot UA never broke.
 """
 from __future__ import annotations
 
@@ -32,7 +35,6 @@ import httpx
 import orjson
 
 from ..db import Database
-from ..gap_fillers.shared import BROWSER_UA
 
 log = logging.getLogger(__name__)
 
@@ -49,15 +51,32 @@ REQUEST_TIMEOUT = 30
 
 _WAF_MARKER = "Request Rejected"
 
+# ⛔ IDENTIFY HONESTLY. DO NOT PUT A BROWSER USER-AGENT BACK HERE.
+#
+# This block used to send `BROWSER_UA` plus a full `Sec-Fetch-*` set — a
+# deliberate browser impersonation. On or before 2026-09-09 ola.org started
+# refusing exactly that fingerprint and `ingest-on-bills` began failing with a
+# bare 403, six runs in a row, while `ingest-on-hansard` and
+# `ingest-on-committees` kept succeeding against the SAME HOST all along.
+#
+# ★ The difference was the user-agent, and it ran the opposite way to intuition.
+# Measured 2026-09-14 on the same URL, same container, same second:
+#
+#     honest bot UA     -> 200, 353,650 bytes
+#     spoofed browser   -> 403,     446 bytes
+#
+# ola.org is not blocking us. It is blocking things that pretend to be Chrome.
+# Announcing what we are is both what works and what we already do everywhere
+# else — on_hansard.py and on_committees.py have always used this UA, which is
+# why they never broke. Same posture as localelections.ca and data.winnipeg.ca.
+#
+# ⚠ The lesson generalises: a 403 on one pipeline while its siblings on the same
+# host succeed is a FINGERPRINT difference, not an IP block. Diff the headers
+# before assuming a WAF.
 _HEADERS = {
-    "User-Agent": BROWSER_UA,
+    "User-Agent": "CanadianPoliticalDataBot/1.0 (+https://canadianpoliticaldata.org)",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate",
-    "Upgrade-Insecure-Requests": "1",
-    "Sec-Fetch-Dest": "document",
-    "Sec-Fetch-Mode": "navigate",
-    "Sec-Fetch-Site": "none",
+    "Accept-Language": "en-CA,en;q=0.9",
 }
 
 
