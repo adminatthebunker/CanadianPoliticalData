@@ -367,6 +367,19 @@ COMMANDS: dict[str, dict[str, Any]] = {
              "help": "Cap on V&P documents fetched this run."},
         ],
     },
+    "ingest-ab-division-votes": {
+        "description": "AB recorded divisions from the Alberta Hansard already in `speeches` (no fetch): 'For the motion / Against the motion / Totals' member lists into `votes` (source_system='votes-ab-division') + `vote_positions`, resolved against the Assembly's per-Legislature member list. Positions are written only when parsed counts equal the printed Totals. Default: new sittings + trailing 30 days.",
+        "cli": "ingest-ab-division-votes",
+        "category": "hansard",
+        "args": [
+            {"name": "all", "type": "bool", "required": False,
+             "help": "Re-parse every sitting (after a parser change)."},
+            {"name": "since", "type": "date", "required": False,
+             "help": "Only process sittings on/after this ISO date."},
+            {"name": "limit_sittings", "type": "int", "required": False,
+             "help": "Cap on sittings processed this run."},
+        ],
+    },
     "ingest-bc-committee-membership": {
         "description": "Sync current-parliament BC committee membership from the pcms API (api.lims.leg.bc.ca/pcms/committees/membership) into politician_committees. Exact FK resolution via politicians.lims_member_id; soft-closes pcms-sourced rows for members who left. Enables the committee-restricted speaker lookup (witness-rejection) in ingest-bc-committees.",
         "cli": "ingest-bc-committee-membership",

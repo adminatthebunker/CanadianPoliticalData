@@ -92,8 +92,15 @@ Sources: Wikipedia "Speaker of the Legislative Assembly of Alberta" + assembly.a
 - **Source URL(s):** https://www.assembly.ab.ca/assembly-business/assembly-dashboard (order paper / daily records)
 - **Format:** Embedded in daily order papers and Hansard — no standalone interface.
 - **Roll-call availability:** Recorded votes appear in Hansard when divisions occur.
-- **Difficulty (1–5):** 4.
-- **Notes:** Likely requires extracting from Hansard PDFs once Hansard pipeline exists.
+- **Difficulty (1–5):** ~~4~~ → 2 in practice: the member lists were already in our corpus.
+- **Status (2026-09-29):** ✅ **Recorded divisions with per-member positions live.** `ingest-ab-division-votes` (`services/scanner/src/legislative/ab_division_votes.py`, source_system `votes-ab-division`) re-parses the Hansard **already in `speeches`**, with no upstream fetch. First run: **1,550 divisions (2000-02 → 2026-05), 1,144 verified, 54,425 `vote_positions`, 54,423 resolved (99.996%)**, 540 bill-linked. Daily 09:49 UTC, flag-less (new sittings + trailing 30 days; `--all` re-walks everything).
+  - **Shape:** `For the motion: … Against the motion: … Totals: For – N Against – M`, surnames only, two columns interleaved, collisions qualified after a comma (`Sigurdson, R.J.`, `Nixon, Jason`).
+  - ⚠ **pdftotext scatters the table.** The list can straddle speech rows or land in an unrelated turn, so blocks are located in each sitting's speeches concatenated in `sequence` order.
+  - ⛔ **Reading order can also INTERLEAVE the two lists, and every token still resolves to a real MLA** (2026-05-11: four NDP For-voters inside the Against run). The printed Totals are the only check that sees this, so positions are written **only when parsed counts equal the Totals**. The other 406 get the vote row (tallies are facts) with `raw.parse_status` = `count_mismatch` 183 / `no_against` 158 / `no_totals` 65, and no positions. **Follow-up:** recover those from the PDF with coordinate-aware extraction (`pdftotext -bbox-layout`); a text-order repair is not possible.
+  - **Roster is the Assembly's per-Legislature member list** (`politician_terms.source = 'assembly.ab.ca:legl-{N}'`, complete for L24–L31), not a date window, because AB term dates are year-granular. A by-election arrival is excluded before their `ab_member_info.constituency_history` election date: a bare `Smith` in L30 is Mark Smith before Danielle Smith's 2022-11-08 by-election. One explicit surname alias: `Glasgo` → Michaela Frey (mid 0918).
+  - **Validation:** each party voted as a bloc in 91–100% of cases per Legislature (party at vote date from `party_history`; L30 98.4%, L31 100%). The 2004-03-01 Bill 203 division matches the source name for name.
+  - ⚠ **Found in passing, not fixed:** AB *speech* attribution is contaminated for shared surnames. Danielle Smith is credited with speeches in the 24th/25th/29th Legislatures (she did not sit), and Nate Horner with Doug Horner's. Don't use "who spoke in this session" as a membership signal until the Hansard resolver is fixed.
+  - The consensus-shape extractor (`extract-ab-votes`, `votes-ab`, 2,081 rows, no positions) is unchanged. Some of its `[Motion carried]` rows are the outcome of a division now also held as `votes-ab-division`, so count votes per source_system, not in total.
 
 ## Committee Activity
 

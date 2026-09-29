@@ -3804,6 +3804,46 @@ def cmd_ingest_bc_vp_votes(
     asyncio.run(_run(_wrap, ctx.obj["dsn"]))
 
 
+@cli.command("ingest-ab-division-votes")
+@click.option("--all", "all_sittings", is_flag=True, default=False,
+              help="Re-parse every AB sitting with a division (parser changes). "
+                   "Default: sittings with no division rows yet + trailing 30 days.")
+@click.option("--since", type=str, default=None,
+              help="Only process sittings on/after this ISO date.")
+@click.option("--limit-sittings", type=int, default=None,
+              help="Cap on sittings processed (smoke-test friendly).")
+@click.option("--dry-run", is_flag=True, default=False,
+              help="Parse and report; write nothing.")
+@click.pass_context
+def cmd_ingest_ab_division_votes(
+    ctx: click.Context, all_sittings, since, limit_sittings, dry_run,
+) -> None:
+    """AB recorded divisions → votes + vote_positions, re-parsed from the
+    Alberta Hansard already in `speeches` (no upstream fetch)."""
+    from .legislative.ab_division_votes import ingest_ab_division_votes
+    from .legislative._forward import parse_iso_date
+
+    async def _wrap(db: Database) -> None:
+        stats = await ingest_ab_division_votes(
+            db,
+            all_sittings=all_sittings,
+            since=parse_iso_date(since),
+            limit_sittings=limit_sittings,
+            dry_run=dry_run,
+        )
+        d = stats.as_dict()
+        pct = (100.0 * d["positions_resolved"] / d["positions"]) if d["positions"] else 0.0
+        console.print(
+            f"[green]ingest-ab-division-votes[/green]{' (dry-run)' if dry_run else ''}: "
+            f"sittings={d['sittings']} divisions={d['divisions']} "
+            f"by_status={d['by_status']} "
+            f"votes_inserted={d['votes_inserted']} votes_updated={d['votes_updated']} "
+            f"positions={d['positions']} resolved={d['positions_resolved']} ({pct:.2f}%) "
+            f"bills_linked={d['bills_linked']}"
+        )
+    asyncio.run(_run(_wrap, ctx.obj["dsn"]))
+
+
 @cli.command("ingest-bc-committee-membership")
 @click.option("--parliament", type=int, default=None,
               help="Historical mode: BC parliament number (e.g. 42) — lands "

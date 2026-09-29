@@ -224,6 +224,14 @@ const COMMAND_CATALOG = [
       { name: "threshold_days", type: "int", required: false, help: "Default breach threshold in days. Default: 30." },
     ],
   },
+  { key: "ingest-ab-division-votes", category: "hansard",
+    description: "AB recorded divisions re-parsed from the Alberta Hansard already in `speeches` (no fetch): For/Against member lists into `votes` + `vote_positions`, resolved against the Assembly's per-Legislature member list. Positions only when parsed counts equal the printed Totals. Default: new sittings + trailing 30 days.",
+    args: [
+      { name: "all", type: "bool", required: false, help: "Re-parse every sitting (after a parser change)." },
+      { name: "since", type: "date", required: false, help: "Only process sittings on/after this date." },
+      { name: "limit_sittings", type: "int", required: false, help: "Cap on sittings processed this run." },
+    ],
+  },
   { key: "ingest-bc-vp-votes", category: "hansard",
     description: "Ingest BC recorded divisions from Votes & Proceedings (pdms, P35/1992+): Yeas/Nays division tables into `votes` + `vote_positions` with date-windowed surname resolution. Coexists with the Hansard-regex extract-bc-votes.",
     args: [
