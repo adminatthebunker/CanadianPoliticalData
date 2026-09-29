@@ -147,11 +147,32 @@ rows for federal divisions; smaller for provincial chambers).
 
 For voice / acclamation / consensus votes this list may be **empty**.
 That's not the same as "nobody voted" — the upstream simply didn't
-report individual positions. Check `vote.vote_type` first.
+report individual positions. Check `vote.vote_type` first, then
+`positions_count`: a `division` can also have an empty list (see
+*Which legislatures carry positions* below).
 
-`party_at_time` is the politician's party affiliation at the moment
-the vote occurred (preserved across floor-crossings); `politician_party_current`
-is their party today (or last-known if they're no longer sitting).
+`party_at_time` and `constituency_at_time` are reserved for the member's
+affiliation at the moment of the vote but are **not populated yet** —
+they are `null` on every row today. `politician_party_current` is the
+member's party now (or last-known if they're no longer sitting), so it
+will mislabel anyone who has since crossed the floor or whose party
+merged.
+
+## Which legislatures carry positions
+
+| Jurisdiction | Per-member positions | Source |
+|---|---|---|
+| Federal | Every division, 2006 onward | openparliament.ca |
+| British Columbia | Recorded divisions, 1992 onward | Votes and Proceedings |
+| Alberta | Recorded divisions, 2000 onward | Alberta Hansard member lists |
+| Saskatchewan | A small number of divisions | Journals |
+| Other provinces | Not yet — tallies and outcomes only | Hansard |
+
+**Alberta:** positions are published only when the member lists we parse
+add up exactly to the totals Hansard prints. About a quarter of Alberta
+divisions (mostly where the two-column list could not be read reliably
+from the PDF) have the tally and outcome but an empty positions list.
+We would rather show no names than the wrong ones.
 
 ## Recipes
 
@@ -190,12 +211,15 @@ done
 
 ### Find party-line breakers on a specific vote
 
+Until `party_at_time` is populated this groups by **current** party, so
+check anyone it flags against their party history before reporting it.
+
 ```bash
 VID="..."
 curl -s -H "Authorization: Bearer cpd_live_…" \
   "https://canadianpoliticaldata.org/api/public/v1/votes/$VID/positions" \
-  | jq '[.positions[]] | group_by(.party_at_time) |
-        map({party: .[0].party_at_time,
+  | jq '[.positions[]] | group_by(.politician_party_current) |
+        map({party: .[0].politician_party_current,
              counts: (group_by(.position) | map({(.[0].position): length}) | add)})'
 ```
 
