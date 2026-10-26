@@ -1118,6 +1118,110 @@ static address, and narrow both `set_real_ip_from` and the API's `trustProxy` to
 that address. ⛔ Changing a compose network's IPAM requires recreating the network,
 i.e. a full stack down/up — schedule it, don't fold it into an unrelated change.
 
+### Rate limiting `/api/`
+
+Three `limit_req` zones, defined in `nginx/nginx.conf` and applied in
+`location /api/` in `nginx/conf.d/default.conf`:
+
+| zone | key | rate | burst | catches |
+|---|---|---|---|---|
+| `api_ip` | client address | 2 r/s | 30 | one address hammering |
+| `api_net` | client `/24` | 6 r/s | 120 | a distributed farm |
+| `api_key` | bearer token | 20 r/s | 200 | one API key hammering |
+
+**`api_net` is the load-bearing one.** Thresholds come from measurements taken
+during the 2026-10-26 incident, not from intuition:
+
+| | peak per IP | peak per /24 |
+|---|---|---|
+| legit humans | ~15/min | ~26/min |
+| Googlebot | ~41/min | ~45/min |
+| the crawler farm | **17/min** | **~1050/min** |
+
+The farm spread 1,050 req/min across 251 addresses in one `/24`, so any single
+address sat *below* legitimate human traffic. Per-IP limiting had no signal to
+work with; aggregating by `/24` turns a 0× difference into a 40× one.
+
+⚠ Only `/api/` is limited. The farm also pulled `/search` and the JS bundle, but
+those are static and cheap — `/api/` is the surface that reaches Postgres.
+
+#### Re-measuring before you change a threshold
+
+Peak req/min per single address, excluding a known-bad range:
+
+```bash
+docker logs sw-nginx --since 6h 2>&1 | grep -v '^45\.61\.91\.' | grep '"GET /api' \
+  | awk '{print $1, substr($4,2,17)}' | sort | uniq -c | sort -rn | head
+```
+
+Peak req/min aggregated per `/24` — the number that matters:
+
+```bash
+docker logs sw-nginx --since 6h 2>&1 | grep -v '^45\.61\.91\.' | grep '"GET /api' \
+  | awk '{split($1,o,"."); print o[1]"."o[2]"."o[3], substr($4,2,17)}' \
+  | sort | uniq -c | sort -rn | head
+```
+
+Non-crawler traffic only (add `| grep -viE 'bot|crawler|spider|slurp'` before the
+`awk`). Googlebot was 93% of legitimate API traffic in the window sampled, so
+leaving it in makes human traffic look an order of magnitude heavier than it is.
+
+#### Verifying
+
+Zone state is in-memory, so a reload resets it; use a fresh `/24` per test.
+
+```bash
+U=localhost:8088/api/v1/search/meta
+# the attack shape: 251 addresses in one /24. Expect mostly 429.
+for i in $(seq 1 251); do for r in 1 2; do
+  curl -s -o /dev/null -w '%{http_code}\n' -H "X-Forwarded-For: 198.51.100.$((i % 254 + 1))" "$U"
+done; done | sort | uniq -c
+
+# a normal SPA page load is 7 calls at once. Expect zero 429.
+for ep in me search/meta search/facets search/speeches search/speeches/count \
+          reports/meta contradictions/meta; do
+  curl -s -o /dev/null -w '%{http_code} ' -H 'X-Forwarded-For: 203.0.113.50' \
+    "localhost:8088/api/v1/$ep"
+done
+```
+
+⛔ Test the *allowed* cases too, not just the blocked ones — that is how the
+2026-08-29 Googlebot 403 was caught. Googlebot's full observed per-minute peak
+(45) arriving in a single instant passes on `burst=120` alone, with 2.6× margin;
+verified 2026-10-26.
+
+#### Known limits
+
+⚠ **CGNAT is the weakness of the `/24` axis.** Mobile carriers put many real
+users behind few addresses. `api_net` has ~9× headroom over today's measured
+human peak, but a popular day on one carrier range could trip it. It returns
+**429**, not 403, so a normal client backs off and retries. If it starts firing
+on a carrier range, raise it *from log evidence* — do not delete the zone, which
+is the only axis that sees a distributed farm.
+
+⚠ **IPv6 is covered by the per-IP zone only.** nginx cannot slice
+`$binary_remote_addr`, and text-slicing an IPv6 address is unsound because
+`$remote_addr` renders compressed (`2001:db8::1`), so the `/64` cannot be
+recovered without expanding it. Acceptable today on evidence — 0 of 225,385
+requests over 24 h arrived over IPv6 — and **not** acceptable once IPv6 traffic
+appears, since one customer holds a `/64` and can rotate 2^64 addresses.
+
+### Blocking an abusive network
+
+`geo $abusive_net` in `nginx/nginx.conf` denies by address, for farms that spoof
+a browser User-Agent and so match none of the UA maps. Add one `/24` per line
+with the date and what it was doing. ⛔ Evidence only — a range you have not seen
+in the access log eventually blocks a real constituent.
+
+```bash
+# who is actually talking, by /24
+docker logs sw-nginx --since 30m 2>&1 | grep '"GET /api' \
+  | awk '{split($1,o,"."); print o[1]"."o[2]"."o[3]}' | sort | uniq -c | sort -rn | head
+```
+
+Blocked ranges keep access to `/robots.txt` (same carve-out as `$block_ai`), so a
+scraper can still read why it was declined.
+
 ## Deploying
 
 ### Local/single host
