@@ -82,6 +82,14 @@ no subprocess output to find. Check `scanner_jobs.error`, which carries the real
 **Why:** OCD's identifier scheme is built for the US's coverage gaps. The Canadian context has stable per-jurisdiction member IDs upstream; using those keeps joins exact.
 **How to apply:** Per-jurisdiction slug/ID columns on `politicians` (see CLAUDE.md convention #1) + `politician_terms` covers the model.
 
+### Do not "correct" `random_page_cost` to 1.1
+**Why:** every SSD tuning guide recommends 1.1, and it is wrong for this host. 1.1 effectively asserts random reads are nearly free because the data is cached — true when the working set fits in RAM, false here: `speeches` is 182 GB and `speech_chunks` 58 GB against 61 GB of host memory, so a large share of random reads reach the device. Measured 2026-10-26: below 2.0 the speeches×chunks join flips to an index scan that is a wash warm (19 ms vs 19 ms) and worse cold — 7,233 page reads against 445, scattering random I/O across a 182 GB heap. At 3.0+ the `vote_positions` join reverts to a sequential scan of 1.6M rows, 0.28 ms → 4.53 ms. 2.0 is the only value that wins both.
+**How to apply:** the value and the full plan-flip table live in `docker-compose.yml` beside the `command:` args. Re-walk that table (`set random_page_cost=<x>; explain <query>`) before moving it. Do not reason from "it's an SSD" alone — that is how you land on 1.1.
+
+### Do not trust a timing comparison that did not alternate and repeat
+**Why:** the first measurement of the `random_page_cost` change showed the index plan 6× *slower* (164 ms vs 27.8 ms). It was cold-cache ordering: alternating the two settings across three passes showed them identical. The opposite error is as easy — two of four test queries appeared to improve 3–5× at the new setting while their plans were byte-identical at both, so the difference was pure cache noise and nothing to do with the change.
+**How to apply:** alternate settings within each pass, run at least three passes, and before claiming an improvement confirm the **plan actually changed** — compare `explain` output, not just `Execution Time`.
+
 ## Embeddings & vector storage
 
 ### Do not find chunker/embedder work via anti-joins against the corpus

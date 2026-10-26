@@ -70,10 +70,49 @@ services:
     #   effective_cache_size is a planner hint, not an allocation. Left
     #   deliberately below the ~50GB the host actually caches, because
     #   during an HNSW build /dev/shm takes a large bite out of it.
+    # ── Planner: storage is NVMe (/dev/nvme1n1p1, rotational=0) ──────
+    #
+    # ⛔ random_page_cost is 2.0 and must NOT be "corrected" to the 1.1 that
+    #    every SSD tuning guide recommends. 1.1 effectively asserts that
+    #    random reads are nearly free because the data is cached. That holds
+    #    on a host whose working set fits in RAM. It does not hold here:
+    #    speeches alone is 182GB and speech_chunks 58GB against 61GB of
+    #    host memory, so a large share of random reads genuinely reach the
+    #    device.
+    #
+    #    Measured 2026-10-26 by walking the value and watching plans flip:
+    #
+    #      rpc    vote_positions join      speeches x chunks join
+    #      1.1    index                    index
+    #      1.5    index                    index
+    #      2.0    index   <- 15x faster    seq    <- correct
+    #      3.0    seq                      seq
+    #      4.0    seq  (the old default)   seq
+    #
+    #    2.0 is the only value that wins both. Below 2.0 the speeches join
+    #    flips to an index scan that is a wash when warm (19ms vs 19ms) and
+    #    markedly worse when cold — 7,233 page reads against 445, because
+    #    it scatters random I/O across a 182GB heap. At 3.0 and above the
+    #    vote_positions join reverts to a sequential scan of 1.6M rows and
+    #    goes from 0.28ms to 4.53ms.
+    #
+    #    Re-walk the table above before changing it; do not reason from
+    #    "it's an SSD" alone, which is how you land on 1.1.
+    #
+    # ⚠ effective_io_concurrency=200 is the right NVMe value but is applied
+    #   WITHOUT measured local benefit. On PG16 it only sets prefetch depth
+    #   for bitmap heap scans, and the one such plan in this workload (a
+    #   date+level count on speeches) showed no difference at 1 vs 200
+    #   across three alternating passes — its pages were already cached, so
+    #   there was nothing to prefetch. It should help cold bitmap scans,
+    #   which the 240GB-vs-61GB ratio guarantees will happen; that just
+    #   could not be demonstrated without dropping caches on a live host.
     command: ["postgres",
               "-c", "max_wal_size=8GB",
               "-c", "shared_buffers=8GB",
-              "-c", "effective_cache_size=24GB"]
+              "-c", "effective_cache_size=24GB",
+              "-c", "random_page_cost=2.0",
+              "-c", "effective_io_concurrency=200"]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U sw -d sovereignwatch"]
       interval: 10s
