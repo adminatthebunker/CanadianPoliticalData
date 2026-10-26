@@ -46,7 +46,34 @@ services:
     # churn (≤ ~11 GB pg_wal on disk). Also applied live via ALTER SYSTEM
     # on 2026-08-11 (postgresql.auto.conf in pgdata carries the same
     # value); this arg keeps a fresh volume consistent.
-    command: ["postgres", "-c", "max_wal_size=8GB"]
+    # ⚠ shared_buffers is set HERE and not via ALTER SYSTEM, unlike
+    #   max_wal_size above. That asymmetry is intentional: max_wal_size is
+    #   reloadable, so ALTER SYSTEM applies it to a running cluster and the
+    #   arg only backstops a fresh volume. shared_buffers requires a
+    #   restart either way, so a second source of truth in
+    #   postgresql.auto.conf would buy nothing and could silently disagree.
+    #
+    #   Raised from the 128MB image default on 2026-10-26. The win is the
+    #   HNSW/pgvector workload — idx_chunks_embedding traversal is repeated
+    #   random access to the same hot graph pages, which is what a buffer
+    #   pool is for. It does NOT speed up large sequential scans:
+    #   Postgres reads those through a ~256KB ring buffer precisely so one
+    #   scan cannot evict the pool, so they stay served by OS page cache.
+    #
+    # ⚠ Budget this against shm_size: 40gb above. /dev/shm is tmpfs and
+    #   counts against host RAM, so a parallel HNSW build with
+    #   maintenance_work_mem raised to fill it now peaks at ~48GB of the
+    #   host's 61GB rather than ~40GB. maintenance_work_mem is still at its
+    #   64MB default, so nothing claims that today — but raise it for an
+    #   index build and there is 8GB less headroom than before.
+    #
+    #   effective_cache_size is a planner hint, not an allocation. Left
+    #   deliberately below the ~50GB the host actually caches, because
+    #   during an HNSW build /dev/shm takes a large bite out of it.
+    command: ["postgres",
+              "-c", "max_wal_size=8GB",
+              "-c", "shared_buffers=8GB",
+              "-c", "effective_cache_size=24GB"]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U sw -d sovereignwatch"]
       interval: 10s
