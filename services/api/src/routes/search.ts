@@ -391,6 +391,69 @@ async function resolveAnchorVector(chunkId: string): Promise<number[] | null> {
   return vec;
 }
 
+/**
+ * Embedding-backfill coverage for the UI banner, cached and single-flighted.
+ *
+ * ⚠ The underlying query has no WHERE clause, so Postgres can only answer it
+ * by reading every page of speech_chunks — a 58 GB heap, ~20s per scan. The
+ * endpoint is unauthenticated and was uncached, which made it a loaded gun
+ * aimed at the database by any visitor: on 2026-10-26 a crawler walking
+ * /search?anchor_chunk_id=<uuid> pulled the trigger ~80 times a minute, 31
+ * scans ran concurrently, sw-db sat at ~830% CPU and the host reached 96°C
+ * against a 100°C critical threshold.
+ *
+ * ⛔ A plain TTL cache does NOT fix this, and that is the whole point of the
+ *    inFlight promise below. With caching alone, every request arriving in
+ *    the ~20s after expiry misses and starts its own scan — the same
+ *    stampede, just once per TTL instead of continuously. Single-flight is
+ *    what bounds concurrency to one, and it must not be "simplified" away.
+ *
+ * Stale-while-revalidate, so no request ever waits on the scan once warm,
+ * and a stale answer outlives a DB error: coverage is a progress indicator
+ * for a backfill that advances on nightly embed runs, so minutes of staleness
+ * is invisible to the reader and a wrong-by-0.01% banner beats a 500.
+ */
+const EMBED_COVERAGE_TTL_MS = 15 * 60_000;
+let embedCoverage: { total: number; embedded: number; expiresAt: number } | null = null;
+let embedCoverageInFlight: Promise<{ total: number; embedded: number }> | null = null;
+
+async function readEmbedCoverage(): Promise<{ total: number; embedded: number }> {
+  const now = Date.now();
+  if (embedCoverage && embedCoverage.expiresAt > now) {
+    return { total: embedCoverage.total, embedded: embedCoverage.embedded };
+  }
+
+  if (!embedCoverageInFlight) {
+    embedCoverageInFlight = (async () => {
+      const row = await queryOne<{ total: number; embedded: number }>(
+        `SELECT COUNT(*)::int AS total,
+                COUNT(*) FILTER (WHERE embedding IS NOT NULL)::int AS embedded
+           FROM speech_chunks`,
+      );
+      const fresh = { total: row?.total ?? 0, embedded: row?.embedded ?? 0 };
+      embedCoverage = { ...fresh, expiresAt: Date.now() + EMBED_COVERAGE_TTL_MS };
+      return fresh;
+    })().finally(() => {
+      embedCoverageInFlight = null;
+    });
+  }
+
+  // Warm but stale: return the old value and let the refresh land in the
+  // background. The catch is required — an unhandled rejection here would
+  // be an unhandled promise rejection at process level, not a 500.
+  if (embedCoverage) {
+    void embedCoverageInFlight.catch(() => {});
+    return { total: embedCoverage.total, embedded: embedCoverage.embedded };
+  }
+
+  // Cold start only: nothing cached, so this one request does wait.
+  try {
+    return await embedCoverageInFlight;
+  } catch {
+    return { total: 0, embedded: 0 };
+  }
+}
+
 export interface SearchVector {
   vec: number[];
   /** When set, callers should append `AND sc.id != $excludeChunkId` so the
@@ -1603,14 +1666,9 @@ export default async function searchRoutes(app: FastifyInstance) {
   });
 
   app.get("/meta", async () => {
-    // Backfill progress surface for the UI banner.
-    const row = await queryOne<{ total: number; embedded: number }>(
-      `SELECT COUNT(*)::int AS total,
-              COUNT(*) FILTER (WHERE embedding IS NOT NULL)::int AS embedded
-         FROM speech_chunks`,
-    );
-    const total = row?.total ?? 0;
-    const embedded = row?.embedded ?? 0;
+    // Backfill progress surface for the UI banner. Served from cache; see
+    // readEmbedCoverage.
+    const { total, embedded } = await readEmbedCoverage();
     return {
       total_chunks: total,
       embedded_chunks: embedded,
