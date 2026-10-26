@@ -394,6 +394,62 @@ crawlers from `$block_api_crawler`, and `nginx/robots.txt` gives them their own
 group with `Allow: /api/`. Both must be changed together. Revisit only if the
 frontend gains SSR or prerendering.
 
+**Do not rate-limit `/api/` by client address alone.** A per-IP `limit_req` is
+the obvious design and it would not have stopped the 2026-10-26 incident at any
+threshold that leaves the site usable.
+
+*Why:* the crawler farm spread ~1,050 req/min across 251 addresses in a single
+`/24`, so each address sat at 17 req/min — *below* measured legitimate human
+traffic (~15/min sustained, and one search page load fans out into seven
+`/api/v1` calls at once). There was no per-IP signal to threshold against. The
+same volume aggregated by `/24` was 1,050/min against a legitimate peak of
+45/min: a 23× difference.
+
+*How to apply:* keep the `api_net` `/24` zone in `nginx/nginx.conf`. The per-IP
+zone catches single-source abuse and the `/24` zone catches farms; they are not
+redundant. Re-measure with the commands in `docs/operations.md` § *Rate limiting
+`/api/`* before moving a threshold — the subnet rate is pinned between the pro
+API tier below it (10,000 req/h ≈ 2.8 r/s) and the farm above it (17.5 r/s), so
+moving it needs both bounds rechecked.
+
+**Do not exempt anything from the `/24` rate-limit zone.** Exemptions belong on
+the per-IP zone only.
+
+*Why:* both exemption signals are client-supplied and unverifiable at the edge —
+nginx cannot authenticate an API token, and any scraper can send
+`User-Agent: Googlebot`. Verified 2026-10-26: a forged
+`Authorization: Bearer cpd_live_forged_deadbeef` passed 60/60 requests while the
+exemption covered both zones. With exemptions confined to the per-IP zone,
+forging one buys relief from 2 r/s and nothing more.
+
+*How to apply:* `$api_ip_exempt` feeds `$api_limit_ip` only. `$api_limit_net` has
+no exemption branch and must not gain one. Googlebot does not need one: its full
+observed per-minute peak passes on `burst=120` alone with 2.6× margin.
+
+**Do not add an uncached, unfiltered aggregate to a public endpoint.** A
+`COUNT(*)` over `speech_chunks` has no answer cheaper than reading all 58 GB.
+
+*Why:* `/api/v1/search/meta` fed a UI progress banner with an unauthenticated,
+uncached `COUNT(*)`. On 2026-10-26 a crawler called it ~80×/min; 31 scans ran
+concurrently, `sw-db` held ~830% CPU and the host reached 96 °C against a 100 °C
+critical threshold. 1,727 requests returned 499 (client aborted) — Fastify does
+not cancel the underlying query when the socket dies, so abandoned requests cost
+a full scan anyway. The endpoint was computing a constant: coverage was 1.0.
+
+*How to apply:* cache it, and **single-flight it**. A plain TTL cache is not
+enough — every request arriving during the ~20 s scan after expiry misses and
+starts its own, which is the same stampede once per TTL. See
+`readEmbedCoverage()` in `services/api/src/routes/search.ts` for the
+stale-while-revalidate + `inFlight` shape; the `inFlight` promise is load-bearing
+and must not be simplified away.
+
+**Do not count the asking backend when measuring `pg_stat_activity`.** Filter
+`pid <> pg_backend_pid()`.
+
+*Why:* a diagnostic keyed on `query LIKE '%<some text>%'` matches its own query
+text, so it reports a floor of 1 forever. Cost ~10 minutes of chasing a
+phantom scan on 2026-10-26 after the real ones were already gone.
+
 **Do not set Fastify `trustProxy: true`.** It walks the whole `X-Forwarded-For`
 chain and returns the **leftmost** entry, which is attacker-supplied.
 
