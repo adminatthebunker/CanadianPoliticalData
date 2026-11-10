@@ -127,6 +127,21 @@ do_check() {
   fi
 
   hdr "Captured inputs at $CAPTURE"
+  # If the capture directory is gone, nine separate warnings bury the point.
+  # Say it once, loudly, with where to look: this is the rebuild's main input.
+  if [[ ! -d $CAPTURE ]]; then
+    bad "THE CAPTURE DIRECTORY DOES NOT EXIST: $CAPTURE"
+    bad "  It holds the saved volumes, the pinned sovpro-db image, the live"
+    bad "  crontab/ufw/fstab, the Docker interlock and the authoritative"
+    bad "  scanner_schedules CSV. Without it the rebuild still works, but the"
+    bad "  GPU model cache, politician photos and schedule record must all be"
+    bad "  regenerated, and the pgvector version becomes whatever apt serves."
+    bad "  Look for it on the Internal disk, or set CAPTURE=/path and re-run."
+    bad "  Offsite copy: homelab:/mnt/storage2tb/pre-reinstall-2026-11"
+    return 1
+  fi
+  [[ -f $CAPTURE/README.md ]] && ok "README.md — the capture's own entry point" \
+    || warn "README.md absent from the capture"
   local f
   for f in volumes/sovpro_assets.tar volumes/sovpro_embedmodels-qwen.tar \
            sovpro_kumadata.tgz repo/sovpro-db-image.tar.zst \

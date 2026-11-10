@@ -4,6 +4,48 @@ Project-level instructions for any AI agent working in this repo. Read before wr
 
 This file describes how the codebase is *shaped*, not its day-to-day state. For current row counts, ingestion coverage, or what's shipped, query the DB or read the docs it points at — don't trust numbers in this file.
 
+## ⛔ READ FIRST IF THE OS WAS JUST REINSTALLED
+
+If the stack is **not running** and this looks like a freshly installed host, you
+are doing a post-wipe rebuild. **Do not improvise it, and do not run `docker
+compose up` yet.** Start here:
+
+```bash
+scripts/rebuild-bringup.sh check      # prerequisites; makes no changes
+scripts/rebuild-bringup.sh all        # check -> volumes -> image -> up -> verify
+```
+
+- **The runbook:** `docs/runbooks/2026-11-09-fresh-ubuntu-rebuild.md` (host-side
+  steps the script only *verifies*). It is **gitignored** — present on the
+  Internal disk, absent from a fresh `git clone`.
+- **The capture:** `/media/bunker-admin/Internal/pre-reinstall-2026-11/` — saved
+  volumes, the pinned `sovpro-db` image, live crontab / ufw / fstab, the
+  authoritative `scanner_schedules` CSV, and `README.md` as its entry point.
+
+Four facts that cause irreversible damage if you get them wrong:
+
+1. **`/media/bunker-admin/Internal/cpd-pgdata` is a bind mount holding a live
+   ~323 GB Postgres cluster on a *different physical disk*.** It survives a root
+   wipe. There is **no `pg_restore` on the critical path** — if you find yourself
+   planning one, stop and re-read. `cpd-pgdata/PG_VERSION` must exist before
+   anything starts; the script refuses without it.
+2. **`/etc/systemd/system/docker.service.d/require-internal-mount.conf` must
+   exist *before* Docker is ever installed or started.** `fstab` uses `nofail`,
+   which is only safe because of that drop-in. Without it, a failed boot-time
+   mount lets Docker bind-mount an empty path and Postgres `initdb` a **blank
+   cluster over the live data directory**. Copy it from the capture's `host/`.
+3. **Never regenerate `JWT_SECRET` or `API_KEY_PEPPER`** in `.env`. Both are
+   unregenerable: it invalidates every user session and every issued API key.
+   `DB_PASSWORD` must match the *surviving* cluster. `.env` is gitignored but
+   lives on Internal, and is also in the gpg secrets bundle.
+4. **Do not re-seed `scanner_schedules` from the August 2026 runbook's
+   Appendix A.** Those rows predate the 2026-09-10 overnight-window rewrite and
+   name Open North commands removed on 2026-08-27, which now `die`. Use
+   `host/scanner_schedules-2026-11-09.csv` from the capture.
+
+If a row count looks catastrophically low after start-up, **stop** — do not run
+migrations or ingest. That is the signature of a blank cluster, not of data loss.
+
 ## One-line purpose
 
 **SovereignWatch** is the internal / codebase name. **Canadian Political Data** is the public-facing brand — use CPD in blog posts, LinkedIn, external copy, commit messages, migrations, and internal docs.
