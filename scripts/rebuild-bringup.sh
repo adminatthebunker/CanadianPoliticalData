@@ -138,9 +138,26 @@ do_check() {
 
   hdr "Repo-relative bind mounts compose expects"
   local d
-  for d in data db scripts services/scanner/src docs mkdocs/site nginx/conf.d; do
+  for d in data db scripts services/scanner/src docs nginx/conf.d; do
     [[ -e $REPO/$d ]] && ok "$d" || bad "$d MISSING from the repo"
   done
+  # mkdocs/site is a BUILD ARTIFACT and is gitignored (.gitignore:84,
+  # mkdocs/site/*) — 97 of its 98 files are absent from the git bundle. It
+  # survives on Internal, but if it is ever lost, nginx serves a 404 at
+  # docs.canadianpoliticaldata.org until it is rebuilt. The sources ARE
+  # tracked (mkdocs/mkdocs.yml + 51 files under mkdocs/docs/), so the fix is
+  # a rebuild, not a restore.
+  if [[ -d $REPO/mkdocs/site && -f $REPO/mkdocs/site/404.html ]]; then
+    ok "mkdocs/site present ($(find "$REPO/mkdocs/site" -type f | wc -l) files)"
+  else
+    bad "mkdocs/site missing or incomplete — the public docs site will 404."
+    bad "  rebuild it: docker compose run --rm --entrypoint mkdocs docs build -f /docs/mkdocs.yml"
+  fi
+  # scripts/replicate-to-offsite.sh is UNTRACKED (gitignored) — the git
+  # bundle does not carry it, and it is what makes the offsite copy happen.
+  [[ -f $REPO/scripts/replicate-to-offsite.sh ]] \
+    && ok "replicate-to-offsite.sh present (untracked — git does not carry it)" \
+    || bad "scripts/replicate-to-offsite.sh MISSING — restore from the capture tarball"
   # media-cache is a 37 GB regenerable scrape cache; absence costs
   # re-fetches, not data. Create it so the mount does not make one.
   [[ -d $REPO/media-cache ]] || { mkdir -p "$REPO/media-cache"; warn "created empty media-cache/ (regenerable cache)"; }
